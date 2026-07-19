@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-from copy import deepcopy
 from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from harness_core.contracts import Artifact, FinalAnswer, Observation, PendingAction
+from harness_core.contracts import Artifact, FinalAnswer, Observation, PendingAction, ToolResult
 
 
 class RuntimeRequest(BaseModel):
@@ -59,105 +58,27 @@ class RuntimeResult(BaseModel):
     turn_id: str
     status: RuntimeResultStatus
     stop_reason: str
+    schema_version: str = "harness-runtime-v2"
+    core_contract_version: str = ""
+    core_version: str = ""
+    loop_engine: str = ""
+    mode: str = ""
+    step_count: int = 0
     final_answer: FinalAnswer
     observations: list[Observation] = Field(default_factory=list)
+    tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
     events: list[RuntimeStreamEvent] = Field(default_factory=list)
+    checkpoint: dict[str, Any] = Field(default_factory=dict)
+    trace: list[dict[str, Any]] = Field(default_factory=list)
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
+    active_task: dict[str, Any] | None = None
+    ui_state: dict[str, Any] = Field(default_factory=dict)
+    references: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    needs_user_input: bool = False
     answer_delta_streamed: bool = False
     error: dict[str, Any] | None = None
-    compatibility_payload: dict[str, Any] = Field(default_factory=dict, exclude=True, repr=False)
-
-    @classmethod
-    def from_compatibility_payload(cls, payload: dict[str, Any]) -> RuntimeResult:
-        runtime = payload.get("agent_runtime") if isinstance(payload.get("agent_runtime"), dict) else {}
-        runtime_status = RuntimeResultStatus(str(runtime.get("status") or "failed"))
-        checkpoint = runtime.get("checkpoint") if isinstance(runtime.get("checkpoint"), dict) else {}
-        identity = runtime.get("identity") if isinstance(runtime.get("identity"), dict) else {}
-        answer_payload = payload.get("final_answer") if isinstance(payload.get("final_answer"), dict) else {}
-        answer_metadata = (
-            dict(answer_payload.get("metadata"))
-            if isinstance(answer_payload.get("metadata"), dict)
-            else {}
-        )
-        answer_fields = set(FinalAnswer.model_fields)
-        answer_metadata.update(
-            {
-                key: value
-                for key, value in answer_payload.items()
-                if key not in answer_fields
-            }
-        )
-        answer_values = {
-                key: value
-                for key, value in answer_payload.items()
-                if key in answer_fields and key != "metadata"
-            }
-        answer_values.setdefault(
-            "status",
-            "completed"
-            if runtime_status is RuntimeResultStatus.COMPLETED
-            else "failed"
-            if runtime_status is RuntimeResultStatus.FAILED
-            else "interrupted",
-        )
-        answer_values.setdefault("stop_reason", str(runtime.get("stop_reason") or ""))
-        answer = FinalAnswer(
-            **answer_values,
-            metadata=answer_metadata,
-        )
-        observations = [
-            Observation.model_validate(item)
-            for item in checkpoint.get("observations", [])
-            if isinstance(item, dict)
-        ]
-        artifacts = [
-            Artifact.model_validate(item)
-            for item in checkpoint.get("artifacts", [])
-            if isinstance(item, dict)
-        ]
-        pending_payload = checkpoint.get("pending_action")
-        pending_action = (
-            PendingAction.model_validate(pending_payload)
-            if isinstance(pending_payload, dict)
-            else None
-        )
-        return cls(
-            question=str(payload.get("question") or ""),
-            run_id=str(identity.get("run_id") or checkpoint.get("run_id") or ""),
-            thread_id=str(
-                identity.get("thread_id")
-                or identity.get("conversation_thread_id")
-                or checkpoint.get("graph_thread_id")
-                or ""
-            ),
-            graph_thread_id=str(
-                identity.get("graph_thread_id") or checkpoint.get("graph_thread_id") or ""
-            ),
-            turn_id=str(identity.get("turn_id") or checkpoint.get("turn_id") or ""),
-            status=runtime_status,
-            stop_reason=str(runtime.get("stop_reason") or answer.stop_reason or ""),
-            final_answer=answer,
-            observations=observations,
-            pending_action=pending_action,
-            artifacts=artifacts,
-            events=[
-                RuntimeStreamEvent.model_validate(item)
-                for item in payload.get("events", [])
-                if isinstance(item, dict)
-            ],
-            diagnostics=dict(runtime.get("diagnostics") or {}),
-            context_snapshot=dict(payload.get("context_snapshot") or {}),
-            skill_activation=dict(payload.get("skill_activation") or {}),
-            answer_delta_streamed=bool(payload.get("answer_delta_streamed")),
-            error=dict(payload["error"]) if isinstance(payload.get("error"), dict) else None,
-            compatibility_payload=deepcopy(payload),
-        )
-
-    def to_compatibility_payload(self) -> dict[str, Any]:
-        """Return the v1 mapping while hosts migrate to the typed result."""
-
-        return deepcopy(self.compatibility_payload)

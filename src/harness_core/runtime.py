@@ -18,7 +18,16 @@ from harness_core.budget import (
     BudgetRequest,
     InMemoryBudgetLedger,
 )
-from harness_core.contracts import RunContext, RunStatus, ToolCall
+from harness_core.contracts import (
+    Artifact,
+    FinalAnswer,
+    Observation,
+    PendingAction,
+    RunContext,
+    RunStatus,
+    ToolCall,
+    ToolResult,
+)
 from harness_core.context import build_context_snapshot, build_initial_messages
 from harness_core.context_window import (
     ContextWindowManager,
@@ -50,7 +59,12 @@ from harness_core.references import (
     DefaultReferenceProjector,
     ReferenceProjector,
 )
-from harness_core.runtime_api import RuntimeRequest, RuntimeResult
+from harness_core.runtime_api import (
+    RuntimeRequest,
+    RuntimeResult,
+    RuntimeResultStatus,
+    RuntimeStreamEvent,
+)
 from harness_core.skills import SkillPolicy
 from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
@@ -160,35 +174,12 @@ class HarnessRuntime:
         event_sink: EventSink | None = None,
     ) -> RuntimeResult:
         """Execute one turn through the typed, product-neutral public API."""
-
-        payload = self.run_turn(
-            request.question,
-            provider=provider,
-            providers=providers,
-            session=session,
-            user_id=request.user_id,
-            short_context=request.short_context,
-            context_bundle=request.context_bundle,
-            skill_activation=request.skill_activation,
-            model_policy=request.model_policy,
-            event_sink=event_sink,
-        )
-        return RuntimeResult.from_compatibility_payload(payload)
-
-    def run_turn(
-        self,
-        question: str,
-        *,
-        provider: Any = None,
-        providers: dict[str, Any] | None = None,
-        session: Any = None,
-        user_id: str = "",
-        short_context: dict[str, Any] | None = None,
-        context_bundle: dict[str, Any] | None = None,
-        skill_activation: dict[str, Any] | None = None,
-        model_policy: dict[str, Any] | None = None,
-        event_sink: EventSink | None = None,
-    ) -> dict[str, Any]:
+        question = request.question
+        user_id = request.user_id
+        short_context = request.short_context
+        context_bundle = request.context_bundle
+        skill_activation = request.skill_activation
+        model_policy = request.model_policy
         run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
         bundle = context_bundle if isinstance(context_bundle, dict) else {}
@@ -472,22 +463,11 @@ class HarnessRuntime:
             reference_projector=self.reference_projector,
         )
         if recovery_source:
-            runtime_state = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
-            diagnostics = runtime_state.get("diagnostics") if isinstance(runtime_state.get("diagnostics"), dict) else {}
+            diagnostics = result.diagnostics
             recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
             recovery["checkpoint_source"] = recovery_source
             diagnostics["recovery"] = recovery
-            runtime_state["diagnostics"] = diagnostics
-        runtime_state = (
-            result.get("agent_runtime")
-            if isinstance(result.get("agent_runtime"), dict)
-            else {}
-        )
-        diagnostics = (
-            runtime_state.get("diagnostics")
-            if isinstance(runtime_state.get("diagnostics"), dict)
-            else {}
-        )
+        diagnostics = result.diagnostics
         diagnostics["context_window"] = context_window_diagnostics
         elapsed_budget = self.budget_ledger.consume(
             BudgetRequest(
@@ -503,14 +483,7 @@ class HarnessRuntime:
             "elapsed": elapsed_budget.as_dict(),
             "snapshot": self.budget_ledger.snapshot(run_id).as_dict(),
         }
-        checkpoint = (
-            runtime_state.get("checkpoint")
-            if isinstance(runtime_state.get("checkpoint"), dict)
-            else None
-        )
-        if checkpoint is not None:
-            checkpoint["budget_state"] = self.budget_ledger.snapshot(run_id).as_dict()
-        runtime_state["diagnostics"] = diagnostics
+        result.checkpoint["budget_state"] = self.budget_ledger.snapshot(run_id).as_dict()
         try:
             self.telemetry.record(
                 TelemetryRecord(
@@ -518,10 +491,10 @@ class HarnessRuntime:
                     run_id=run_id,
                     thread_id=conversation_thread_id,
                     turn_id=turn_id,
-                    status=str(runtime_state.get("status") or ""),
+                    status=result.status.value,
                     attributes={
-                        "status": str(runtime_state.get("status") or ""),
-                        "stop_reason": str(runtime_state.get("stop_reason") or ""),
+                        "status": result.status.value,
+                        "stop_reason": result.stop_reason,
                         "skill_id": str(skill.get("skill_id") or ""),
                         "recovery_source": recovery_source,
                     },
@@ -531,23 +504,12 @@ class HarnessRuntime:
             telemetry_error_count += 1
             telemetry_last_error = f"{type(exc).__name__}: {exc}"
         if telemetry_error_count:
-            runtime_state = (
-                result.get("agent_runtime")
-                if isinstance(result.get("agent_runtime"), dict)
-                else {}
-            )
-            diagnostics = (
-                runtime_state.get("diagnostics")
-                if isinstance(runtime_state.get("diagnostics"), dict)
-                else {}
-            )
             diagnostics["telemetry"] = {
                 "status": "degraded",
                 "error_count": telemetry_error_count,
                 "last_error": telemetry_last_error,
             }
-            runtime_state["diagnostics"] = diagnostics
-        if str((result.get("agent_runtime") or {}).get("status") or "") in {
+        if result.status.value in {
             "completed",
             "failed",
             "canceled",
@@ -572,7 +534,7 @@ class HarnessRuntime:
 
     def cleanup_run(
         self,
-        result: dict[str, Any] | None,
+        result: RuntimeResult | None,
         *,
         run_id: str,
         session: Any = None,
@@ -607,15 +569,13 @@ class HarnessRuntime:
             ) else "deleted"
         else:
             cleanup["langgraph"] = "unsupported"
-        if isinstance(result, dict):
-            runtime = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
-            diagnostics = runtime.get("diagnostics") if isinstance(runtime.get("diagnostics"), dict) else {}
+        if result is not None:
+            diagnostics = result.diagnostics
             recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
             recovery["checkpoint_cleanup"] = cleanup
             if errors:
                 recovery["checkpoint_cleanup_errors"] = errors
             diagnostics["recovery"] = recovery
-            runtime["diagnostics"] = diagnostics
         self.budget_ledger.clear(run_id)
         self.run_control.release(run_id)
         return cleanup
@@ -750,9 +710,7 @@ class HarnessRuntime:
                     status="failed",
                     attributes={
                         "status": "failed",
-                        "stop_reason": str(
-                            (result.get("agent_runtime") or {}).get("stop_reason") or ""
-                        ),
+                        "stop_reason": result.stop_reason,
                         "skill_id": str(resolved_skill.get("skill_id") or ""),
                         "recovery_source": "",
                         "phase": "context_setup",
@@ -791,7 +749,7 @@ class HarnessRuntime:
 
     def _persist_resumable_checkpoint(
         self,
-        result: dict[str, Any],
+        result: RuntimeResult,
         *,
         run_id: str,
         thread_id: str,
@@ -799,14 +757,13 @@ class HarnessRuntime:
         user_id: str,
         context_bundle: dict[str, Any],
     ) -> None:
-        runtime = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
-        if runtime.get("status") not in {
+        if result.status.value not in {
             "waiting_user_action",
             "waiting_user_input",
             "task_running",
         }:
             return
-        diagnostics = runtime.get("diagnostics") if isinstance(runtime.get("diagnostics"), dict) else {}
+        diagnostics = result.diagnostics
         recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
         durable_state = durable_state_from_result(
             result,
@@ -814,8 +771,8 @@ class HarnessRuntime:
             thread_id=thread_id,
         )
         if self.runtime_state_store is not None:
-            status = str(runtime.get("status") or "")
-            resume_token = str(runtime.get("resume_token") or "")
+            status = result.status.value
+            resume_token = str(result.checkpoint.get("resume_token") or "")
             mutation_payload = {
                 "status": status,
                 "resume_token": resume_token,
@@ -850,12 +807,10 @@ class HarnessRuntime:
                 recovery["atomic_checkpoint"] = "failed"
                 recovery["checkpoint_error"] = str(exc)
                 diagnostics["recovery"] = recovery
-                runtime["diagnostics"] = diagnostics
                 raise RuntimeError("atomic runtime checkpoint commit failed") from exc
             recovery["atomic_checkpoint"] = "persisted"
             recovery["state_receipt"] = receipt.as_dict()
             diagnostics["recovery"] = recovery
-            runtime["diagnostics"] = diagnostics
             return
         if self.checkpoint_store is None:
             return
@@ -871,7 +826,6 @@ class HarnessRuntime:
             recovery["durable_checkpoint"] = "failed"
             recovery["checkpoint_error"] = str(exc)
         diagnostics["recovery"] = recovery
-        runtime["diagnostics"] = diagnostics
 
 
 def _resolved_model_policy(
@@ -1096,7 +1050,7 @@ def project_harness_result(
     previous_diagnostics: dict[str, Any] | None = None,
     capability_manifest: dict[str, Any] | None = None,
     reference_projector: ReferenceProjector | None = None,
-) -> dict[str, Any]:
+) -> RuntimeResult:
     graph_status = str(state.get("status") or "failed")
     state_error = (
         (state.get("metadata") or {}).get("runtime_error")
@@ -1219,23 +1173,11 @@ def project_harness_result(
         pending_action=pending_action,
         active_task=active_task,
     )
-    result = {
-        "question": question,
-        "final_answer": final_answer,
-        "agent_runtime": runtime,
-        "agent_tool_results": legacy_results,
-        "events": streamed_events,
-        "context_snapshot": context_snapshot,
-        "skill_activation": skill,
-        "references": references,
-        "evidence": evidence,
-        "needs_user_input": runtime_status in {"waiting_user_action", "waiting_user_input"},
-        "answer_delta_streamed": answer_delta_streamed,
-    }
     if answer_delta_streamed:
         final_answer["answer_delta_streamed"] = True
+    error = None
     if isinstance(state_error, dict):
-        result["error"] = {
+        error = {
             "type": str(state_error.get("type") or "RuntimeFailure"),
             "code": str(state_error.get("code") or "RUNTIME_INTERNAL_ERROR"),
             "category": str(state_error.get("category") or "internal"),
@@ -1245,9 +1187,73 @@ def project_harness_result(
                 or "The run ended safely and can be retried."
             ),
         }
-    if pending_action is not None:
-        result["pending_action"] = pending_action
-    return result
+    answer_fields = set(FinalAnswer.model_fields)
+    answer_metadata = (
+        dict(final_answer.get("metadata"))
+        if isinstance(final_answer.get("metadata"), dict)
+        else {}
+    )
+    answer_metadata.update(
+        {
+            key: value
+            for key, value in final_answer.items()
+            if key not in answer_fields
+        }
+    )
+    answer_values = {
+        key: value
+        for key, value in final_answer.items()
+        if key in answer_fields and key != "metadata"
+    }
+    answer_values.setdefault(
+        "status",
+        "completed"
+        if runtime_status == "completed"
+        else "failed"
+        if runtime_status == "failed"
+        else "interrupted",
+    )
+    answer_values.setdefault("stop_reason", stop_reason)
+    typed_pending_action = (
+        PendingAction.model_validate(checkpoint_pending_action)
+        if isinstance(checkpoint_pending_action, dict)
+        else None
+    )
+    return RuntimeResult(
+        question=question,
+        run_id=checkpoint["run_id"],
+        thread_id=runtime["identity"]["thread_id"],
+        graph_thread_id=checkpoint["graph_thread_id"],
+        turn_id=checkpoint["turn_id"],
+        status=RuntimeResultStatus(runtime_status),
+        stop_reason=stop_reason,
+        schema_version=str(runtime["schema_version"]),
+        core_contract_version=str(runtime["core_contract_version"]),
+        core_version=str(runtime["core_version"]),
+        loop_engine=str(runtime["loop_engine"]),
+        mode=str(runtime["mode"]),
+        step_count=int(runtime["step_count"]),
+        final_answer=FinalAnswer(**answer_values, metadata=answer_metadata),
+        observations=[
+            Observation.model_validate(item) for item in checkpoint_observations
+        ],
+        tool_results=[ToolResult.model_validate(item) for item in typed_tool_results],
+        pending_action=typed_pending_action,
+        artifacts=[Artifact.model_validate(item) for item in checkpoint["artifacts"]],
+        events=[RuntimeStreamEvent.model_validate(item) for item in streamed_events],
+        checkpoint=checkpoint,
+        trace=trace,
+        diagnostics=dict(runtime.get("diagnostics") or {}),
+        context_snapshot=context_snapshot,
+        skill_activation=skill,
+        active_task=active_task or None,
+        ui_state=dict(runtime.get("ui_state") or {}),
+        references=references,
+        evidence=evidence,
+        needs_user_input=runtime_status in {"waiting_user_action", "waiting_user_input"},
+        answer_delta_streamed=answer_delta_streamed,
+        error=error,
+    )
 
 
 def _failed_runtime_state(

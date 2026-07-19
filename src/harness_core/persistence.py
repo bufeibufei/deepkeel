@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from harness_core.contracts import AgentMessage, Artifact, Observation, RunContext, RunStatus, ToolCall
+
+if TYPE_CHECKING:
+    from harness_core.runtime_api import RuntimeResult
 
 
 CHECKPOINT_SCHEMA_VERSION = "harness-checkpoint-v1"
@@ -115,19 +118,35 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
     return checkpoint_from_runtime(runtime)
 
 
-def durable_state_from_result(result: dict[str, Any], *, run_id: str, thread_id: str) -> dict[str, Any]:
-    runtime = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
+def durable_state_from_result(
+    result: RuntimeResult,
+    *,
+    run_id: str,
+    thread_id: str,
+) -> dict[str, Any]:
+    runtime = {
+        "schema_version": result.schema_version,
+        "core_contract_version": result.core_contract_version,
+        "core_version": result.core_version,
+        "loop_engine": result.loop_engine,
+        "mode": result.mode,
+        "status": result.status.value,
+        "stop_reason": result.stop_reason,
+        "step_count": result.step_count,
+        "pending_action": result.pending_action.model_dump(mode="json")
+        if result.pending_action is not None
+        else None,
+        "active_task": result.active_task,
+        "checkpoint": result.checkpoint,
+        "diagnostics": result.diagnostics,
+    }
     return {
         "schema_version": DURABLE_CHECKPOINT_SCHEMA_VERSION,
         "run_id": run_id,
         "thread_id": thread_id,
-        "question": str(result.get("question") or ""),
-        "context_snapshot": result.get("context_snapshot")
-        if isinstance(result.get("context_snapshot"), dict)
-        else {},
-        "skill_activation": result.get("skill_activation")
-        if isinstance(result.get("skill_activation"), dict)
-        else {},
+        "question": result.question,
+        "context_snapshot": result.context_snapshot,
+        "skill_activation": result.skill_activation,
         "agent_runtime": {
             key: runtime.get(key)
             for key in (
@@ -147,8 +166,8 @@ def durable_state_from_result(result: dict[str, Any], *, run_id: str, thread_id:
             )
             if runtime.get(key) not in (None, "", [], {})
         },
-        "pending_action": result.get("pending_action")
-        if isinstance(result.get("pending_action"), dict)
+        "pending_action": result.pending_action.model_dump(mode="json")
+        if result.pending_action is not None
         else None,
     }
 
