@@ -925,7 +925,11 @@ def test_failed_pack_install_restores_replaced_handler() -> None:
     executor = ToolExecutor(registry)
 
     def original_handler(_call, _context):
-        return {"status": "ok", "result": {"source": "original"}}
+        return ToolResult(
+            call=_call,
+            status="succeeded",
+            data={"source": "original"},
+        )
 
     executor.register("existing.read", original_handler)
 
@@ -936,7 +940,11 @@ def test_failed_pack_install_restores_replaced_handler() -> None:
         def install(self, context: CapabilityInstallContext):
             context.executor.register(
                 "existing.read",
-                lambda *_args: {"status": "ok", "result": {"source": "replacement"}},
+                lambda call, _context: ToolResult(
+                    call=call,
+                    status="succeeded",
+                    data={"source": "replacement"},
+                ),
             )
             raise RuntimeError("replacement failed")
 
@@ -951,6 +959,22 @@ def test_failed_pack_install_restores_replaced_handler() -> None:
         ToolExecutionContext(run_id="existing-run", user_id="user-1"),
     )
     assert result.data == {"source": "original"}
+
+
+def test_core_executor_rejects_untyped_handler_payloads() -> None:
+    registry = ToolRegistry(
+        [ToolSpec(name="typed.only", parameters_schema={"type": "object"})]
+    )
+    executor = ToolExecutor(registry)
+    executor.register("typed.only", lambda *_args: {"status": "ok"})
+
+    result = executor.execute(
+        ToolCall(id="typed-call", name="typed.only"),
+        ToolExecutionContext(run_id="typed-run", user_id="user-1"),
+    )
+
+    assert result.status == "failed"
+    assert result.error == "tool handlers must return ToolResult"
 
 
 def test_capability_resources_close_with_runtime_and_failed_install() -> None:

@@ -20,7 +20,7 @@ from harness_core.budget import (
     InMemoryBudgetLedger,
 )
 from harness_core.clarifications import clarification_for_missing_arguments, clarification_tool_result
-from harness_core.contracts import Artifact, Observation, PendingAction, ToolCall, ToolResult
+from harness_core.contracts import Observation, PendingAction, ToolCall, ToolResult
 from harness_core.control import NoopRunControl, RunControl
 from harness_core.deadlines import ensure_time_remaining
 from harness_core.failures import RunCanceledError, RunDeadlineExceededError
@@ -34,7 +34,7 @@ from harness_core.ports import RuntimeSession, SessionFactory
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 
 
-ToolHandler = Callable[[ToolCall, "ToolExecutionContext"], ToolResult | dict[str, Any]]
+ToolHandler = Callable[[ToolCall, "ToolExecutionContext"], ToolResult]
 ToolPreflight = Callable[[ToolCall, "ToolExecutionContext", ToolSpec], str | None]
 
 
@@ -630,10 +630,9 @@ class ToolExecutor:
             raw = handler(call, context)
             context.run_control.raise_if_cancelled(context.run_id, force=True)
             ensure_time_remaining(context.deadline_monotonic)
-            if isinstance(raw, ToolResult):
-                result = raw
-            else:
-                result = tool_result_from_legacy(call, context, raw)
+            if not isinstance(raw, ToolResult):
+                raise TypeError("tool handlers must return ToolResult")
+            result = raw
             result = _normalize_async_result(result, spec)
             artifact_error = self._artifact_contract_error(result)
             if artifact_error:
@@ -748,20 +747,12 @@ def _copy_context_mapping(value: dict[str, Any]) -> dict[str, Any]:
 def _normalize_async_result(result: ToolResult, spec: ToolSpec) -> ToolResult:
     if not spec.async_tool or result.status != "succeeded":
         return result
-    legacy = result.metadata.get("legacy") if isinstance(result.metadata, dict) else None
-    if isinstance(legacy, dict) and legacy.get("async_tool") is False:
+    if bool(result.metadata.get("completed_inline")):
         return result
     observation = result.observation
     if observation is not None:
         observation = observation.model_copy(update={"status": "pending"})
     metadata = dict(result.metadata)
-    legacy = metadata.get("legacy")
-    if isinstance(legacy, dict):
-        metadata["legacy"] = {
-            **legacy,
-            "status": "task_running",
-            "async_tool": True,
-        }
     metadata["typed_async"] = True
     return result.model_copy(
         update={
@@ -792,7 +783,7 @@ def _keep_single_suspending_result(results: list[ToolResult]) -> list[ToolResult
             "multiple suspending tools must be executed sequentially",
         )
         rejected.metadata = {
-            **{key: value for key, value in result.metadata.items() if key != "legacy"},
+            **result.metadata,
             "suspension_rejected": True,
             "original_status": result.status,
         }
@@ -820,118 +811,6 @@ def normalize_arguments(arguments: dict[str, Any], spec: ToolSpec) -> dict[str, 
             continue
         normalized[field_name] = _coerce(normalized[field_name], str(target_type))
     return normalized
-
-
-def tool_result_from_legacy(
-    call: ToolCall,
-    context: ToolExecutionContext,
-    raw: dict[str, Any],
-) -> ToolResult:
-    raw_status = str(raw.get("status") or "error")
-    status = {
-        "ok": "succeeded",
-        "completed": "succeeded",
-        "error": "failed",
-        "failed": "failed",
-        "requires_user_action": "requires_user_action",
-        "waiting_user": "requires_user_action",
-        "waiting_async": "waiting_async",
-        "task_running": "waiting_async",
-    }.get(raw_status, "failed")
-    summary = str(raw.get("summary") or raw.get("error") or "")
-    error = str(raw.get("error") or "") if status == "failed" else ""
-    data = raw.get("result")
-    if not isinstance(data, dict):
-        data = {} if data is None else {"value": data}
-    raw_outcome = str(raw.get("outcome") or "").strip().lower()
-    if not raw_outcome:
-        nested_status = str(data.get("status") or "").strip().lower()
-        if nested_status in {"partial", "degraded", "skipped", "canceled"}:
-            raw_outcome = nested_status
-    valid_outcomes = {"completed", "partial", "degraded", "skipped", "canceled"}
-    outcome = raw_outcome if raw_outcome in valid_outcomes else (
-        "completed" if status == "succeeded" else None
-    )
-
-    artifacts = _legacy_artifacts(raw, context.run_id)
-    observation = Observation(
-        id=f"{call.id}:observation",
-        run_id=context.run_id,
-        tool_call_id=call.id,
-        source=call.name,
-        status={
-            "succeeded": "succeeded",
-            "failed": "failed",
-            "requires_user_action": "requires_user_action",
-            "waiting_async": "pending",
-        }[status],
-        outcome=outcome,
-        summary=summary,
-        data=data,
-        error=error,
-        artifact_ids=[artifact.id for artifact in artifacts],
-        metadata={"legacy_status": raw_status},
-    )
-    pending_action = None
-    if status == "requires_user_action":
-        pending_action = PendingAction(
-            id=f"{call.id}:action",
-            run_id=context.run_id,
-            tool_call_id=call.id,
-            action_type=str(raw.get("action_type") or raw.get("handoff_view") or call.name),
-            title=str(raw.get("visible_label") or "Waiting for user action"),
-            prompt=summary,
-            handoff_view=str(raw.get("handoff_view") or ""),
-            payload=data,
-        )
-    return ToolResult(
-        call=call,
-        tool_call_id=call.id,
-        name=call.name,
-        status=status,
-        outcome=outcome,
-        summary=summary,
-        data=data,
-        error=error,
-        retryable=bool(raw.get("retryable")),
-        observation=observation,
-        pending_action=pending_action,
-        artifacts=artifacts,
-        metadata={
-            "visible_label": str(raw.get("visible_label") or ""),
-            "visible": raw.get("visible") is not False,
-            "read_only": bool(raw.get("read_only", call.read_only)),
-            "async_tool": bool(raw.get("async_tool")),
-            "legacy": raw,
-        },
-    )
-
-
-def _legacy_artifacts(raw: dict[str, Any], run_id: str) -> list[Artifact]:
-    values: list[dict[str, Any]] = []
-    artifact = raw.get("artifact")
-    if isinstance(artifact, dict) and artifact.get("artifact_type"):
-        values.append(artifact)
-    values.extend(
-        item
-        for item in raw.get("artifacts", [])
-        if isinstance(item, dict) and item.get("artifact_type")
-    )
-    artifacts = []
-    for index, item in enumerate(values):
-        artifact_id = str(item.get("artifact_id") or item.get("id") or f"artifact-{index}")
-        artifacts.append(
-            Artifact(
-                id=artifact_id,
-                run_id=run_id,
-                artifact_type=str(item["artifact_type"]),
-                title=str(item.get("title") or ""),
-                summary=str(item.get("summary") or ""),
-                source_id=str(item.get("source_id") or item.get("session_id") or item.get("case_id") or ""),
-                data=item.get("data") if isinstance(item.get("data"), dict) else dict(item),
-            )
-        )
-    return artifacts
 
 
 def _failed_result(call: ToolCall, error: str, *, retryable: bool = False) -> ToolResult:

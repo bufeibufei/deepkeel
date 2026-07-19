@@ -5,7 +5,7 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from harness_core.contracts import ToolCall
+from harness_core.contracts import Observation, ToolCall, ToolResult
 from harness_core.skills import DelegationPolicy
 from harness_core.subagents.contracts import DelegationRequest
 from harness_core.subagents.executor import SubAgentExecutor
@@ -35,7 +35,7 @@ class DelegationToolHandler:
         self.executor = executor
         self.dispatcher = dispatcher
 
-    def __call__(self, call: ToolCall, context: ToolExecutionContext) -> dict[str, Any]:
+    def __call__(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
         try:
             request = DelegationRequest.model_validate(
                 {
@@ -71,9 +71,17 @@ class DelegationToolHandler:
                     providers=providers,
                     event_sink=event_sink if callable(event_sink) else None,
                 )
-                dispatched["tool_name"] = call.name
-                dispatched["tool_args"] = dict(call.arguments)
-                return dispatched
+                return _result(
+                    call,
+                    context,
+                    status="waiting_async",
+                    summary=(
+                        f"Started {len(request.tasks)} specialist tasks; the parent run "
+                        "will resume when they complete."
+                    ),
+                    data=dispatched,
+                    metadata={"visible_label": "Specialist collaboration in progress"},
+                )
             batch = self.executor.execute_many(
                 request,
                 context=context,
@@ -81,33 +89,33 @@ class DelegationToolHandler:
                 event_sink=event_sink if callable(event_sink) else None,
             )
         except (TypeError, ValueError, ValidationError) as exc:
-            return self._recoverable_invalid_request(call, exc)
+            return self._recoverable_invalid_request(call, exc, context)
         except (KeyError, RuntimeError) as exc:
-            return {
-                "tool_name": call.name,
-                "tool_args": dict(call.arguments),
-                "status": "error",
-                "visible_label": "Specialist collaboration incomplete",
-                "requires_user_action": False,
-                "summary": "Specialist delegation failed.",
-                "error": str(exc),
-                "retryable": True,
-                "result": {},
-                "artifact": {},
-                "async_tool": False,
-            }
-        return {
-            "tool_name": call.name,
-            "tool_args": dict(call.arguments),
-            "status": "ok",
-            "outcome": batch.status,
-            "visible_label": "Parallel specialist analysis",
-            "requires_user_action": False,
-            "summary": f"Completed {len(batch.successful_results)}/{len(batch.results)} specialist tasks.",
-            "result": batch.model_dump(mode="json"),
-            "artifact": {},
-            "async_tool": False,
-        }
+            return _result(
+                call,
+                context,
+                status="failed",
+                summary="Specialist delegation failed.",
+                error=str(exc),
+                retryable=True,
+                metadata={"visible_label": "Specialist collaboration incomplete"},
+            )
+        outcome = batch.status if batch.status != "failed" else "degraded"
+        return _result(
+            call,
+            context,
+            status="succeeded",
+            outcome=outcome,
+            summary=(
+                f"Completed {len(batch.successful_results)}/{len(batch.results)} "
+                "specialist tasks."
+            ),
+            data=batch.model_dump(mode="json"),
+            metadata={
+                "visible_label": "Parallel specialist analysis",
+                "completed_inline": True,
+            },
+        )
 
     def _is_registered(self, agent_id: str) -> bool:
         try:
@@ -139,30 +147,75 @@ class DelegationToolHandler:
             raise ValueError("delegated agents are outside the active Skill policy: " + ", ".join(denied))
 
     @staticmethod
-    def _recoverable_invalid_request(call: ToolCall, exc: Exception) -> dict[str, Any]:
-        return {
-            "tool_name": call.name,
-            "tool_args": dict(call.arguments),
-            "status": "ok",
-            "outcome": "skipped",
-            "visible_label": "Returned to the lead agent",
-            "requires_user_action": False,
-            "summary": "Delegation arguments violated the contract. Continue in the lead agent without delegating again.",
-            "error": "",
-            "retryable": False,
-            "visible": False,
-            "result": {
+    def _recoverable_invalid_request(
+        call: ToolCall,
+        exc: Exception,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        return _result(
+            call,
+            context,
+            status="succeeded",
+            outcome="skipped",
+            summary=(
+                "Delegation arguments violated the contract. Continue in the lead "
+                "agent without delegating again."
+            ),
+            data={
                 "status": "skipped",
                 "reason_code": "invalid_delegation_request",
                 "fallback": "continue_with_parent_agent",
             },
-            "artifact": {},
-            "async_tool": False,
-            "internal_error": str(exc),
-        }
+            metadata={
+                "visible_label": "Returned to the lead agent",
+                "visible": False,
+                "internal_error": str(exc),
+                "completed_inline": True,
+            },
+        )
 
 
 def _delegation_id(run_id: str, tool_call_id: str) -> str:
     return hashlib.sha256(
         f"{run_id}\x1f{tool_call_id}".encode("utf-8")
     ).hexdigest()[:32]
+
+
+def _result(
+    call: ToolCall,
+    context: ToolExecutionContext,
+    *,
+    status: str,
+    summary: str,
+    outcome: str | None = None,
+    data: dict[str, Any] | None = None,
+    error: str = "",
+    retryable: bool = False,
+    metadata: dict[str, Any] | None = None,
+) -> ToolResult:
+    observation = Observation(
+        id=f"{call.id}:observation",
+        run_id=context.run_id,
+        tool_call_id=call.id,
+        source=call.name,
+        status={
+            "succeeded": "succeeded",
+            "failed": "failed",
+            "waiting_async": "pending",
+        }[status],
+        outcome=outcome,
+        summary=summary,
+        data=dict(data or {}),
+        error=error,
+    )
+    return ToolResult(
+        call=call,
+        status=status,
+        outcome=outcome,
+        summary=summary,
+        data=dict(data or {}),
+        error=error,
+        retryable=retryable,
+        observation=observation,
+        metadata=dict(metadata or {}),
+    )
