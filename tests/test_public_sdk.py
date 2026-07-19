@@ -3,6 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import pytest
+import harness_core
+import harness_core.adapter_sdk as adapter_sdk
+import harness_core.extension_sdk as extension_sdk
+import harness_core.runtime_sdk as runtime_sdk
 
 from harness_core import (
     Artifact,
@@ -41,6 +45,37 @@ from harness_core import (
 from harness_core.handoffs import HandoffSpec
 from harness_core.mcp import McpServerSpec
 from harness_core.subagents import SubAgentSpec
+from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
+
+
+def test_every_root_export_is_versioned_and_classified_in_exactly_one_sdk() -> None:
+    memberships = {
+        symbol: [
+            layer
+            for layer, symbols in PUBLIC_API_BY_LAYER.items()
+            if symbol in symbols
+        ]
+        for symbol in harness_core.__all__
+    }
+
+    assert PUBLIC_API_VERSION == "2.0.0"
+    assert set(harness_core.__all__) - PUBLIC_API_SYMBOLS == set()
+    assert {symbol: layers for symbol, layers in memberships.items() if len(layers) != 1} == {}
+
+
+@pytest.mark.parametrize(
+    "module,layer",
+    [
+        (runtime_sdk, "runtime"),
+        (extension_sdk, "extension"),
+        (adapter_sdk, "adapter"),
+    ],
+)
+def test_sdk_module_exports_match_the_versioned_manifest(module, layer: str) -> None:
+    expected = tuple(PUBLIC_API_BY_LAYER[layer])
+
+    assert tuple(module.__all__) == expected
+    assert all(hasattr(module, symbol) for symbol in expected)
 
 
 def run_runtime(runtime, question: str, **kwargs):
