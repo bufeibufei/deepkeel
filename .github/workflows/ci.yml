@@ -1,0 +1,38 @@
+name: Harness Core CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - name: Install package and test dependencies
+        run: uv sync --extra test
+      - name: Run package-owned tests
+        run: uv run pytest -q
+      - name: Build wheel and source distribution
+        run: uv build
+      - name: Verify isolated wheel contents
+        shell: python
+        run: |
+          import glob
+          import zipfile
+
+          wheel = glob.glob("dist/*.whl")[0]
+          with zipfile.ZipFile(wheel) as archive:
+              names = set(archive.namelist())
+          assert "harness_core/__init__.py" in names
+          assert not any(name.startswith("app/") for name in names)
+          print(f"verified {wheel}")

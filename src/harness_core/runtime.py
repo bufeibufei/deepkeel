@@ -46,6 +46,7 @@ from harness_core.capabilities import CapabilityCatalog, CapabilityContribution
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.prompts import harness_system_prompt
 from harness_core.policy import DefaultPolicyEngine, PolicyEngine
+from harness_core.runtime_api import RuntimeRequest, RuntimeResult
 from harness_core.skills import SkillPolicy
 from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
@@ -142,6 +143,31 @@ class HarnessRuntime:
         return isinstance(provider, ModelProviderAdapter) or callable(
             getattr(provider, "stream_chat", None)
         ) or callable(getattr(provider, "complete_chat", None))
+
+    def run(
+        self,
+        request: RuntimeRequest,
+        *,
+        provider: Any = None,
+        providers: dict[str, Any] | None = None,
+        session: Any = None,
+        event_sink: EventSink | None = None,
+    ) -> RuntimeResult:
+        """Execute one turn through the typed, product-neutral public API."""
+
+        payload = self.run_turn(
+            request.question,
+            provider=provider,
+            providers=providers,
+            session=session,
+            user_id=request.user_id,
+            short_context=request.short_context,
+            context_bundle=request.context_bundle,
+            skill_activation=request.skill_activation,
+            model_policy=request.model_policy,
+            event_sink=event_sink,
+        )
+        return RuntimeResult.from_compatibility_payload(payload)
 
     def run_turn(
         self,
@@ -1151,6 +1177,17 @@ def project_harness_result(
         "checkpoint": checkpoint,
         "trace": trace,
         "answer_delta_streamed": answer_delta_streamed,
+        "identity": {
+            "run_id": checkpoint["run_id"],
+            "thread_id": str(
+                context_bundle.get("thread_id")
+                or context_bundle.get("ask_thread_id")
+                or short_context.get("ask_thread_id")
+                or checkpoint["graph_thread_id"]
+            ),
+            "graph_thread_id": checkpoint["graph_thread_id"],
+            "turn_id": checkpoint["turn_id"],
+        },
     }
     runtime["diagnostics"] = _runtime_diagnostics(
         state,

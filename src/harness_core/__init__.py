@@ -79,6 +79,12 @@ from harness_core.persistence import CheckpointStore, DurableCheckpointStore
 from harness_core.langgraph_adapter import LangGraphCheckpointerAdapter
 from harness_core.ports import ContextBuilder, GraphCheckpointer, RuntimeSession, SessionFactory
 from harness_core.runtime import HarnessRuntime
+from harness_core.runtime_api import (
+    RuntimeRequest,
+    RuntimeResult,
+    RuntimeResultStatus,
+    RuntimeStreamEvent,
+)
 from harness_core.state_store import (
     InMemoryRuntimeStateStore,
     RuntimeStateConflict,
@@ -180,6 +186,10 @@ __all__ = [
     "RunControl",
     "RunStatus",
     "RuntimeEvent",
+    "RuntimeRequest",
+    "RuntimeResult",
+    "RuntimeResultStatus",
+    "RuntimeStreamEvent",
     "RuntimePorts",
     "RuntimeSession",
     "RuntimeStateConflict",

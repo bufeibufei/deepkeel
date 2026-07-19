@@ -1,6 +1,6 @@
 [project]
-name = "kuitianjiandi-harness-core"
-version = "1.2.0"
+name = "harness-agent-core"
+version = "1.3.0"
 description = "Product-neutral Harness Agent runtime core."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,3 +28,4 @@ include = ["harness_core*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+addopts = "-p no:cacheprovider"

@@ -1,12 +1,12 @@
 # Harness Agent Core
 
-`kuitianjiandi-harness-core` is the product-neutral runtime kernel currently
-validated by Kuitianjiandi. It owns the model/tool loop, runtime contracts,
+`harness-agent-core` is a product-neutral runtime kernel for tool-using agents.
+It owns the model/tool loop, runtime contracts,
 governance ports, interruption, recovery, MCP gateway primitives, sub-agent
 execution and Capability Pack composition.
 
-The package does not contain Kuitianjiandi tools, database models, API routes or
-product prompts. Consumers integrate through `HarnessRuntimeBuilder`,
+The package does not contain host tools, database models, API routes or product
+prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 `RuntimePorts` and a versioned Capability Pack. New packs should expose a
 `CapabilityPackSpec` and implement `install(CapabilityInstallContext)`; the
 original `register(ToolExecutor)` contract remains supported for v1
@@ -44,6 +44,25 @@ class InventoryPack:
         )
 
 runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
+```
+
+The preferred execution boundary is typed. Providers and sessions remain
+injected runtime ports, while request and result data are serializable Core
+contracts. `run_turn()` remains available as the v1 mapping adapter while
+existing hosts migrate.
+
+```python
+from harness_core import RuntimeRequest
+
+result = runtime.run(
+    RuntimeRequest(
+        question="How many units remain?",
+        user_id="user-1",
+        context_bundle={"thread_id": "thread-1"},
+    ),
+    provider=model_provider,
+)
+print(result.status, result.final_answer.markdown)
 ```
 
 The builder derives installed contributions from the registrations that
@@ -187,4 +206,4 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v1`; the current package version is
-`1.2.0`.
+`1.3.0`.

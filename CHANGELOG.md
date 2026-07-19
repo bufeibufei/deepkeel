@@ -1,5 +1,18 @@
 # Changelog
 
+## 1.3.0
+
+- Added the typed `RuntimeRequest`, `RuntimeResult` and `RuntimeStreamEvent`
+  public execution contracts.
+- Added `HarnessRuntime.run()` while retaining `run_turn()` as the v1 mapping
+  compatibility adapter.
+- Added explicit run, conversation-thread, graph-thread and turn identities to
+  projected runtime results.
+- Moved product-neutral contract, event, persistence, failure and model-routing
+  tests under package ownership.
+- Renamed the distribution to the product-neutral `harness-agent-core` name and
+  added a standalone extraction-ready CI workflow.
+
 ## 1.2.0
 
 - Replaced product-shaped context assembly with a generic runtime context and
