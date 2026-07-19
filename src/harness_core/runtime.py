@@ -465,6 +465,7 @@ class HarnessRuntime:
             short_context=short,
             skill_activation=skill,
             streamed_events=events,
+            user_id=str(user_id or "local-device"),
             answer_delta_streamed=answer_delta_streamed,
             observation_kinds={
                 spec.name: str(spec.observation_contract.get("primary_kind") or "")
@@ -708,6 +709,7 @@ class HarnessRuntime:
             short_context=short_context,
             skill_activation=resolved_skill,
             streamed_events=[event],
+            user_id=str(user_id or "local-device"),
             answer_delta_streamed=False,
             observation_kinds={},
             task_kinds={},

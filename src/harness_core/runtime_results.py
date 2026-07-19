@@ -12,6 +12,7 @@ from harness_core.budget import (
     TOOL_CONCURRENCY,
 )
 from harness_core.contracts import (
+    AgentMessage,
     Artifact,
     FinalAnswer,
     Observation,
@@ -41,6 +42,7 @@ def project_harness_result(
     short_context: dict[str, Any],
     skill_activation: dict[str, Any],
     streamed_events: list[dict[str, Any]],
+    user_id: str = "local-device",
     answer_delta_streamed: bool = False,
     observation_kinds: dict[str, str] | None = None,
     task_kinds: dict[str, str] | None = None,
@@ -107,11 +109,28 @@ def project_harness_result(
     projected_observations = [
         _project_observation(item, observation_kinds or {}) for item in checkpoint_observations
     ]
+    run_id = str(
+        state.get("run_id")
+        or context_bundle.get("agent_session_id")
+        or context_bundle.get("run_id")
+        or "unbound-run"
+    )
+    graph_thread_id = str(
+        state.get("thread_id")
+        or context_bundle.get("graph_thread_id")
+        or context_bundle.get("thread_id")
+        or "unbound-thread"
+    )
+    turn_id = str(
+        state.get("turn_id")
+        or context_bundle.get("turn_id")
+        or "unbound-turn"
+    )
     checkpoint = {
         "schema_version": "harness-checkpoint-v2",
-        "run_id": str(state.get("run_id") or ""),
-        "graph_thread_id": str(state.get("thread_id") or ""),
-        "turn_id": str(state.get("turn_id") or ""),
+        "run_id": run_id,
+        "graph_thread_id": graph_thread_id,
+        "turn_id": turn_id,
         "messages": [item for item in state.get("messages", []) if isinstance(item, dict)],
         "observations": checkpoint_observations,
         "artifacts": [item for item in state.get("artifacts", []) if isinstance(item, dict)],
@@ -219,6 +238,42 @@ def project_harness_result(
         if isinstance(checkpoint_pending_action, dict)
         else None
     )
+    typed_run_context = RunContext(
+        run_id=checkpoint["run_id"],
+        thread_id=runtime["identity"]["thread_id"],
+        turn_id=checkpoint["turn_id"],
+        user_id=str(user_id or "local-device"),
+        status={
+            "completed": RunStatus.COMPLETED,
+            "waiting_user": RunStatus.WAITING_USER,
+            "waiting_async": RunStatus.WAITING_ASYNC,
+            "failed": RunStatus.FAILED,
+            "canceled": RunStatus.CANCELED,
+        }.get(graph_status, RunStatus.REASONING),
+        messages=[
+            AgentMessage.model_validate(item) for item in checkpoint["messages"]
+        ],
+        observations=[
+            Observation.model_validate(item) for item in checkpoint_observations
+        ],
+        pending_tool_calls=[
+            ToolCall.model_validate(item) for item in checkpoint["pending_tool_calls"]
+        ],
+        pending_action=typed_pending_action,
+        pending_async=checkpoint_pending_async,
+        artifacts=[
+            Artifact.model_validate(item) for item in checkpoint["artifacts"]
+        ],
+        skill_activation=skill,
+        model_policy=(
+            dict(state.get("model_policy"))
+            if isinstance(state.get("model_policy"), dict)
+            else {}
+        ),
+        budget_state=dict(checkpoint["budget_state"]),
+        metadata=dict(checkpoint["metadata"]),
+        step_count=int(checkpoint["step_count"]),
+    )
     return RuntimeResult(
         question=question,
         run_id=checkpoint["run_id"],
@@ -234,6 +289,7 @@ def project_harness_result(
         mode=str(runtime["mode"]),
         step_count=int(runtime["step_count"]),
         final_answer=FinalAnswer(**answer_values, metadata=answer_metadata),
+        run_context=typed_run_context,
         observations=[
             Observation.model_validate(item) for item in checkpoint_observations
         ],

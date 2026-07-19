@@ -6,7 +6,14 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from harness_core.contracts import Artifact, FinalAnswer, Observation, PendingAction, ToolResult
+from harness_core.contracts import (
+    Artifact,
+    FinalAnswer,
+    Observation,
+    PendingAction,
+    RunContext,
+    ToolResult,
+)
 
 
 class RuntimeRequest(BaseModel):
@@ -65,6 +72,7 @@ class RuntimeResult(BaseModel):
     mode: str = ""
     step_count: int = 0
     final_answer: FinalAnswer
+    run_context: RunContext | None = None
     observations: list[Observation] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None

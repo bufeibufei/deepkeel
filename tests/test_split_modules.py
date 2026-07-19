@@ -71,11 +71,17 @@ def test_runtime_results_projects_a_completed_typed_result() -> None:
         short_context={},
         skill_activation={},
         streamed_events=[],
+        user_id="user-1",
     )
 
     assert result.status is RuntimeResultStatus.COMPLETED
     assert result.final_answer.markdown == "The task is complete."
     assert result.checkpoint["schema_version"] == "harness-checkpoint-v2"
+    assert result.run_context is not None
+    assert result.run_context.run_id == result.run_id == "run-1"
+    assert result.run_context.thread_id == result.thread_id == "thread-1"
+    assert result.run_context.turn_id == result.turn_id == "turn-1"
+    assert result.run_context.user_id == "user-1"
 
 
 def test_graph_state_serializes_typed_context_without_losing_identity() -> None:
