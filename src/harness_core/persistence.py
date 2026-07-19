@@ -26,6 +26,10 @@ def _require_supported_version(
     contract_name: str,
 ) -> None:
     version = str(value.get("schema_version") or "").strip()
+    if value and not version:
+        raise CheckpointCompatibilityError(
+            f"missing {contract_name} schema version"
+        )
     if version and version not in supported:
         raise CheckpointCompatibilityError(
             f"unsupported {contract_name} schema version: {version}"
@@ -77,10 +81,6 @@ class DurableCheckpointStore(Protocol):
     ) -> tuple[str, ...]: ...
 
 
-# Compatibility name retained for hosts using the v1 public SDK.
-CheckpointStore = DurableCheckpointStore
-
-
 def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str, Any]:
     runtime = previous_runtime if isinstance(previous_runtime, dict) else {}
     _require_supported_version(
@@ -114,7 +114,7 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
             contract_name="checkpoint",
         )
         return direct
-    runtime = state.get("agent_runtime") if isinstance(state.get("agent_runtime"), dict) else {}
+    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
     return checkpoint_from_runtime(runtime)
 
 
@@ -147,7 +147,7 @@ def durable_state_from_result(
         "question": result.question,
         "context_snapshot": result.context_snapshot,
         "skill_activation": result.skill_activation,
-        "agent_runtime": {
+        "runtime": {
             key: runtime.get(key)
             for key in (
                 "schema_version",

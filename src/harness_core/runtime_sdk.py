@@ -19,7 +19,7 @@ from harness_core.context_snapshot import (
 from harness_core.control import InMemoryRunControl, NoopRunControl, RunControl
 from harness_core.events import AgentEventPersistenceError
 from harness_core.failures import RunCanceledError, failure_from_code
-from harness_core.persistence import CheckpointStore, DurableCheckpointStore
+from harness_core.persistence import DurableCheckpointStore
 from harness_core.runtime import HarnessRuntime
 from harness_core.runtime_api import (
     RuntimeRequest,
@@ -42,7 +42,6 @@ RUNTIME_SDK_API = (
     "AgentEventPersistenceError",
     "AgentMessage",
     "Artifact",
-    "CheckpointStore",
     "DurableCheckpointStore",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",

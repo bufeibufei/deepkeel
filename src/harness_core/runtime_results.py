@@ -86,9 +86,12 @@ def project_harness_result(
         state.get("pending_async") if isinstance(state.get("pending_async"), dict) else None
     )
     pending_action = _project_pending_action(checkpoint_pending_action, typed_tool_results)
-    legacy_results = [_legacy_tool_result(item) for item in typed_tool_results]
-    legacy_results = [item for item in legacy_results if item]
-    final_answer = _project_final_answer(state, runtime_status, pending_action, legacy_results)
+    final_answer = _project_final_answer(
+        state,
+        runtime_status,
+        pending_action,
+        typed_tool_results,
+    )
     reference_projection = (reference_projector or DefaultReferenceProjector())(
         typed_tool_results,
         final_answer,
@@ -163,7 +166,7 @@ def project_harness_result(
         previous_diagnostics=previous_diagnostics,
         capability_manifest=capability_manifest,
     )
-    active_task = _active_task(legacy_results, typed_tool_results, task_kinds or {})
+    active_task = _active_task(typed_tool_results, task_kinds or {})
     if active_task:
         runtime["active_task"] = active_task
     runtime["ui_state"] = project_run_ui_state(
@@ -417,30 +420,6 @@ def _context_path_value(context: dict[str, Any], path: str) -> Any:
     return current
 
 
-def _legacy_tool_result(item: dict[str, Any]) -> dict[str, Any]:
-    metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
-    legacy = metadata.get("legacy") if isinstance(metadata.get("legacy"), dict) else None
-    if legacy is not None:
-        return legacy
-    status = str(item.get("status") or "failed")
-    pending_action = item.get("pending_action") if isinstance(item.get("pending_action"), dict) else {}
-    waiting_for_input = status == "requires_user_action" and pending_action.get("action_type") == "clarification"
-    return {
-        "tool_name": str(item.get("name") or ""),
-        "tool_args": {},
-        "status": {
-            "succeeded": "ok",
-            "requires_user_action": "waiting_user_input" if waiting_for_input else "requires_user_action",
-            "waiting_async": "task_running",
-        }.get(status, "error"),
-        "summary": str(item.get("summary") or ""),
-        "result": item.get("data") if isinstance(item.get("data"), dict) else {},
-        "requires_user_action": status == "requires_user_action" and not waiting_for_input,
-        "error": str(item.get("error") or ""),
-        "artifact": {},
-    }
-
-
 def _project_pending_action(
     value: dict[str, Any] | None,
     tool_results: list[dict[str, Any]],
@@ -514,30 +493,9 @@ def _project_final_answer(
 
 
 def _active_task(
-    tool_results: list[dict[str, Any]],
     typed_tool_results: list[dict[str, Any]],
     task_kinds: dict[str, str],
 ) -> dict[str, Any]:
-    for item in reversed(tool_results):
-        status = str(item.get("status") or "")
-        if status not in {"task_running", "waiting_async"}:
-            continue
-        tool_name = str(item.get("tool_name") or "")
-        result = item.get("result") if isinstance(item.get("result"), dict) else {}
-        artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
-        kind = task_kinds.get(tool_name) or "task"
-        return {
-            "kind": kind,
-            "tool_name": tool_name,
-            "source_id": str(
-                result.get("case_id")
-                or result.get("session_id")
-                or artifact.get("run_id")
-                or artifact.get("source_id")
-                or ""
-            ),
-            "summary": str(item.get("summary") or ""),
-        }
     for item in reversed(typed_tool_results):
         if str(item.get("status") or "") != "waiting_async":
             continue
@@ -546,7 +504,11 @@ def _active_task(
         artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
         artifact = next((value for value in artifacts if isinstance(value, dict)), {})
         artifact_data = artifact.get("data") if isinstance(artifact.get("data"), dict) else {}
-        artifact_type = str(artifact.get("type") or artifact_data.get("artifact_type") or "")
+        artifact_type = str(
+            artifact.get("artifact_type")
+            or artifact_data.get("artifact_type")
+            or ""
+        )
         return {
             "kind": task_kinds.get(tool_name) or "task",
             "tool_name": tool_name,

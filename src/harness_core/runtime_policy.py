@@ -146,13 +146,13 @@ def _prior_budget_state(
     short_context: dict[str, Any],
 ) -> dict[str, Any]:
     durable_runtime = (
-        durable_state.get("agent_runtime")
-        if isinstance(durable_state.get("agent_runtime"), dict)
+        durable_state.get("runtime")
+        if isinstance(durable_state.get("runtime"), dict)
         else {}
     )
     previous_runtime = (
-        short_context.get("previous_agent_runtime")
-        if isinstance(short_context.get("previous_agent_runtime"), dict)
+        short_context.get("previous_runtime")
+        if isinstance(short_context.get("previous_runtime"), dict)
         else {}
     )
     sources = (
@@ -204,13 +204,13 @@ def _prior_diagnostics(
     short_context: dict[str, Any],
 ) -> dict[str, Any]:
     durable_runtime = (
-        durable_state.get("agent_runtime")
-        if isinstance(durable_state.get("agent_runtime"), dict)
+        durable_state.get("runtime")
+        if isinstance(durable_state.get("runtime"), dict)
         else {}
     )
     previous_runtime = (
-        short_context.get("previous_agent_runtime")
-        if isinstance(short_context.get("previous_agent_runtime"), dict)
+        short_context.get("previous_runtime")
+        if isinstance(short_context.get("previous_runtime"), dict)
         else {}
     )
     for runtime in (durable_runtime, previous_runtime):

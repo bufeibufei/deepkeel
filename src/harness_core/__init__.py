@@ -75,7 +75,7 @@ from harness_core.model import (
     ModelTurn,
     NativeChatProviderAdapter,
 )
-from harness_core.persistence import CheckpointStore, DurableCheckpointStore
+from harness_core.persistence import DurableCheckpointStore
 from harness_core.langgraph_adapter import LangGraphCheckpointerAdapter
 from harness_core.ports import ContextBuilder, GraphCheckpointer, RuntimeSession, SessionFactory
 from harness_core.runtime import HarnessRuntime
@@ -185,7 +185,6 @@ __all__ = [
     "PendingAction",
     "PolicyEngine",
     "PolicyRule",
-    "CheckpointStore",
     "DurableCheckpointStore",
     "RunContext",
     "RunControl",

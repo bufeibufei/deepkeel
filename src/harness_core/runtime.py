@@ -43,7 +43,7 @@ from harness_core.langgraph_adapter import (
 from harness_core.model import ModelProviderAdapter, RoutedModelGateway
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.persistence import (
-    CheckpointStore,
+    DurableCheckpointStore,
     checkpoint_from_durable_state,
     checkpoint_from_runtime,
     durable_state_from_result,
@@ -130,7 +130,7 @@ class HarnessRuntime:
         tool_executor: ToolExecutor,
         *,
         checkpointer: GraphCheckpointer | None = None,
-        checkpoint_store: CheckpointStore | None = None,
+        checkpoint_store: DurableCheckpointStore | None = None,
         system_prompt_factory: SystemPromptFactory | None = None,
         session_factory: SessionFactory | None = None,
         max_steps: int = 12,
@@ -383,7 +383,7 @@ class HarnessRuntime:
                 except AgentEventPersistenceError:
                     raise
                 except (RuntimeError, ValueError, AttributeError):
-                    previous_runtime = short.get("previous_agent_runtime")
+                    previous_runtime = short.get("previous_runtime")
                     recovered_checkpoint = checkpoint_from_durable_state(durable_state)
                     if not recovered_checkpoint:
                         recovered_checkpoint = checkpoint_from_runtime(
