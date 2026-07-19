@@ -4,6 +4,8 @@
 
 - Made `HarnessRuntime.run(RuntimeRequest) -> RuntimeResult` the sole Runtime
   execution API and removed the v1 mapping entrypoint.
+- Added the typed `RuntimeResult.run_context` projection so Hosts no longer
+  reconstruct execution context from legacy result dictionaries.
 - Moved product dictionaries, localization, and domain context adaptation to
   the Host boundary.
 - Replaced product-shaped context fields with generic `subject`, `facts`,
