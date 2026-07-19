@@ -13,6 +13,10 @@
   public API manifest.
 - Added workspace packaging so the Host depends on the installable
   `harness-agent-core` distribution rather than scanning Core source files.
+- Removed the legacy `register(ToolExecutor)` Capability Pack path; v2 packs
+  must declare `CapabilityPackSpec` and implement `install(context)`.
+- Added clean wheel and sdist conformance runs across Windows/Linux and Python
+  3.12/3.13, plus an installed-Core Host contract gate.
 
 ## 1.4.0
 

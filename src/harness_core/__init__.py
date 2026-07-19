@@ -24,7 +24,6 @@ from harness_core.capabilities import (
     CapabilityInstallContext,
     CapabilityPack,
     CapabilityPackSpec,
-    InstallableCapabilityPack,
     capability_pack_spec,
 )
 from harness_core.clarifications import ClarificationRequest
@@ -167,7 +166,6 @@ __all__ = [
     "InMemoryRunControl",
     "InMemoryRuntimeStateStore",
     "InMemoryTelemetry",
-    "InstallableCapabilityPack",
     "LangGraphCheckpointerAdapter",
     "ModelGateway",
     "ModelInvocation",

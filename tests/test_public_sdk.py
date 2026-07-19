@@ -190,7 +190,7 @@ def test_v1_capability_pack_is_explicitly_rejected() -> None:
             executor.register("legacy.read", lambda *_args: {"status": "ok"})
 
     registry = ToolRegistry()
-    with pytest.raises(ValueError, match="unsupported contract harness-core-v1"):
+    with pytest.raises(TypeError, match="must declare a CapabilityPackSpec"):
         HarnessRuntimeBuilder(registry).add_capability_pack(LegacyPack())
 
     assert registry.list_tools() == []

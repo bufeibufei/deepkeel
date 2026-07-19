@@ -10,7 +10,6 @@ from harness_core.capabilities import (
     CapabilityInstallContext,
     CapabilityPack,
     CapabilityPackSpec,
-    InstallableCapabilityPack,
     capability_pack_spec,
     assert_capability_contribution,
 )
@@ -75,7 +74,7 @@ class HarnessRuntimeBuilder:
         self._registry = registry or (executor.registry if executor is not None else ToolRegistry())
         self._executor = executor
         self._ports = RuntimePorts()
-        self._capability_packs: list[CapabilityPack | InstallableCapabilityPack] = []
+        self._capability_packs: list[CapabilityPack] = []
         self._capability_catalog = CapabilityCatalog()
         self._installed_contributions: tuple[CapabilityContribution, ...] = ()
         self._max_steps = 12
@@ -98,7 +97,7 @@ class HarnessRuntimeBuilder:
         self._ports = replace(self._ports, **changes)
         return self
 
-    def add_capability_pack(self, pack: CapabilityPack | InstallableCapabilityPack) -> Self:
+    def add_capability_pack(self, pack: CapabilityPack) -> Self:
         self._ensure_mutable()
         from harness_core.version import HARNESS_CORE_CONTRACT_VERSION
 
@@ -185,7 +184,7 @@ class HarnessRuntimeBuilder:
 
     def _install_pack(
         self,
-        pack: CapabilityPack | InstallableCapabilityPack,
+        pack: CapabilityPack,
         executor: ToolExecutor,
     ) -> CapabilityContribution:
         spec = capability_pack_spec(pack)
@@ -195,26 +194,21 @@ class HarnessRuntimeBuilder:
         contribution: CapabilityContribution | None = None
         try:
             install = getattr(pack, "install", None)
-            if callable(install):
-                contribution = install(
-                    CapabilityInstallContext(
-                        registry=self._registry,
-                        executor=executor,
-                        catalog=self._capability_catalog,
-                        services={
-                            **dict(self._ports.capability_services or {}),
-                            "secret_provider": self._ports.secret_provider,
-                        },
-                    )
+            if not callable(install):
+                raise TypeError(
+                    f"capability pack {spec.package_id} must implement install(context)"
                 )
-            else:
-                register = getattr(pack, "register", None)
-                if not callable(register):
-                    raise TypeError(
-                        f"capability pack {spec.package_id} must implement "
-                        "install(context) or register(executor)"
-                    )
-                register(executor)
+            contribution = install(
+                CapabilityInstallContext(
+                    registry=self._registry,
+                    executor=executor,
+                    catalog=self._capability_catalog,
+                    services={
+                        **dict(self._ports.capability_services or {}),
+                        "secret_provider": self._ports.secret_provider,
+                    },
+                )
+            )
             if contribution is not None and contribution.package_id != spec.package_id:
                 raise ValueError(
                     f"capability contribution package_id {contribution.package_id!r} "
@@ -253,10 +247,7 @@ class HarnessRuntimeBuilder:
             metadata=metadata,
         )
         try:
-            if (
-                self._strict_capability_conformance
-                and isinstance(getattr(pack, "spec", None), CapabilityPackSpec)
-            ):
+            if self._strict_capability_conformance:
                 assert_capability_contribution(
                     spec,
                     resolved,

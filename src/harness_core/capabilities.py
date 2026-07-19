@@ -213,13 +213,6 @@ class CapabilityInstallContext:
 
 
 class CapabilityPack(Protocol):
-    package_id: str
-    contract_version: str
-
-    def register(self, executor: ToolExecutor) -> None: ...
-
-
-class InstallableCapabilityPack(Protocol):
     spec: CapabilityPackSpec
 
     def install(
@@ -230,14 +223,9 @@ class InstallableCapabilityPack(Protocol):
 
 def capability_pack_spec(pack: object) -> CapabilityPackSpec:
     declared = getattr(pack, "spec", None)
-    if isinstance(declared, CapabilityPackSpec):
-        return declared
-    return CapabilityPackSpec(
-        package_id=str(getattr(pack, "package_id", "") or ""),
-        contract_version=str(getattr(pack, "contract_version", "") or ""),
-        package_version=str(getattr(pack, "package_version", "0.0.0") or "0.0.0"),
-        declared_tools=tuple(getattr(pack, "tool_names", ()) or ()),
-    )
+    if not isinstance(declared, CapabilityPackSpec):
+        raise TypeError("capability pack must declare a CapabilityPackSpec as spec")
+    return declared
 
 
 def assert_capability_contribution(

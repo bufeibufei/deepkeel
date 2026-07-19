@@ -7,7 +7,6 @@ from harness_core.capabilities import (
     CapabilityInstallContext,
     CapabilityPack,
     CapabilityPackSpec,
-    InstallableCapabilityPack,
     capability_pack_spec,
 )
 from harness_core.clarifications import (
@@ -85,7 +84,6 @@ EXTENSION_SDK_API = (
     "DeliberationSpec",
     "HandoffRegistry",
     "HandoffSpec",
-    "InstallableCapabilityPack",
     "ReferenceProjection",
     "ReferenceProjector",
     "SkillPackageManifest",

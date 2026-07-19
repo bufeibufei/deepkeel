@@ -8,7 +8,6 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from harness_core.capabilities import (
     CapabilityPack,
-    InstallableCapabilityPack,
     capability_pack_spec,
 )
 from harness_core.composition import HarnessRuntimeBuilder
@@ -41,7 +40,7 @@ class CapabilityPackConformanceReport(BaseModel):
 
 
 def validate_capability_pack(
-    pack: CapabilityPack | InstallableCapabilityPack,
+    pack: CapabilityPack,
     *,
     declared_tools: Iterable[str] | None = None,
     registry: ToolRegistry | None = None,

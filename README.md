@@ -8,9 +8,8 @@ execution and Capability Pack composition.
 The package does not contain host tools, database models, API routes or product
 prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 `RuntimePorts` and a versioned Capability Pack. New packs should expose a
-`CapabilityPackSpec` and implement `install(CapabilityInstallContext)`; the
-original `register(ToolExecutor)` contract remains supported for v1
-compatibility.
+`CapabilityPackSpec` and implement `install(CapabilityInstallContext)`.
+There is no implicit registration or legacy Pack adapter in the v2 contract.
 
 ```python
 from harness_core import (
@@ -46,12 +45,10 @@ class InventoryPack:
 runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
 ```
 
-The preferred execution boundary is typed. Providers and sessions remain
+The execution boundary is exclusively typed. Providers and sessions remain
 injected runtime ports, while request and result data are serializable Core
-contracts. `run_turn()` remains available as the v1 mapping adapter while
-existing hosts migrate. Product hosts should keep any temporary v1 conversion
-in one adapter at their boundary rather than spreading mapping access through
-application services.
+contracts. Product hosts project `RuntimeResult` into their own API, event and
+persistence DTOs without passing those mappings back into Core.
 
 ```python
 from harness_core import RuntimeRequest
@@ -95,10 +92,9 @@ names and filtering policies belong in the product adapter, not the Core.
 Failures in either context stage are projected into the same terminal runtime
 and event contracts as model or tool failures.
 
-The v1 context snapshot still accepts and emits `profile_id` as a deprecated
-compatibility alias for hosts with persisted snapshots. New integrations must
-address subjects through `subject_id`; the alias is not part of the long-term
-product-neutral subject model and will be removed in the next major contract.
+Context snapshots address domain subjects through `subject_id`. Domain keys and
+legacy snapshot upgrades belong to the Host context adapter; incompatible
+snapshot versions fail explicitly rather than being guessed by Core.
 
 Before model execution, the injected `ContextWindowManager` converts recent
 conversation history into role messages exactly once and applies a deterministic
@@ -189,6 +185,17 @@ Run the package-owned contract suite with:
 ```powershell
 uv run --extra test pytest -q
 ```
+
+Build and verify both distributions from the repository root with:
+
+```powershell
+.\scripts\verify_harness_core_package.ps1
+```
+
+The verifier installs the wheel and sdist into separate clean environments and
+runs product-neutral scenarios for normal and streaming answers, tools,
+parallelism, failures, interruption and recovery, asynchronous work,
+cancellation, Skills, Artifacts, references, MCP and SubAgents.
 
 Model integrations can implement `ModelProviderAdapter.invoke()` directly.
 Existing providers exposing `stream_chat` or `complete_chat` remain supported
