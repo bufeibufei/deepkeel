@@ -218,14 +218,14 @@ class DeliberationCoordinator:
             objective=objective,
             input_data={
                 "question": spec.question,
-                "chart_facts": spec.fact_packet,
+                "fact_packet": spec.fact_packet,
                 "phase": phase,
                 "round_index": round_index,
                 "other_views": [item.model_dump(mode="json") for item in prior_arguments],
                 "moderator": moderator or {},
             },
             constraints=[
-                "所有参与者以同一份事实包为基线，不得补造命盘事实",
+                "所有参与者以同一份事实包为基线，不得补造外部事实",
                 "事实包缺少完成本轮判断所需的信息时，只能使用允许的只读工具补证，并明确工具来源",
                 "回应观点而不是评价其他参与者身份，不以投票决定结论",
             ],
@@ -243,14 +243,14 @@ class DeliberationCoordinator:
             objective=objective,
             input_data={
                 "question": spec.question,
-                "chart_facts": spec.fact_packet,
-                "school_views": [item.model_dump(mode="json") for item in arguments],
+                "fact_packet": spec.fact_packet,
+                "participant_views": [item.model_dump(mode="json") for item in arguments],
                 "phase": phase,
                 "round_index": round_index,
                 "max_rounds": spec.max_rounds,
             },
             constraints=[
-                "不按票数裁决，不引入事实包或只读工具结果之外的新命盘事实",
+                "不按票数裁决，不引入事实包或只读工具结果之外的新外部事实",
                 "moderate 阶段必须明确 decision、未决问题和需要回应的 agent_id",
             ],
         )

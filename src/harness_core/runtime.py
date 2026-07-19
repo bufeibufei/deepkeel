@@ -1,19 +1,38 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import time
 from typing import Any, Callable
 from uuid import uuid4
 
-from langgraph.checkpoint.memory import InMemorySaver
-
-from harness_core.budget import BudgetLedger, InMemoryBudgetLedger, MODEL_CALLS, TOOL_CALLS
+from harness_core.budget import (
+    ELAPSED_SECONDS,
+    INPUT_TOKENS,
+    MODEL_CALLS,
+    MODEL_RETRIES,
+    OUTPUT_TOKENS,
+    TOOL_CALLS,
+    TOOL_CONCURRENCY,
+    BudgetLedger,
+    BudgetRequest,
+    InMemoryBudgetLedger,
+)
 from harness_core.contracts import RunContext, RunStatus, ToolCall
 from harness_core.context import build_context_snapshot, build_initial_messages
+from harness_core.context_window import (
+    ContextWindowManager,
+    DeterministicContextWindowManager,
+)
 from harness_core.control import NoopRunControl, RunControl
 from harness_core.events import AgentEventPersistenceError, project_runtime_event
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.graph import create_harness_graph
-from harness_core.model import RoutedModelGateway
+from harness_core.langgraph_adapter import (
+    LangGraphCheckpointerAdapter,
+    compiler_checkpointer,
+)
+from harness_core.model import ModelProviderAdapter, RoutedModelGateway
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.persistence import (
     CheckpointStore,
@@ -23,11 +42,16 @@ from harness_core.persistence import (
     restore_run_context,
     resume_payload_from_context,
 )
+from harness_core.capabilities import CapabilityCatalog, CapabilityContribution
+from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.prompts import harness_system_prompt
 from harness_core.policy import DefaultPolicyEngine, PolicyEngine
 from harness_core.skills import SkillPolicy
+from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
+from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.ui import project_run_ui_state
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
 
 
@@ -41,6 +65,29 @@ def _default_system_prompt_factory(skill_activation: dict[str, Any]) -> str:
     )
 
 
+def _runtime_state_mutation_id(
+    run_id: str,
+    status: str,
+    durable_state: dict[str, Any],
+) -> str:
+    encoded = json.dumps(
+        durable_state,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+    return f"{run_id}:{status}:{digest}"
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value) if value is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
 class HarnessRuntime:
     """Product-neutral execution loop composed with explicit runtime ports."""
 
@@ -49,19 +96,25 @@ class HarnessRuntime:
         tool_registry: ToolRegistry,
         tool_executor: ToolExecutor,
         *,
-        checkpointer=None,
+        checkpointer: GraphCheckpointer | None = None,
         checkpoint_store: CheckpointStore | None = None,
         system_prompt_factory: SystemPromptFactory | None = None,
-        session_factory: Callable[[], Any] | None = None,
+        session_factory: SessionFactory | None = None,
         max_steps: int = 12,
         model_router: ModelRouter | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         run_control: RunControl | None = None,
+        capability_contributions: tuple[CapabilityContribution, ...] = (),
+        capability_catalog: CapabilityCatalog | None = None,
+        telemetry: TelemetryPort | None = None,
+        context_builder: ContextBuilder | None = None,
+        context_window_manager: ContextWindowManager | None = None,
+        runtime_state_store: RuntimeStateStore | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
-        self.checkpointer = checkpointer or InMemorySaver()
+        self.checkpointer = checkpointer or LangGraphCheckpointerAdapter()
         self.checkpoint_store = checkpoint_store
         self.system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
         self.session_factory = session_factory
@@ -70,12 +123,25 @@ class HarnessRuntime:
         self.policy_engine = policy_engine or getattr(tool_executor, "policy_engine", None) or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or getattr(tool_executor, "budget_ledger", None) or InMemoryBudgetLedger()
         self.run_control = run_control or NoopRunControl()
+        self.capability_contributions = capability_contributions
+        self.capability_catalog = capability_catalog or CapabilityCatalog()
+        self.telemetry = telemetry or NoopTelemetry()
+        self.context_builder = context_builder
+        self.context_window_manager = (
+            context_window_manager or DeterministicContextWindowManager()
+        )
+        self.runtime_state_store = runtime_state_store
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
 
+    def close(self) -> None:
+        self.capability_catalog.close()
+
     @staticmethod
     def supports_native_tools(provider: Any) -> bool:
-        return callable(getattr(provider, "stream_chat", None)) or callable(getattr(provider, "complete_chat", None))
+        return isinstance(provider, ModelProviderAdapter) or callable(
+            getattr(provider, "stream_chat", None)
+        ) or callable(getattr(provider, "complete_chat", None))
 
     def run_turn(
         self,
@@ -91,8 +157,40 @@ class HarnessRuntime:
         model_policy: dict[str, Any] | None = None,
         event_sink: EventSink | None = None,
     ) -> dict[str, Any]:
+        run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
         bundle = context_bundle if isinstance(context_bundle, dict) else {}
+        context_window_diagnostics: dict[str, Any] = {}
+        try:
+            if self.context_builder is not None:
+                bundle = self.context_builder(question, short, bundle)
+                if not isinstance(bundle, dict):
+                    raise TypeError("context builder must return a mapping")
+            for contributor_id, contributor in self.capability_catalog.context_contributors.items():
+                contributed = contributor(dict(bundle))
+                if not isinstance(contributed, dict):
+                    raise TypeError(
+                        f"context contributor {contributor_id} must return a mapping"
+                    )
+                bundle = contributed
+            prepared_context = self.context_window_manager.prepare(
+                question,
+                short,
+                bundle,
+            )
+            bundle = prepared_context.context_bundle
+            context_window_diagnostics = dict(prepared_context.diagnostics)
+        except Exception as exc:
+            return self._context_setup_failure(
+                question,
+                exc,
+                short_context=short,
+                context_bundle=bundle,
+                user_id=user_id,
+                skill_activation=skill_activation,
+                model_policy=model_policy,
+                event_sink=event_sink,
+            )
         run_id = str(bundle.get("agent_session_id") or bundle.get("agent_run_id") or bundle.get("run_id") or uuid4())
         durable_state = (
             self._load_durable_checkpoint(run_id, session=session, user_id=str(user_id or "local-device"))
@@ -126,16 +224,37 @@ class HarnessRuntime:
         graph_thread_id = run_id
         turn_id = str(bundle.get("turn_id") or short.get("turn_id") or f"turn-{uuid4()}")
         events: list[dict[str, Any]] = []
+        telemetry_error_count = 0
+        telemetry_last_error = ""
         answer_delta_streamed = False
 
         def emit(event: dict[str, Any]) -> None:
-            nonlocal answer_delta_streamed
+            nonlocal answer_delta_streamed, telemetry_error_count, telemetry_last_error
             self.run_control.raise_if_cancelled(run_id)
             projected = project_runtime_event(event)
+            payload = (
+                dict(projected.get("payload"))
+                if isinstance(projected.get("payload"), dict)
+                else {}
+            )
+            payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
+            projected["payload"] = payload
             if projected.get("event_type") == "answer.delta":
                 answer_delta_streamed = True
             if not projected.get("ephemeral"):
                 events.append(projected)
+            try:
+                self.telemetry.record(
+                    TelemetryRecord.from_runtime_event(
+                        projected,
+                        run_id=run_id,
+                        thread_id=conversation_thread_id,
+                        turn_id=turn_id,
+                    )
+                )
+            except Exception as exc:
+                telemetry_error_count += 1
+                telemetry_last_error = f"{type(exc).__name__}: {exc}"
             if event_sink is not None:
                 event_sink(projected)
 
@@ -152,7 +271,7 @@ class HarnessRuntime:
             tool_registry=self.tool_registry,
             system_prompt=self.system_prompt_factory(skill),
             max_steps=self.max_steps,
-            checkpointer=self.checkpointer,
+            checkpointer=compiler_checkpointer(self.checkpointer),
             budget_ledger=self.budget_ledger,
             deadline_monotonic=deadline_monotonic,
             run_control=self.run_control,
@@ -314,8 +433,10 @@ class HarnessRuntime:
                 spec.name: str(spec.observation_contract.get("primary_kind") or "")
                 for spec in self.tool_registry.list_tools()
             },
+            task_kinds={spec.name: spec.task_kind for spec in self.tool_registry.list_tools()},
             max_steps=self.max_steps,
             previous_diagnostics=previous_diagnostics,
+            capability_manifest=self._capability_manifest(),
         )
         if recovery_source:
             runtime_state = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
@@ -323,6 +444,75 @@ class HarnessRuntime:
             recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
             recovery["checkpoint_source"] = recovery_source
             diagnostics["recovery"] = recovery
+            runtime_state["diagnostics"] = diagnostics
+        runtime_state = (
+            result.get("agent_runtime")
+            if isinstance(result.get("agent_runtime"), dict)
+            else {}
+        )
+        diagnostics = (
+            runtime_state.get("diagnostics")
+            if isinstance(runtime_state.get("diagnostics"), dict)
+            else {}
+        )
+        diagnostics["context_window"] = context_window_diagnostics
+        elapsed_budget = self.budget_ledger.consume(
+            BudgetRequest(
+                run_id=run_id,
+                metric=ELAPSED_SECONDS,
+                amount=max(0.0, time.monotonic() - run_started_monotonic),
+                limit=_budget_limits(resolved_model_policy).get(ELAPSED_SECONDS),
+                operation_id=f"runtime-elapsed:{turn_id}",
+                metadata={"turn_id": turn_id},
+            )
+        )
+        diagnostics["budget"] = {
+            "elapsed": elapsed_budget.as_dict(),
+            "snapshot": self.budget_ledger.snapshot(run_id).as_dict(),
+        }
+        checkpoint = (
+            runtime_state.get("checkpoint")
+            if isinstance(runtime_state.get("checkpoint"), dict)
+            else None
+        )
+        if checkpoint is not None:
+            checkpoint["budget_state"] = self.budget_ledger.snapshot(run_id).as_dict()
+        runtime_state["diagnostics"] = diagnostics
+        try:
+            self.telemetry.record(
+                TelemetryRecord(
+                    event_name="runtime.settled",
+                    run_id=run_id,
+                    thread_id=conversation_thread_id,
+                    turn_id=turn_id,
+                    status=str(runtime_state.get("status") or ""),
+                    attributes={
+                        "status": str(runtime_state.get("status") or ""),
+                        "stop_reason": str(runtime_state.get("stop_reason") or ""),
+                        "skill_id": str(skill.get("skill_id") or ""),
+                        "recovery_source": recovery_source,
+                    },
+                )
+            )
+        except Exception as exc:
+            telemetry_error_count += 1
+            telemetry_last_error = f"{type(exc).__name__}: {exc}"
+        if telemetry_error_count:
+            runtime_state = (
+                result.get("agent_runtime")
+                if isinstance(result.get("agent_runtime"), dict)
+                else {}
+            )
+            diagnostics = (
+                runtime_state.get("diagnostics")
+                if isinstance(runtime_state.get("diagnostics"), dict)
+                else {}
+            )
+            diagnostics["telemetry"] = {
+                "status": "degraded",
+                "error_count": telemetry_error_count,
+                "last_error": telemetry_last_error,
+            }
             runtime_state["diagnostics"] = diagnostics
         if str((result.get("agent_runtime") or {}).get("status") or "") in {
             "completed",
@@ -343,6 +533,7 @@ class HarnessRuntime:
                 thread_id=conversation_thread_id,
                 session=session,
                 user_id=str(user_id or "local-device"),
+                context_bundle=bundle,
             )
         return result
 
@@ -406,13 +597,164 @@ class HarnessRuntime:
         return loaded if isinstance(loaded, dict) else {}
 
     def _has_graph_checkpoint(self, thread_id: str) -> bool:
-        get_tuple = getattr(self.checkpointer, "get_tuple", None)
+        exists = getattr(self.checkpointer, "exists", None)
+        if callable(exists):
+            try:
+                return bool(exists(thread_id))
+            except Exception:
+                return False
+        has_checkpoint = getattr(self.checkpointer, "has_checkpoint", None)
+        if callable(has_checkpoint):
+            try:
+                return bool(has_checkpoint(thread_id))
+            except Exception:
+                return False
+        target = compiler_checkpointer(self.checkpointer)
+        get_tuple = getattr(target, "get_tuple", None)
         if not callable(get_tuple):
             return False
         try:
             return get_tuple({"configurable": {"thread_id": thread_id}}) is not None
         except Exception:
             return False
+
+    def _context_setup_failure(
+        self,
+        question: str,
+        exc: Exception,
+        *,
+        short_context: dict[str, Any],
+        context_bundle: dict[str, Any],
+        user_id: str,
+        skill_activation: dict[str, Any] | None,
+        model_policy: dict[str, Any] | None,
+        event_sink: EventSink | None,
+    ) -> dict[str, Any]:
+        run_id = str(
+            context_bundle.get("agent_session_id")
+            or context_bundle.get("agent_run_id")
+            or context_bundle.get("run_id")
+            or uuid4()
+        )
+        thread_id = str(
+            context_bundle.get("thread_id")
+            or context_bundle.get("ask_thread_id")
+            or short_context.get("ask_thread_id")
+            or run_id
+        )
+        turn_id = str(
+            context_bundle.get("turn_id")
+            or short_context.get("turn_id")
+            or f"turn-{uuid4()}"
+        )
+        failure = classify_runtime_failure(exc)
+        resolved_skill = SkillPolicy.from_snapshot(skill_activation).runtime_snapshot()
+        event = project_runtime_event(
+            {
+                "event_type": "agent.failed",
+                "title": "Agent 上下文准备失败",
+                "summary": failure.user_message,
+                "payload": {
+                    "error": failure.detail,
+                    "error_type": failure.exception_type,
+                    "error_code": failure.code,
+                    "failure": failure.as_dict(),
+                    "phase": "context_setup",
+                    "skill_id": str(resolved_skill.get("skill_id") or ""),
+                },
+            }
+        )
+        try:
+            self.telemetry.record(
+                TelemetryRecord.from_runtime_event(
+                    event,
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                )
+            )
+        except Exception:
+            pass
+        if event_sink is not None:
+            event_sink(event)
+        resolved_policy = dict(model_policy) if isinstance(model_policy, dict) else {}
+        state = _failed_runtime_state(
+            question,
+            exc,
+            run_id=run_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            user_id=str(user_id or "local-device"),
+            short_context=short_context,
+            context_bundle=context_bundle,
+            skill_activation=resolved_skill,
+            model_policy=resolved_policy,
+            budget_state={},
+            events=[event],
+            failure=failure,
+            phase="context_setup",
+        )
+        result = project_harness_result(
+            state,
+            question=question,
+            context_bundle=context_bundle,
+            short_context=short_context,
+            skill_activation=resolved_skill,
+            streamed_events=[event],
+            answer_delta_streamed=False,
+            observation_kinds={},
+            task_kinds={},
+            max_steps=self.max_steps,
+            capability_manifest=self._capability_manifest(),
+        )
+        try:
+            self.telemetry.record(
+                TelemetryRecord(
+                    event_name="runtime.settled",
+                    run_id=run_id,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    status="failed",
+                    attributes={
+                        "status": "failed",
+                        "stop_reason": str(
+                            (result.get("agent_runtime") or {}).get("stop_reason") or ""
+                        ),
+                        "skill_id": str(resolved_skill.get("skill_id") or ""),
+                        "recovery_source": "",
+                        "phase": "context_setup",
+                    },
+                )
+            )
+        except Exception:
+            pass
+        return result
+
+    def _capability_manifest(self) -> dict[str, Any]:
+        return {
+            "packages": [
+                {
+                    "package_id": contribution.package_id,
+                    "tools": len(contribution.tools),
+                    "skills": len(contribution.skills),
+                    "artifact_types": len(contribution.artifact_types),
+                    "subagents": len(contribution.subagents),
+                    "resources": len(contribution.resources),
+                }
+                for contribution in self.capability_contributions
+            ],
+            "catalog": {
+                "skills": len(self.capability_catalog.skills),
+                "artifact_types": len(self.capability_catalog.artifact_types),
+                "handoffs": len(self.capability_catalog.handoffs),
+                "mcp_servers": len(self.capability_catalog.mcp_servers),
+                "subagents": len(self.capability_catalog.subagents),
+                "context_contributors": len(
+                    self.capability_catalog.context_contributors
+                ),
+                "resources": len(self.capability_catalog.resources),
+            },
+        }
 
     def _persist_resumable_checkpoint(
         self,
@@ -422,9 +764,10 @@ class HarnessRuntime:
         thread_id: str,
         session: Any,
         user_id: str,
+        context_bundle: dict[str, Any],
     ) -> None:
         runtime = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
-        if self.checkpoint_store is None or runtime.get("status") not in {
+        if runtime.get("status") not in {
             "waiting_user_action",
             "waiting_user_input",
             "task_running",
@@ -432,10 +775,61 @@ class HarnessRuntime:
             return
         diagnostics = runtime.get("diagnostics") if isinstance(runtime.get("diagnostics"), dict) else {}
         recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
+        durable_state = durable_state_from_result(
+            result,
+            run_id=run_id,
+            thread_id=thread_id,
+        )
+        if self.runtime_state_store is not None:
+            status = str(runtime.get("status") or "")
+            resume_token = str(runtime.get("resume_token") or "")
+            mutation_payload = {
+                "status": status,
+                "resume_token": resume_token,
+                "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
+            }
+            mutation_id = _runtime_state_mutation_id(
+                run_id,
+                status,
+                durable_state,
+            )
+            try:
+                receipt = self.runtime_state_store.commit(
+                    RuntimeStateMutation(
+                        mutation_id=mutation_id,
+                        run_id=run_id,
+                        event_type="runtime.checkpoint.committed",
+                        target_status=status,
+                        event_payload=mutation_payload,
+                        checkpoint_state=durable_state,
+                        resume_token=resume_token,
+                        expected_version=_optional_int(
+                            context_bundle.get("runtime_state_version")
+                        ),
+                        expected_sequence=_optional_int(
+                            context_bundle.get("runtime_state_sequence")
+                        ),
+                    ),
+                    session=session,
+                    user_id=user_id,
+                )
+            except Exception as exc:
+                recovery["atomic_checkpoint"] = "failed"
+                recovery["checkpoint_error"] = str(exc)
+                diagnostics["recovery"] = recovery
+                runtime["diagnostics"] = diagnostics
+                raise RuntimeError("atomic runtime checkpoint commit failed") from exc
+            recovery["atomic_checkpoint"] = "persisted"
+            recovery["state_receipt"] = receipt.as_dict()
+            diagnostics["recovery"] = recovery
+            runtime["diagnostics"] = diagnostics
+            return
+        if self.checkpoint_store is None:
+            return
         try:
             self.checkpoint_store.save(
                 run_id,
-                durable_state_from_result(result, run_id=run_id, thread_id=thread_id),
+                durable_state,
                 session=session,
                 user_id=user_id,
             )
@@ -471,6 +865,47 @@ def _resolved_model_policy(
             budget.get("max_elapsed_seconds"),
             900.0,
         ),
+        "max_total_elapsed_seconds": _positive_number(
+            budget.get("max_total_elapsed_seconds"),
+            0,
+        ),
+        "max_request_seconds": _positive_number(
+            budget.get("max_request_seconds"),
+            0,
+        ),
+        "max_input_tokens_total": _positive_limit(
+            budget.get("max_input_tokens_total"),
+            0,
+        ),
+        "max_input_tokens_per_call": _positive_limit(
+            budget.get("max_input_tokens_per_call"),
+            0,
+        ),
+        "max_output_tokens_total": _positive_limit(
+            budget.get("max_output_tokens_total"),
+            0,
+        ),
+        "max_output_tokens_per_call": _positive_limit(
+            budget.get("max_output_tokens_per_call"),
+            0,
+        ),
+        "max_model_retries": _positive_limit(
+            budget.get("max_model_retries"),
+            0,
+        ),
+        "max_parallel_tools": _positive_limit(
+            budget.get("max_parallel_tools"),
+            4,
+        ),
+        "roles": {
+            str(role): dict(limits)
+            for role, limits in (
+                budget.get("roles")
+                if isinstance(budget.get("roles"), dict)
+                else {}
+            ).items()
+            if isinstance(limits, dict)
+        },
     }
     return policy
 
@@ -486,7 +921,15 @@ def _model_providers(
         if candidate is not None
     }
     if provider is not None:
-        role = str(getattr(provider, "model_role", "") or model_policy.get("primary_role") or "reasoning")
+        adapter_role = (
+            provider.info.model_role if isinstance(provider, ModelProviderAdapter) else ""
+        )
+        role = str(
+            adapter_role
+            or getattr(provider, "model_role", "")
+            or model_policy.get("primary_role")
+            or "reasoning"
+        )
         catalog.setdefault(role, provider)
         catalog.setdefault("reasoning", provider)
     return catalog
@@ -497,6 +940,11 @@ def _budget_limits(model_policy: dict[str, Any]) -> dict[str, float]:
     return {
         MODEL_CALLS: float(budget.get("max_model_calls") or 0),
         TOOL_CALLS: float(budget.get("max_tool_calls") or 0),
+        INPUT_TOKENS: float(budget.get("max_input_tokens_total") or 0),
+        OUTPUT_TOKENS: float(budget.get("max_output_tokens_total") or 0),
+        MODEL_RETRIES: float(budget.get("max_model_retries") or 0),
+        TOOL_CONCURRENCY: float(budget.get("max_parallel_tools") or 4),
+        ELAPSED_SECONDS: float(budget.get("max_total_elapsed_seconds") or 0),
     }
 
 
@@ -610,8 +1058,10 @@ def project_harness_result(
     streamed_events: list[dict[str, Any]],
     answer_delta_streamed: bool = False,
     observation_kinds: dict[str, str] | None = None,
+    task_kinds: dict[str, str] | None = None,
     max_steps: int = 12,
     previous_diagnostics: dict[str, Any] | None = None,
+    capability_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     graph_status = str(state.get("status") or "failed")
     state_error = (
@@ -710,10 +1160,16 @@ def project_harness_result(
         skill_activation=skill,
         max_steps=max_steps,
         previous_diagnostics=previous_diagnostics,
+        capability_manifest=capability_manifest,
     )
-    active_task = _active_task(legacy_results, typed_tool_results)
+    active_task = _active_task(legacy_results, typed_tool_results, task_kinds or {})
     if active_task:
         runtime["active_task"] = active_task
+    runtime["ui_state"] = project_run_ui_state(
+        runtime_status,
+        pending_action=pending_action,
+        active_task=active_task,
+    )
     result = {
         "question": question,
         "final_answer": final_answer,
@@ -730,7 +1186,16 @@ def project_harness_result(
     if answer_delta_streamed:
         final_answer["answer_delta_streamed"] = True
     if isinstance(state_error, dict):
-        result["error"] = state_error
+        result["error"] = {
+            "type": str(state_error.get("type") or "RuntimeFailure"),
+            "code": str(state_error.get("code") or "RUNTIME_INTERNAL_ERROR"),
+            "category": str(state_error.get("category") or "internal"),
+            "retryable": bool(state_error.get("retryable")),
+            "message": str(
+                state_error.get("user_message")
+                or "The run ended safely and can be retried."
+            ),
+        }
     if pending_action is not None:
         result["pending_action"] = pending_action
     return result
@@ -880,6 +1345,7 @@ def _failed_runtime_state(
     budget_state: dict[str, Any],
     events: list[dict[str, Any]],
     failure: RuntimeFailure | None = None,
+    phase: str = "runtime",
 ) -> dict[str, Any]:
     failure = failure or classify_runtime_failure(exc)
     context = _new_context(
@@ -931,6 +1397,7 @@ def _failed_runtime_state(
                     "code": failure.code,
                     "category": failure.category,
                     "retryable": failure.retryable,
+                    "phase": phase,
                     "message": failure.detail,
                     "user_message": failure.user_message,
                 },
@@ -1126,6 +1593,7 @@ def _project_final_answer(
 def _active_task(
     tool_results: list[dict[str, Any]],
     typed_tool_results: list[dict[str, Any]],
+    task_kinds: dict[str, str],
 ) -> dict[str, Any]:
     for item in reversed(tool_results):
         status = str(item.get("status") or "")
@@ -1134,7 +1602,7 @@ def _active_task(
         tool_name = str(item.get("tool_name") or "")
         result = item.get("result") if isinstance(item.get("result"), dict) else {}
         artifact = item.get("artifact") if isinstance(item.get("artifact"), dict) else {}
-        kind = "liuyao" if tool_name.startswith("liuyao.") else "bazi" if tool_name.startswith("bazi.") else "task"
+        kind = task_kinds.get(tool_name) or "task"
         return {
             "kind": kind,
             "tool_name": tool_name,
@@ -1157,7 +1625,7 @@ def _active_task(
         artifact_data = artifact.get("data") if isinstance(artifact.get("data"), dict) else {}
         artifact_type = str(artifact.get("type") or artifact_data.get("artifact_type") or "")
         return {
-            "kind": "liuyao" if tool_name.startswith("liuyao.") else "bazi" if tool_name.startswith("bazi.") else "task",
+            "kind": task_kinds.get(tool_name) or "task",
             "tool_name": tool_name,
             "artifact_type": artifact_type,
             "source_id": str(
@@ -1242,6 +1710,17 @@ def _trace_from_events(
                     else [],
                     "policy": governance.get("policy") if isinstance(governance.get("policy"), dict) else {},
                     "budget": governance.get("budget") if isinstance(governance.get("budget"), dict) else {},
+                    "artifact_types": sorted(
+                        {
+                            str(artifact.get("artifact_type") or "")
+                            for artifact in tool_result.get("artifacts") or []
+                            if isinstance(artifact, dict)
+                            and str(artifact.get("artifact_type") or "")
+                        }
+                    ),
+                    "artifact_contract_failed": bool(
+                        metadata.get("artifact_contract_failed")
+                    ),
                 }
             )
         trace.append(item)
@@ -1257,6 +1736,7 @@ def _runtime_diagnostics(
     skill_activation: dict[str, Any],
     max_steps: int,
     previous_diagnostics: dict[str, Any] | None = None,
+    capability_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     previous = previous_diagnostics if isinstance(previous_diagnostics, dict) else {}
     previous_counts = previous.get("counts") if isinstance(previous.get("counts"), dict) else {}
@@ -1333,6 +1813,7 @@ def _runtime_diagnostics(
             "context_version": str(context_snapshot.get("schema_version") or ""),
             "selection_strategy": str(context_selection.get("strategy") or "harness_context_v1"),
         },
+        "capabilities": dict(capability_manifest or {}),
         "loop": {
             "status": str(runtime.get("status") or ""),
             "stop_reason": str(runtime.get("stop_reason") or ""),
@@ -1379,6 +1860,13 @@ def _runtime_diagnostics(
                     "router_id": str(item.get("router_id") or ""),
                     "policy": item.get("policy") if isinstance(item.get("policy"), dict) else {},
                     "budget": item.get("budget") if isinstance(item.get("budget"), dict) else {},
+                    "budget_metrics": (
+                        item.get("budget_metrics")
+                        if isinstance(item.get("budget_metrics"), dict)
+                        else {}
+                    ),
+                    "usage": item.get("usage") if isinstance(item.get("usage"), dict) else {},
+                    "max_output_tokens": item.get("max_output_tokens"),
                 }
                 for item in route_rows
             ],

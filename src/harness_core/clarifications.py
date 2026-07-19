@@ -60,6 +60,8 @@ def clarification_from_validation_error(
     *,
     fallback_prompt: str,
     field_labels: dict[str, str] | None = None,
+    constraint_markers: tuple[str, ...] = (),
+    constraint_fields: tuple[str, ...] = (),
 ) -> ClarificationRequest:
     labels = field_labels or {}
     missing_fields: list[str] = []
@@ -77,10 +79,12 @@ def clarification_from_validation_error(
             else:
                 invalid_fields.append(field)
     lowered = detail.lower()
-    if "must not exceed 90 days" in lowered or "不能超过90天" in detail:
+    normalized_markers = tuple(
+        marker.lower().strip() for marker in constraint_markers if marker.strip()
+    )
+    if normalized_markers and any(marker in lowered for marker in normalized_markers):
         issue_type = "constraint_too_broad"
-        invalid_fields = ["start_date", "end_date"]
-        fallback_prompt = "择日一次最多处理 90 天，请告诉我更具体的开始和结束日期。"
+        invalid_fields = list(constraint_fields)
     elif missing_fields:
         issue_type = "missing_input"
 

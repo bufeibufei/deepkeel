@@ -26,6 +26,7 @@ class ToolSpec(BaseModel):
     runtime_policy: dict[str, Any] = Field(default_factory=dict)
     observation_contract: dict[str, Any] = Field(default_factory=dict)
     argument_contract: dict[str, Any] = Field(default_factory=dict)
+    task_kind: str = ""
 
     def formal_parameters_schema(self) -> dict[str, Any]:
         if self.parameters_schema:
@@ -52,6 +53,15 @@ class ToolRegistry:
         if tool.name in self._tools and not replace:
             raise ValueError(f"tool is already registered: {tool.name}")
         self._tools[tool.name] = tool
+
+    def unregister(self, name: str) -> None:
+        self._tools.pop(name, None)
+
+    def snapshot(self) -> dict[str, ToolSpec]:
+        return dict(self._tools)
+
+    def restore(self, snapshot: dict[str, ToolSpec]) -> None:
+        self._tools = dict(snapshot)
 
     def as_public_list(self) -> list[dict[str, Any]]:
         return [tool.model_dump(mode="json") for tool in self.list_tools()]

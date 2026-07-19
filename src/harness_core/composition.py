@@ -1,36 +1,41 @@
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
-from typing import Any, Callable, Protocol, Self
+from dataclasses import dataclass, field, fields, replace
+from typing import Mapping, Self
 
 from harness_core.budget import BudgetLedger
+from harness_core.capabilities import (
+    CapabilityCatalog,
+    CapabilityContribution,
+    CapabilityInstallContext,
+    CapabilityPack,
+    CapabilityPackSpec,
+    InstallableCapabilityPack,
+    capability_pack_spec,
+    assert_capability_contribution,
+)
 from harness_core.control import RunControl
+from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
 from harness_core.model_routing import ModelRouter
-from harness_core.persistence import CheckpointStore
+from harness_core.persistence import DurableCheckpointStore
+from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.policy import PolicyEngine
 from harness_core.runtime import HarnessRuntime, SystemPromptFactory
+from harness_core.state_store import RuntimeStateStore
+from harness_core.telemetry import TelemetryPort
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolPreflight
-
-
-class CapabilityPack(Protocol):
-    """A domain package that contributes handlers to one Harness runtime."""
-
-    package_id: str
-    contract_version: str
-
-    def register(self, executor: ToolExecutor) -> None: ...
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimePorts:
     """Infrastructure ports used to compose a product-neutral runtime."""
 
-    checkpointer: Any = None
-    checkpoint_store: CheckpointStore | None = None
+    checkpointer: GraphCheckpointer | None = None
+    checkpoint_store: DurableCheckpointStore | None = None
     system_prompt_factory: SystemPromptFactory | None = None
-    session_factory: Callable[[], Any] | None = None
+    session_factory: SessionFactory | None = None
     model_router: ModelRouter | None = None
     policy_engine: PolicyEngine | None = None
     budget_ledger: BudgetLedger | None = None
@@ -38,9 +43,15 @@ class RuntimePorts:
     tool_execution_store: ToolExecutionStore | None = None
     tool_preflight: ToolPreflight | None = None
     secret_provider: SecretProvider | None = None
+    telemetry: TelemetryPort | None = None
+    context_builder: ContextBuilder | None = None
+    context_window_manager: ContextWindowManager | None = None
+    runtime_state_store: RuntimeStateStore | None = None
+    capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
-    def governed(cls, governance: GovernanceBundle, **ports: Any) -> "RuntimePorts":
+    def governed(cls, governance: GovernanceBundle, **ports: object) -> "RuntimePorts":
+        _validate_port_changes(ports)
         return cls(
             policy_engine=governance.policy_engine,
             budget_ledger=governance.budget_ledger,
@@ -62,9 +73,12 @@ class HarnessRuntimeBuilder:
         self._registry = registry or (executor.registry if executor is not None else ToolRegistry())
         self._executor = executor
         self._ports = RuntimePorts()
-        self._capability_packs: list[CapabilityPack] = []
+        self._capability_packs: list[CapabilityPack | InstallableCapabilityPack] = []
+        self._capability_catalog = CapabilityCatalog()
+        self._installed_contributions: tuple[CapabilityContribution, ...] = ()
         self._max_steps = 12
         self._max_parallel_tools = 4
+        self._strict_capability_conformance = True
         self._built = False
 
     @property
@@ -76,28 +90,37 @@ class HarnessRuntimeBuilder:
         self._ports = ports
         return self
 
-    def configure_ports(self, **changes: Any) -> Self:
+    def configure_ports(self, **changes: object) -> Self:
         self._ensure_mutable()
+        _validate_port_changes(changes)
         self._ports = replace(self._ports, **changes)
         return self
 
-    def add_capability_pack(self, pack: CapabilityPack) -> Self:
+    def add_capability_pack(self, pack: CapabilityPack | InstallableCapabilityPack) -> Self:
         self._ensure_mutable()
         from harness_core.version import HARNESS_CORE_CONTRACT_VERSION
 
-        package_id = str(getattr(pack, "package_id", "") or "").strip()
-        if not package_id:
-            raise ValueError("capability pack must declare package_id")
-        contract_version = str(getattr(pack, "contract_version", "") or "").strip()
-        if contract_version != HARNESS_CORE_CONTRACT_VERSION:
+        spec = capability_pack_spec(pack)
+        if spec.contract_version != HARNESS_CORE_CONTRACT_VERSION:
             raise ValueError(
-                f"capability pack {package_id} requires unsupported contract "
-                f"{contract_version or '<missing>'}; expected {HARNESS_CORE_CONTRACT_VERSION}"
+                f"capability pack {spec.package_id} requires unsupported contract "
+                f"{spec.contract_version or '<missing>'}; expected {HARNESS_CORE_CONTRACT_VERSION}"
             )
-        if any(existing.package_id == package_id for existing in self._capability_packs):
-            raise ValueError(f"capability pack is already registered: {package_id}")
+        if any(
+            capability_pack_spec(existing).package_id == spec.package_id
+            for existing in self._capability_packs
+        ):
+            raise ValueError(f"capability pack is already registered: {spec.package_id}")
         self._capability_packs.append(pack)
         return self
+
+    @property
+    def installed_contributions(self) -> tuple[CapabilityContribution, ...]:
+        return self._installed_contributions
+
+    @property
+    def capability_catalog(self) -> CapabilityCatalog:
+        return self._capability_catalog
 
     def with_max_steps(self, max_steps: int) -> Self:
         self._ensure_mutable()
@@ -107,6 +130,11 @@ class HarnessRuntimeBuilder:
     def with_max_parallel_tools(self, max_parallel_tools: int) -> Self:
         self._ensure_mutable()
         self._max_parallel_tools = max(1, int(max_parallel_tools))
+        return self
+
+    def with_strict_capability_conformance(self, enabled: bool) -> Self:
+        self._ensure_mutable()
+        self._strict_capability_conformance = bool(enabled)
         return self
 
     def build(self) -> HarnessRuntime:
@@ -121,8 +149,16 @@ class HarnessRuntimeBuilder:
         )
         if executor.registry is not self._registry:
             raise ValueError("ToolExecutor registry changed during runtime composition")
-        for pack in self._capability_packs:
-            pack.register(executor)
+        contributions = [
+            self._install_pack(pack, executor) for pack in self._capability_packs
+        ]
+        self._installed_contributions = tuple(contributions)
+        executor.configure_artifact_schemas(
+            {
+                name: spec.schema
+                for name, spec in self._capability_catalog.artifact_types.items()
+            }
+        )
         self._built = True
         return HarnessRuntime(
             self._registry,
@@ -136,8 +172,134 @@ class HarnessRuntimeBuilder:
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
             run_control=self._ports.run_control,
+            capability_contributions=self._installed_contributions,
+            capability_catalog=self._capability_catalog,
+            telemetry=self._ports.telemetry,
+            context_builder=self._ports.context_builder,
+            context_window_manager=self._ports.context_window_manager,
+            runtime_state_store=self._ports.runtime_state_store,
         )
+
+    def _install_pack(
+        self,
+        pack: CapabilityPack | InstallableCapabilityPack,
+        executor: ToolExecutor,
+    ) -> CapabilityContribution:
+        spec = capability_pack_spec(pack)
+        tools_before = self._registry.snapshot()
+        handlers_before = executor.snapshot_handlers()
+        catalog_before = self._capability_catalog.snapshot()
+        contribution: CapabilityContribution | None = None
+        try:
+            install = getattr(pack, "install", None)
+            if callable(install):
+                contribution = install(
+                    CapabilityInstallContext(
+                        registry=self._registry,
+                        executor=executor,
+                        catalog=self._capability_catalog,
+                        services={
+                            **dict(self._ports.capability_services or {}),
+                            "secret_provider": self._ports.secret_provider,
+                        },
+                    )
+                )
+            else:
+                register = getattr(pack, "register", None)
+                if not callable(register):
+                    raise TypeError(
+                        f"capability pack {spec.package_id} must implement "
+                        "install(context) or register(executor)"
+                    )
+                register(executor)
+            if contribution is not None and contribution.package_id != spec.package_id:
+                raise ValueError(
+                    f"capability contribution package_id {contribution.package_id!r} "
+                    f"does not match {spec.package_id!r}"
+                )
+        except Exception:
+            self._rollback_install(
+                executor,
+                tools_before=tools_before,
+                handlers_before=handlers_before,
+                catalog_before=catalog_before,
+            )
+            raise
+
+        tools_after = {tool.name for tool in self._registry.list_tools()}
+        handlers_after = set(executor.registered_tools)
+        installed_tools = tuple(
+            sorted((tools_after - set(tools_before)) | (handlers_after - set(handlers_before)))
+        )
+        catalog_after = self._capability_catalog.snapshot()
+        metadata = contribution.metadata if contribution is not None else {}
+        resolved = CapabilityContribution(
+            package_id=spec.package_id,
+            tools=installed_tools or spec.declared_tools,
+            skills=_catalog_delta(catalog_before, catalog_after, "skills"),
+            artifact_types=_catalog_delta(
+                catalog_before, catalog_after, "artifact_types"
+            ),
+            handoffs=_catalog_delta(catalog_before, catalog_after, "handoffs"),
+            mcp_servers=_catalog_delta(catalog_before, catalog_after, "mcp_servers"),
+            subagents=_catalog_delta(catalog_before, catalog_after, "subagents"),
+            context_contributors=_catalog_delta(
+                catalog_before, catalog_after, "context_contributors"
+            ),
+            resources=_catalog_delta(catalog_before, catalog_after, "resources"),
+            metadata=metadata,
+        )
+        try:
+            if (
+                self._strict_capability_conformance
+                and isinstance(getattr(pack, "spec", None), CapabilityPackSpec)
+            ):
+                assert_capability_contribution(
+                    spec,
+                    resolved,
+                    registry=self._registry,
+                    executor=executor,
+                    catalog=self._capability_catalog,
+                )
+        except Exception:
+            self._rollback_install(
+                executor,
+                tools_before=tools_before,
+                handlers_before=handlers_before,
+                catalog_before=catalog_before,
+            )
+            raise
+        return resolved
+
+    def _rollback_install(
+        self,
+        executor: ToolExecutor,
+        *,
+        tools_before: dict[str, object],
+        handlers_before: dict[str, object],
+        catalog_before: dict[str, dict[str, object]],
+    ) -> None:
+        executor.restore_handlers(handlers_before)
+        self._registry.restore(tools_before)
+        self._capability_catalog.rollback(catalog_before)
 
     def _ensure_mutable(self) -> None:
         if self._built:
             raise RuntimeError("HarnessRuntimeBuilder cannot be reused after build")
+
+
+def _validate_port_changes(changes: object) -> None:
+    if not isinstance(changes, dict):
+        raise TypeError("runtime port changes must be a mapping")
+    supported = {field.name for field in fields(RuntimePorts)}
+    unknown = sorted(set(changes) - supported)
+    if unknown:
+        raise TypeError(f"unknown runtime ports: {', '.join(unknown)}")
+
+
+def _catalog_delta(
+    before: dict[str, dict[str, object]],
+    after: dict[str, dict[str, object]],
+    field_name: str,
+) -> tuple[str, ...]:
+    return tuple(sorted(set(after.get(field_name, ())) - set(before.get(field_name, ()))))

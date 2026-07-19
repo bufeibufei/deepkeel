@@ -3,17 +3,25 @@ from __future__ import annotations
 import inspect
 import json
 from copy import deepcopy
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from harness_core.budget import (
+    INPUT_TOKENS,
     MODEL_CALLS,
+    MODEL_RETRIES,
+    OUTPUT_TOKENS,
+    BudgetPolicy,
     BudgetExceededError,
     BudgetLedger,
     BudgetRequest,
+    BudgetSnapshot,
+    UsageReport,
+    preview_budget,
 )
+from harness_core.context_window import ConservativeTokenEstimator
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from harness_core.model_failures import classify_model_failure, provider_fingerprint
@@ -35,12 +43,50 @@ ModelRouteSink = Callable[[dict[str, Any]], None]
 
 
 class ModelTurn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     content: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
     finish_reason: str = ""
     model_id: str = ""
     model_role: str = ""
     raw: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelProviderInfo(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str
+    model_id: str = ""
+    model_role: str = "reasoning"
+    supports_streaming: bool = True
+    supports_native_tools: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelInvocation(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    messages: list[dict[str, Any]] = Field(default_factory=list)
+    tools: list[dict[str, Any]] = Field(default_factory=list)
+    tool_choice: str | dict[str, Any] = "auto"
+    request_timeout: int = 300
+    max_output_tokens: int | None = None
+
+
+@runtime_checkable
+class ModelProviderAdapter(Protocol):
+    """Explicit provider boundary used by routed model execution."""
+
+    @property
+    def info(self) -> ModelProviderInfo: ...
+
+    def invoke(
+        self,
+        request: ModelInvocation,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ModelTurn: ...
 
 
 class ModelGateway(Protocol):
@@ -58,10 +104,62 @@ class ModelGateway(Protocol):
     ) -> ModelTurn: ...
 
 
-class HarnessModelAdapter:
+class NativeChatProviderAdapter:
+    """Compatibility adapter for providers exposing stream_chat/complete_chat."""
+
     def __init__(self, provider, *, request_timeout: int = 300):
         self.provider = provider
         self.request_timeout = request_timeout
+
+    @property
+    def info(self) -> ModelProviderInfo:
+        fingerprint = provider_fingerprint(self.provider)
+        supports_streaming = callable(getattr(self.provider, "stream_chat", None))
+        supports_completion = callable(getattr(self.provider, "complete_chat", None))
+        return ModelProviderInfo(
+            provider_id=(
+                ":".join(part for part in fingerprint if part)
+                or type(self.provider).__name__
+            ),
+            model_id=str(getattr(self.provider, "model", "") or ""),
+            model_role=str(getattr(self.provider, "model_role", "") or "reasoning"),
+            supports_streaming=supports_streaming,
+            supports_native_tools=supports_streaming or supports_completion,
+        )
+
+    def invoke(
+        self,
+        request: ModelInvocation,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ModelTurn:
+        if callable(getattr(self.provider, "stream_chat", None)):
+            events = self._call_stream_chat(
+                request.messages,
+                request.tools,
+                tool_choice=request.tool_choice,
+                request_timeout=request.request_timeout,
+                max_output_tokens=request.max_output_tokens,
+            )
+            return _assemble_streamed_turn(
+                events,
+                provider=self.provider,
+                on_text_delta=on_text_delta,
+            )
+        if callable(getattr(self.provider, "complete_chat", None)):
+            response = self._call_complete_chat(
+                request.messages,
+                request.tools,
+                tool_choice=request.tool_choice,
+                request_timeout=request.request_timeout,
+                max_output_tokens=request.max_output_tokens,
+            )
+            return _turn_from_completion(
+                response,
+                self.provider,
+                on_text_delta=on_text_delta,
+            )
+        raise RuntimeError("provider does not support native tool calls")
 
     def run_turn(
         self,
@@ -90,8 +188,8 @@ class HarnessModelAdapter:
         if on_route is not None:
             on_route(
                 {
-                    "role": str(getattr(self.provider, "model_role", "") or "reasoning"),
-                    "model_id": str(getattr(self.provider, "model", "") or ""),
+                    "role": self.info.model_role,
+                    "model_id": self.info.model_id,
                     "reason": "static provider",
                     "router_id": "static-provider",
                     "step_index": step_context.step_index if step_context is not None else 0,
@@ -99,32 +197,15 @@ class HarnessModelAdapter:
             )
         provider_messages = provider_messages_from_agent(messages, system_prompt=system_prompt)
         tool_choice = _tool_choice(step_context)
-        if callable(getattr(self.provider, "stream_chat", None)):
-            events = self._call_stream_chat(
-                provider_messages,
-                tools,
+        turn = self.invoke(
+            ModelInvocation(
+                messages=provider_messages,
+                tools=tools,
                 tool_choice=tool_choice,
                 request_timeout=request_timeout,
-            )
-            turn = _assemble_streamed_turn(
-                events,
-                provider=self.provider,
-                on_text_delta=checked_delta,
-            )
-        elif callable(getattr(self.provider, "complete_chat", None)):
-            response = self._call_complete_chat(
-                provider_messages,
-                tools,
-                tool_choice=tool_choice,
-                request_timeout=request_timeout,
-            )
-            turn = _turn_from_completion(
-                response,
-                self.provider,
-                on_text_delta=checked_delta,
-            )
-        else:
-            raise RuntimeError("provider does not support native tool calls")
+            ),
+            on_text_delta=checked_delta,
+        )
         ensure_time_remaining(deadline_monotonic)
         return turn
 
@@ -135,6 +216,7 @@ class HarnessModelAdapter:
         *,
         tool_choice: str | dict[str, Any],
         request_timeout: int,
+        max_output_tokens: int | None,
     ):
         return _call_supported(
             self.provider.stream_chat,
@@ -142,6 +224,7 @@ class HarnessModelAdapter:
             tools=tools,
             tool_choice=tool_choice,
             request_timeout=request_timeout,
+            max_tokens=max_output_tokens,
         )
 
     def _call_complete_chat(
@@ -151,6 +234,7 @@ class HarnessModelAdapter:
         *,
         tool_choice: str | dict[str, Any],
         request_timeout: int,
+        max_output_tokens: int | None,
     ):
         return _call_supported(
             self.provider.complete_chat,
@@ -158,7 +242,12 @@ class HarnessModelAdapter:
             tools=tools,
             tool_choice=tool_choice,
             request_timeout=request_timeout,
+            max_tokens=max_output_tokens,
         )
+
+
+class HarnessModelAdapter(NativeChatProviderAdapter):
+    """Backward-compatible name for the native provider adapter."""
 
 
 class RoutedModelGateway:
@@ -173,7 +262,11 @@ class RoutedModelGateway:
         budget_ledger: BudgetLedger,
         request_timeout: int = 300,
     ) -> None:
-        self.providers = {str(role): provider for role, provider in providers.items() if provider is not None}
+        self.providers = {
+            str(role): _as_provider_adapter(provider)
+            for role, provider in providers.items()
+            if provider is not None
+        }
         self.router = router or AdaptiveStepModelRouter()
         self.policy_engine = policy_engine
         self.budget_ledger = budget_ledger
@@ -222,12 +315,27 @@ class RoutedModelGateway:
         primary_route = self.router.route(step_context)
         attempts = self._attempts(primary_route)
         previous_failure: dict[str, Any] = {}
+        token_estimator = ConservativeTokenEstimator()
+        budget_policy = BudgetPolicy.from_mapping(
+            step_context.model_policy.get("budget")
+            if isinstance(step_context.model_policy.get("budget"), dict)
+            else {}
+        )
 
         for attempt_index, (route, provider, retry_kind) in enumerate(attempts, start=1):
             request_timeout = remaining_timeout_ceiling(
                 step_context.deadline_monotonic,
                 maximum=self.request_timeout,
             )
+            role_request_limit = budget_policy.limit(
+                "max_request_seconds",
+                role=route.role,
+            )
+            if role_request_limit is not None:
+                request_timeout = min(
+                    request_timeout,
+                    max(1, int(role_request_limit)),
+                )
             policy = self.policy_engine.evaluate(
                 PolicyRequest(
                     action="model.invoke",
@@ -265,44 +373,196 @@ class RoutedModelGateway:
                     },
                 )
             ) if policy.allowed else None
+            provider_messages = provider_messages_from_agent(
+                messages,
+                system_prompt=system_prompt,
+            )
+            estimated_input_tokens = token_estimator.estimate(
+                {"messages": provider_messages, "tools": tools}
+            )
+            per_call_input_limit = budget_policy.limit(
+                "max_input_tokens_per_call",
+                role=route.role,
+            )
+            if per_call_input_limit is not None and estimated_input_tokens > per_call_input_limit:
+                raise BudgetExceededError(
+                    preview_budget(
+                        self.budget_ledger.snapshot(step_context.run_id),
+                        BudgetRequest(
+                            run_id=step_context.run_id,
+                            metric=INPUT_TOKENS,
+                            amount=estimated_input_tokens,
+                            limit=per_call_input_limit,
+                        ),
+                    )
+                )
+            input_budget = (
+                preview_budget(
+                    self.budget_ledger.snapshot(step_context.run_id),
+                    BudgetRequest(
+                        run_id=step_context.run_id,
+                        metric=INPUT_TOKENS,
+                        amount=estimated_input_tokens,
+                        limit=budget_policy.limit("max_input_tokens_total"),
+                        metadata={"role": route.role},
+                    ),
+                )
+                if policy.allowed
+                else None
+            )
+            retry_budget = (
+                self.budget_ledger.consume(
+                    BudgetRequest(
+                        run_id=step_context.run_id,
+                        metric=MODEL_RETRIES,
+                        limit=budget_policy.limit("max_model_retries"),
+                        operation_id=(
+                            f"model-retry:{step_context.step_index}:attempt:{attempt_index}"
+                        ),
+                        metadata={"role": route.role, "retry_kind": retry_kind},
+                    )
+                )
+                if policy.allowed and attempt_index > 1
+                else None
+            )
+            max_output_tokens = _remaining_output_tokens(
+                budget_policy,
+                self.budget_ledger.snapshot(step_context.run_id),
+                route.role,
+            )
             route_payload = {
                 **route.as_dict(),
-                "model_id": str(getattr(provider, "model", "") or ""),
+                "model_id": provider.info.model_id,
+                "provider_id": provider.info.provider_id,
                 "policy": policy.as_dict(),
                 "budget": budget.as_dict() if budget is not None else {},
+                "budget_metrics": {
+                    INPUT_TOKENS: input_budget.as_dict() if input_budget is not None else {},
+                    MODEL_RETRIES: retry_budget.as_dict() if retry_budget is not None else {},
+                },
                 "forced_tool_name": step_context.forced_tool_name,
                 "attempt_index": attempt_index,
                 "retry_kind": retry_kind,
+                "max_output_tokens": max_output_tokens,
                 **previous_failure,
             }
-            if on_route is not None:
-                on_route(route_payload)
             if not policy.allowed:
+                if on_route is not None:
+                    on_route(route_payload)
                 raise PolicyDeniedError(policy)
             if budget is not None and not budget.allowed:
+                if on_route is not None:
+                    on_route(route_payload)
                 raise BudgetExceededError(budget)
+            if input_budget is not None and not input_budget.allowed:
+                if on_route is not None:
+                    on_route(route_payload)
+                raise BudgetExceededError(input_budget)
+            if retry_budget is not None and not retry_budget.allowed:
+                if on_route is not None:
+                    on_route(route_payload)
+                raise BudgetExceededError(retry_budget)
 
             visible_delta_emitted = False
+            streamed_output_parts: list[str] = []
 
             def tracked_delta(delta: str) -> None:
                 nonlocal visible_delta_emitted
+                ensure_time_remaining(step_context.deadline_monotonic)
                 if delta:
                     visible_delta_emitted = True
+                    streamed_output_parts.append(delta)
+                    if (
+                        max_output_tokens is not None
+                        and token_estimator.estimate("".join(streamed_output_parts))
+                        > max_output_tokens
+                    ):
+                        raise BudgetExceededError(
+                            preview_budget(
+                                BudgetSnapshot(run_id=step_context.run_id),
+                                BudgetRequest(
+                                    run_id=step_context.run_id,
+                                    metric=OUTPUT_TOKENS,
+                                    amount=token_estimator.estimate(
+                                        "".join(streamed_output_parts)
+                                    ),
+                                    limit=max_output_tokens,
+                                ),
+                            )
+                        )
                 if on_text_delta is not None:
                     on_text_delta(delta)
 
             try:
-                turn = HarnessModelAdapter(
-                    provider,
-                    request_timeout=request_timeout,
-                ).run_turn(
-                    messages,
+                ensure_time_remaining(step_context.deadline_monotonic)
+                if not provider.info.supports_native_tools:
+                    raise RuntimeError("provider does not support native tool calls")
+                invocation = ModelInvocation(
+                    messages=provider_messages,
                     tools=tools,
-                    system_prompt=system_prompt,
-                    on_text_delta=tracked_delta,
-                    step_context=step_context,
+                    tool_choice=_tool_choice(step_context),
+                    request_timeout=request_timeout,
+                    max_output_tokens=route_payload["max_output_tokens"],
                 )
+                turn = provider.invoke(
+                    invocation,
+                    on_text_delta=tracked_delta,
+                )
+                ensure_time_remaining(step_context.deadline_monotonic)
             except Exception as exc:
+                failed_output_tokens = (
+                    token_estimator.estimate("".join(streamed_output_parts))
+                    if streamed_output_parts
+                    else 0
+                )
+                failed_usage = UsageReport(
+                    input_tokens=estimated_input_tokens,
+                    output_tokens=failed_output_tokens,
+                    total_tokens=estimated_input_tokens + failed_output_tokens,
+                    source="estimated_failure",
+                )
+                failed_input_budget = self.budget_ledger.consume(
+                    BudgetRequest(
+                        run_id=step_context.run_id,
+                        metric=INPUT_TOKENS,
+                        amount=estimated_input_tokens,
+                        limit=budget_policy.limit("max_input_tokens_total"),
+                        operation_id=(
+                            f"model-input:{step_context.step_index}:attempt:{attempt_index}"
+                        ),
+                        metadata={"role": route.role, "usage_source": "estimated_failure"},
+                    )
+                )
+                route_payload["budget_metrics"][INPUT_TOKENS] = failed_input_budget.as_dict()
+                failed_output_budget = None
+                if failed_output_tokens:
+                    failed_output_budget = self.budget_ledger.consume(
+                        BudgetRequest(
+                            run_id=step_context.run_id,
+                            metric=OUTPUT_TOKENS,
+                            amount=failed_output_tokens,
+                            limit=budget_policy.limit("max_output_tokens_total"),
+                            operation_id=(
+                                f"model-output:{step_context.step_index}:attempt:{attempt_index}"
+                            ),
+                            metadata={
+                                "role": route.role,
+                                "usage_source": "estimated_failure",
+                            },
+                        )
+                    )
+                    route_payload["budget_metrics"][OUTPUT_TOKENS] = (
+                        failed_output_budget.as_dict()
+                    )
+                route_payload["usage"] = failed_usage.as_dict()
+                if not failed_input_budget.allowed:
+                    if on_route is not None:
+                        on_route(route_payload)
+                    raise BudgetExceededError(failed_input_budget) from exc
+                if failed_output_budget is not None and not failed_output_budget.allowed:
+                    if on_route is not None:
+                        on_route(route_payload)
+                    raise BudgetExceededError(failed_output_budget) from exc
                 failure = classify_model_failure(exc)
                 can_retry = (
                     failure.retryable
@@ -310,13 +570,61 @@ class RoutedModelGateway:
                     and attempt_index < len(attempts)
                 )
                 if not can_retry:
+                    if on_route is not None:
+                        on_route(route_payload)
                     raise
                 previous_failure = {
                     "fallback_from": route.role,
                     "failure_category": failure.category,
                     "failure_status_code": failure.status_code,
                 }
+                if on_route is not None:
+                    on_route(route_payload)
                 continue
+            estimated_output_tokens = token_estimator.estimate(
+                {
+                    "content": turn.content,
+                    "tool_calls": [call.model_dump() for call in turn.tool_calls],
+                }
+            )
+            usage = UsageReport.from_provider(
+                _provider_usage(turn.raw),
+                estimated_input=estimated_input_tokens,
+                estimated_output=estimated_output_tokens,
+            )
+            settled_input_budget = self.budget_ledger.consume(
+                BudgetRequest(
+                    run_id=step_context.run_id,
+                    metric=INPUT_TOKENS,
+                    amount=usage.input_tokens,
+                    limit=budget_policy.limit("max_input_tokens_total"),
+                    operation_id=(
+                        f"model-input:{step_context.step_index}:attempt:{attempt_index}"
+                    ),
+                    metadata={"role": route.role, "usage_source": usage.source},
+                )
+            )
+            output_budget = self.budget_ledger.consume(
+                BudgetRequest(
+                    run_id=step_context.run_id,
+                    metric=OUTPUT_TOKENS,
+                    amount=usage.output_tokens,
+                    limit=budget_policy.limit("max_output_tokens_total"),
+                    operation_id=(
+                        f"model-output:{step_context.step_index}:attempt:{attempt_index}"
+                    ),
+                    metadata={"role": route.role, "usage_source": usage.source},
+                )
+            )
+            route_payload["budget_metrics"][INPUT_TOKENS] = settled_input_budget.as_dict()
+            route_payload["budget_metrics"][OUTPUT_TOKENS] = output_budget.as_dict()
+            route_payload["usage"] = usage.as_dict()
+            if on_route is not None:
+                on_route(route_payload)
+            if not settled_input_budget.allowed:
+                raise BudgetExceededError(settled_input_budget)
+            if not output_budget.allowed:
+                raise BudgetExceededError(output_budget)
             return turn.model_copy(
                 update={
                     "model_role": route.role,
@@ -329,14 +637,14 @@ class RoutedModelGateway:
     def _attempts(
         self,
         primary_route: ModelRouteDecision,
-    ) -> list[tuple[ModelRouteDecision, Any, str]]:
+    ) -> list[tuple[ModelRouteDecision, ModelProviderAdapter, str]]:
         primary = self.providers.get(primary_route.role)
         if primary is None:
             raise RuntimeError(
                 f"model provider for role {primary_route.role!r} is unavailable"
             )
         result = [(primary_route, primary, "primary")]
-        primary_fingerprint = provider_fingerprint(primary)
+        primary_fingerprint = _adapter_fingerprint(primary)
         preferred_roles = (
             ("reasoning", "fast")
             if primary_route.role == "fast"
@@ -345,7 +653,7 @@ class RoutedModelGateway:
         ordered_roles = tuple(dict.fromkeys((*preferred_roles, *self.providers)))
         for role in ordered_roles:
             provider = self.providers.get(role)
-            if provider is None or provider_fingerprint(provider) == primary_fingerprint:
+            if provider is None or _adapter_fingerprint(provider) == primary_fingerprint:
                 continue
             result.append(
                 (
@@ -378,6 +686,19 @@ class RoutedModelGateway:
         return result
 
 
+def _as_provider_adapter(provider: Any) -> ModelProviderAdapter:
+    return (
+        provider
+        if isinstance(provider, ModelProviderAdapter)
+        else NativeChatProviderAdapter(provider)
+    )
+
+
+def _adapter_fingerprint(provider: ModelProviderAdapter) -> tuple[str, str, str]:
+    info = provider.info
+    return (info.provider_id, info.model_id, info.model_role)
+
+
 def _tool_choice(step_context: ModelStepContext | None) -> str | dict[str, Any]:
     forced_tool_name = str(
         step_context.forced_tool_name if step_context is not None else ""
@@ -397,6 +718,48 @@ def _model_call_limit(model_policy: dict[str, Any]) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _remaining_output_tokens(
+    policy: BudgetPolicy,
+    snapshot,
+    role: str,
+) -> int | None:
+    total_limit = policy.limit("max_output_tokens_total")
+    per_call_limit = policy.limit("max_output_tokens_per_call", role=role)
+    remaining_total = (
+        max(0, int(total_limit - float(snapshot.usage.get(OUTPUT_TOKENS) or 0)))
+        if total_limit is not None
+        else None
+    )
+    candidates = [
+        int(value)
+        for value in (remaining_total, per_call_limit)
+        if value is not None
+    ]
+    if not candidates:
+        return None
+    available = min(candidates)
+    if available <= 0:
+        decision = preview_budget(
+            snapshot,
+            BudgetRequest(
+                run_id=snapshot.run_id,
+                metric=OUTPUT_TOKENS,
+                amount=1,
+                limit=total_limit or per_call_limit,
+            ),
+        )
+        raise BudgetExceededError(decision)
+    return available
+
+
+def _provider_usage(raw: dict[str, Any] | None) -> dict[str, Any]:
+    value = raw if isinstance(raw, dict) else {}
+    if isinstance(value.get("usage"), dict):
+        return value["usage"]
+    nested = value.get("raw") if isinstance(value.get("raw"), dict) else {}
+    return nested.get("usage") if isinstance(nested.get("usage"), dict) else {}
 
 
 def provider_messages_from_agent(

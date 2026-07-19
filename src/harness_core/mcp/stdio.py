@@ -12,24 +12,19 @@ from itertools import count
 from typing import Any
 
 from harness_core.mcp.contracts import McpCallResult, McpRemoteTool, McpServerSpec
+from harness_core.mcp.protocol import (
+    MAX_TOOL_LIST_PAGES,
+    MCP_PROTOCOL_VERSION,
+    SUPPORTED_MCP_PROTOCOL_VERSIONS,
+    McpProtocolError,
+    McpTimeoutError,
+    McpTransportError,
+    safe_server_info,
+    structured_content_from_text,
+)
 
 
 logger = logging.getLogger(__name__)
-MCP_PROTOCOL_VERSION = "2025-03-26"
-SUPPORTED_MCP_PROTOCOL_VERSIONS = {"2024-11-05", MCP_PROTOCOL_VERSION}
-MAX_TOOL_LIST_PAGES = 20
-
-
-class McpTransportError(RuntimeError):
-    pass
-
-
-class McpTimeoutError(McpTransportError):
-    pass
-
-
-class McpProtocolError(RuntimeError):
-    pass
 
 
 class StdioMcpClient:
@@ -78,8 +73,8 @@ class StdioMcpClient:
                         "protocolVersion": MCP_PROTOCOL_VERSION,
                         "capabilities": {},
                         "clientInfo": {
-                            "name": "kuitianjiandi-harness-runtime",
-                            "version": "1.0.0",
+                            "name": self.spec.client_name,
+                            "version": self.spec.client_version,
                         },
                     },
                     timeout_seconds=_bounded_timeout(
@@ -170,7 +165,7 @@ class StdioMcpClient:
         structured = (
             self._redact_value(dict(result.get("structuredContent")))
             if isinstance(result.get("structuredContent"), dict)
-            else _structured_content_from_text(content)
+            else structured_content_from_text(content)
         )
         return McpCallResult(
             content=content,
@@ -180,7 +175,7 @@ class StdioMcpClient:
                 "server_id": self.server_id,
                 "transport": "stdio",
                 "protocol_version": self._protocol_version,
-                "server_info": _safe_server_info(self._server_info),
+                "server_info": safe_server_info(self._server_info),
             },
         )
 
@@ -192,7 +187,7 @@ class StdioMcpClient:
             **self.spec.public_snapshot(),
             "running": bool(process is not None and process.poll() is None),
             "protocol_version": self._protocol_version,
-            "server_info": _safe_server_info(self._server_info),
+            "server_info": safe_server_info(self._server_info),
             "stderr_tail": list(self._stderr_tail),
             "generation": self._generation,
             "restart_count": max(0, self._generation - 1),
@@ -465,26 +460,6 @@ class StdioMcpClient:
         for thread in (reader_thread, stderr_thread):
             if thread is not None and thread is not current:
                 thread.join(timeout=min(0.5, self.spec.shutdown_timeout_seconds))
-
-
-def _structured_content_from_text(content: list[dict[str, Any]]) -> dict[str, Any]:
-    for item in content:
-        if item.get("type") != "text" or not isinstance(item.get("text"), str):
-            continue
-        try:
-            value = json.loads(item["text"])
-        except json.JSONDecodeError:
-            continue
-        if isinstance(value, dict):
-            return value
-    return {}
-
-
-def _safe_server_info(value: dict[str, Any]) -> dict[str, str]:
-    return {
-        "name": str(value.get("name") or ""),
-        "version": str(value.get("version") or ""),
-    }
 
 
 def _deadline(timeout_seconds: float) -> float:

@@ -49,6 +49,9 @@ class HandoffRegistry:
     def resolve(self, tool_name: str) -> HandoffSpec | None:
         return self._specs.get(str(tool_name or "").strip())
 
+    def items(self) -> tuple[tuple[str, HandoffSpec], ...]:
+        return tuple(self._specs.items())
+
 
 def handoff_spec(
     tool_name: str,

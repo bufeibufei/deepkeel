@@ -1,14 +1,20 @@
 [project]
 name = "kuitianjiandi-harness-core"
-version = "1.0.0"
+version = "1.2.0"
 description = "Product-neutral Harness Agent runtime core."
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
   "jsonschema>=4.23.0",
+  "httpx>=0.28.0,<1.0.0",
   "langchain-core>=1.2.0",
   "langgraph>=1.2.0",
   "pydantic>=2.8.0",
+]
+
+[project.optional-dependencies]
+test = [
+  "pytest>=8.3.0",
 ]
 
 [build-system]
@@ -19,3 +25,6 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["harness_core*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

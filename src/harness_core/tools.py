@@ -6,13 +6,14 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from typing import Any, Callable, Literal, Protocol
+from typing import Any, Callable, Literal, Mapping, Protocol
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator
 from jsonschema.exceptions import SchemaError
 
 from harness_core.budget import (
+    TOOL_CONCURRENCY,
     TOOL_CALLS,
     BudgetLedger,
     BudgetRequest,
@@ -29,6 +30,7 @@ from harness_core.policy import (
     PolicyEngine,
     PolicyRequest,
 )
+from harness_core.ports import RuntimeSession, SessionFactory
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 
 
@@ -42,15 +44,15 @@ class ToolExecutionContext:
     user_id: str
     thread_id: str = ""
     turn_id: str = ""
-    session: Any = None
-    session_factory: Callable[[], Any] | None = None
+    session: RuntimeSession | None = None
+    session_factory: SessionFactory | None = None
     context_bundle: dict[str, Any] = field(default_factory=dict)
     metadata: dict[str, Any] = field(default_factory=dict)
     budget_limits: dict[str, float] = field(default_factory=dict)
     deadline_monotonic: float | None = None
     run_control: RunControl = field(default_factory=NoopRunControl)
 
-    def fork(self, *, session: Any = None) -> "ToolExecutionContext":
+    def fork(self, *, session: RuntimeSession | None = None) -> "ToolExecutionContext":
         return ToolExecutionContext(
             run_id=self.run_id,
             user_id=self.user_id,
@@ -245,10 +247,32 @@ class ToolExecutor:
         self.claim_lease_seconds = max(0.001, float(claim_lease_seconds))
         self.max_idempotent_attempts = max(1, int(max_idempotent_attempts))
         self._handlers: dict[str, ToolHandler] = {}
+        self._artifact_schemas: dict[str, dict[str, Any]] = {}
+        self._artifact_contracts_configured = False
 
     def register(self, tool_name: str, handler: ToolHandler) -> None:
         self.registry.get(tool_name)
         self._handlers[tool_name] = handler
+
+    def unregister(self, tool_name: str) -> None:
+        self._handlers.pop(tool_name, None)
+
+    def snapshot_handlers(self) -> dict[str, ToolHandler]:
+        return dict(self._handlers)
+
+    def restore_handlers(self, snapshot: dict[str, ToolHandler]) -> None:
+        self._handlers = dict(snapshot)
+
+    def configure_artifact_schemas(
+        self,
+        schemas: Mapping[str, Mapping[str, Any]],
+    ) -> None:
+        self._artifact_contracts_configured = True
+        self._artifact_schemas = {
+            str(name): dict(schema)
+            for name, schema in schemas.items()
+            if str(name).strip()
+        }
 
     @property
     def registered_tools(self) -> frozenset[str]:
@@ -500,7 +524,27 @@ class ToolExecutor:
             target.append((index, call))
 
         if parallel:
-            workers = min(self.max_parallel_tools, len(parallel))
+            configured_limit = int(
+                context.budget_limits.get(TOOL_CONCURRENCY)
+                or self.max_parallel_tools
+            )
+            workers = max(1, min(self.max_parallel_tools, configured_limit, len(parallel)))
+            concurrency_budget = self.budget_ledger.consume(
+                BudgetRequest(
+                    run_id=context.run_id,
+                    metric=TOOL_CONCURRENCY,
+                    amount=workers,
+                    limit=configured_limit,
+                    operation_id=(
+                        f"tool-concurrency:{context.turn_id}:"
+                        + ":".join(sorted(call.id for _, call in parallel))
+                    ),
+                    aggregation="max",
+                    metadata={"parallel_call_count": len(parallel)},
+                )
+            )
+            if not concurrency_budget.allowed:
+                workers = 1
             with ThreadPoolExecutor(max_workers=workers, thread_name_prefix="agent-tool") as pool:
                 futures = {
                     pool.submit(self._execute_parallel, call, context): index
@@ -591,6 +635,10 @@ class ToolExecutor:
             else:
                 result = tool_result_from_legacy(call, context, raw)
             result = _normalize_async_result(result, spec)
+            artifact_error = self._artifact_contract_error(result)
+            if artifact_error:
+                result = _failed_result(call, artifact_error)
+                result.metadata["artifact_contract_failed"] = True
         except (RunCanceledError, RunDeadlineExceededError):
             raise
         except Exception as exc:
@@ -603,6 +651,24 @@ class ToolExecutor:
             },
         }
         return _with_runtime_metrics(result, started_at, phase="execution")
+
+    def _artifact_contract_error(self, result: ToolResult) -> str:
+        if not result.artifacts or not self._artifact_contracts_configured:
+            return ""
+        for artifact in result.artifacts:
+            schema = self._artifact_schemas.get(artifact.artifact_type)
+            if schema is None:
+                return f"unregistered artifact type: {artifact.artifact_type}"
+            errors = sorted(
+                Draft202012Validator(schema).iter_errors(artifact.data),
+                key=lambda item: list(item.absolute_path),
+            )
+            if errors:
+                return (
+                    f"artifact {artifact.artifact_type} does not match its contract: "
+                    f"{errors[0].message}"
+                )
+        return ""
 
 
 def _confirmation_grant(context: ToolExecutionContext, call: ToolCall) -> dict[str, Any]:

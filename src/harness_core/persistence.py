@@ -29,8 +29,8 @@ def _require_supported_version(
         )
 
 
-class CheckpointStore(Protocol):
-    """Storage boundary used by the product-neutral Harness runtime."""
+class DurableCheckpointStore(Protocol):
+    """Business recovery state, independent from engine graph checkpoints."""
 
     def load(
         self,
@@ -56,6 +56,26 @@ class CheckpointStore(Protocol):
         session: Any = None,
         user_id: str = "",
     ) -> None: ...
+
+    def exists(
+        self,
+        run_id: str,
+        *,
+        session: Any = None,
+        user_id: str = "",
+    ) -> bool: ...
+
+    def list_ids(
+        self,
+        *,
+        session: Any = None,
+        user_id: str = "",
+        limit: int = 100,
+    ) -> tuple[str, ...]: ...
+
+
+# Compatibility name retained for hosts using the v1 public SDK.
+CheckpointStore = DurableCheckpointStore
 
 
 def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str, Any]:

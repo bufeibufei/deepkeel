@@ -14,18 +14,22 @@ from harness_core.mcp.contracts import (
     McpClient,
     McpServerSpec,
 )
-from harness_core.mcp.stdio import (
+from harness_core.mcp.protocol import (
     McpProtocolError,
     McpTimeoutError,
     McpTransportError,
+)
+from harness_core.mcp.stdio import (
     StdioMcpClient,
 )
+from harness_core.mcp.streamable_http import StreamableHttpMcpClient
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tools import ToolExecutionContext, ToolExecutor
 
 
 ArgumentMapper = Callable[[dict[str, Any]], dict[str, Any]]
 ResultNormalizer = Callable[[McpCallResult, dict[str, Any]], "McpNormalizedResult"]
+McpClientFactory = Callable[[McpServerSpec], McpClient]
 
 
 @dataclass(slots=True)
@@ -51,12 +55,12 @@ class McpClientPool:
         self,
         specs: list[McpServerSpec] | None = None,
         *,
-        client_factory: Callable[[McpServerSpec], McpClient] = StdioMcpClient,
+        client_factory: McpClientFactory | None = None,
         secret_provider: SecretProvider | None = None,
         governance_scope: GovernanceScope | None = None,
     ) -> None:
         self._specs = {spec.id: spec for spec in specs or []}
-        self._client_factory = client_factory
+        self._client_factory = client_factory or _default_client_factory
         self._secret_provider = secret_provider or DenySecretProvider()
         self._governance_scope = governance_scope or GovernanceScope()
         self._clients: dict[str, McpClient] = {}
@@ -76,17 +80,17 @@ class McpClientPool:
             return client
 
     def _resolved_spec(self, spec: McpServerSpec) -> McpServerSpec:
-        if not spec.secret_environment:
-            return spec
         scope = self._governance_scope
         missing_scopes = set(spec.required_scopes) - set(scope.scopes)
         if missing_scopes:
             raise PermissionError(
                 f"MCP server {spec.id} requires scopes: {', '.join(sorted(missing_scopes))}"
             )
-        resolved = dict(spec.environment)
+        if not spec.secret_environment and not spec.secret_headers:
+            return spec
+        resolved_environment = dict(spec.environment)
         for environment_key, secret_name in spec.secret_environment.items():
-            resolved[environment_key] = self._secret_provider.resolve(
+            resolved_environment[environment_key] = self._secret_provider.resolve(
                 SecretRequest(
                     name=secret_name,
                     tenant_id=scope.tenant_id,
@@ -96,7 +100,24 @@ class McpClientPool:
                     required_scopes=tuple(spec.required_scopes),
                 )
             )
-        return spec.model_copy(update={"environment": resolved})
+        resolved_headers = dict(spec.headers)
+        for header_name, secret_name in spec.secret_headers.items():
+            resolved_headers[header_name] = self._secret_provider.resolve(
+                SecretRequest(
+                    name=secret_name,
+                    tenant_id=scope.tenant_id,
+                    user_id=scope.user_id,
+                    resource_type="mcp_server",
+                    resource_id=spec.id,
+                    required_scopes=tuple(spec.required_scopes),
+                )
+            )
+        return spec.model_copy(
+            update={
+                "environment": resolved_environment,
+                "headers": resolved_headers,
+            }
+        )
 
     def diagnostics(self) -> list[dict[str, Any]]:
         with self._lock:
@@ -269,6 +290,14 @@ def _default_normalize(result: McpCallResult) -> McpNormalizedResult:
         summary="MCP tool completed.",
         error="MCP tool returned an error" if result.is_error else "",
     )
+
+
+def _default_client_factory(spec: McpServerSpec) -> McpClient:
+    if spec.transport == "stdio":
+        return StdioMcpClient(spec)
+    if spec.transport == "streamable_http":
+        return StreamableHttpMcpClient(spec)
+    raise McpTransportError(f"unsupported MCP transport: {spec.transport}")
 
 
 def _binding_timeout(binding: McpToolBinding) -> float | None:

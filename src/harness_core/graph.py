@@ -137,9 +137,32 @@ def create_harness_graph(
         model_started_at = time.perf_counter()
         first_delta_at: float | None = None
         route_payload: dict[str, Any] = {}
+        routed_attempts: set[tuple[int, str]] = set()
 
         def on_route(payload: dict[str, Any]) -> None:
             route_payload.update(payload)
+            route_key = (
+                int(payload.get("attempt_index") or 1),
+                str(payload.get("retry_kind") or "primary"),
+            )
+            if route_key in routed_attempts:
+                _emit(
+                    current,
+                    config,
+                    "budget.usage.recorded",
+                    "模型用量已记录",
+                    str((payload.get("usage") or {}).get("source") or ""),
+                    {
+                        "role": str(payload.get("role") or ""),
+                        "model_id": str(payload.get("model_id") or ""),
+                        "attempt_index": route_key[0],
+                        "usage": dict(payload.get("usage") or {}),
+                        "budget_metrics": dict(payload.get("budget_metrics") or {}),
+                        "visible": False,
+                    },
+                )
+                return
+            routed_attempts.add(route_key)
             _emit(
                 current,
                 config,
@@ -201,6 +224,21 @@ def create_harness_graph(
         except Exception as exc:
             current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
             latency_ms = int((time.perf_counter() - model_started_at) * 1000)
+            if route_payload.get("budget_metrics"):
+                _emit(
+                    current,
+                    config,
+                    "budget.usage.recorded",
+                    "模型用量已记录",
+                    str((route_payload.get("usage") or {}).get("source") or "estimated_failure"),
+                    {
+                        "role": str(route_payload.get("role") or ""),
+                        "model_id": str(route_payload.get("model_id") or ""),
+                        "usage": dict(route_payload.get("usage") or {}),
+                        "budget_metrics": dict(route_payload.get("budget_metrics") or {}),
+                        "visible": False,
+                    },
+                )
             _emit(
                 current,
                 config,
@@ -236,8 +274,30 @@ def create_harness_graph(
             "router_id": str(route_payload.get("router_id") or ""),
             "policy": route_payload.get("policy") if isinstance(route_payload.get("policy"), dict) else {},
             "budget": route_payload.get("budget") if isinstance(route_payload.get("budget"), dict) else {},
+            "budget_metrics": (
+                route_payload.get("budget_metrics")
+                if isinstance(route_payload.get("budget_metrics"), dict)
+                else {}
+            ),
+            "usage": route_payload.get("usage") if isinstance(route_payload.get("usage"), dict) else {},
+            "max_output_tokens": route_payload.get("max_output_tokens"),
             "forced_tool_name": forced_tool_name,
         }
+        _emit(
+            current,
+            config,
+            "budget.usage.recorded",
+            "模型用量已记录",
+            str(model_metrics["usage"].get("source") or ""),
+            {
+                "role": turn.model_role,
+                "model_id": turn.model_id,
+                "usage": model_metrics["usage"],
+                "budget_metrics": model_metrics["budget_metrics"],
+                "max_output_tokens": model_metrics["max_output_tokens"],
+                "visible": False,
+            },
+        )
         current["step_count"] = int(current.get("step_count") or 0) + 1
         tool_calls = _stable_tool_calls(
             turn.tool_calls,

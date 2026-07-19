@@ -10,12 +10,15 @@ from harness_core.mcp.provider import (
     McpToolBinding,
     McpToolProvider,
 )
-from harness_core.mcp.stdio import (
+from harness_core.mcp.protocol import (
     McpProtocolError,
     McpTimeoutError,
     McpTransportError,
+)
+from harness_core.mcp.stdio import (
     StdioMcpClient,
 )
+from harness_core.mcp.streamable_http import StreamableHttpMcpClient
 
 __all__ = [
     "McpCallResult",
@@ -30,4 +33,5 @@ __all__ = [
     "McpToolProvider",
     "McpTransportError",
     "StdioMcpClient",
+    "StreamableHttpMcpClient",
 ]
