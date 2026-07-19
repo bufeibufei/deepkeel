@@ -139,7 +139,7 @@ class DefaultPolicyEngine:
         if (
             request.action == "tool.invoke"
             and runtime_policy.get("confirmation_required") is True
-            and request.context.get("legacy_confirmation_passthrough") is not True
+            and runtime_policy.get("confirmation_authority") != "handler"
         ):
             grant = (
                 request.context.get("confirmation_grant")
@@ -202,7 +202,7 @@ class PolicyRule:
 
 
 class RuleBasedPolicyEngine:
-    """Ordered policy overlay with the compatible default engine as fallback."""
+    """Ordered policy overlay with the default engine as fallback."""
 
     def __init__(
         self,

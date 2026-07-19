@@ -8,9 +8,6 @@ from pydantic import BaseModel, Field
 class ToolSpec(BaseModel):
     name: str
     description: str = ""
-    # input_schema remains the compatibility field for legacy example-shaped
-    # contracts. New tools should publish a real JSON Schema via parameters_schema.
-    input_schema: dict[str, Any] = Field(default_factory=dict)
     parameters_schema: dict[str, Any] = Field(default_factory=dict)
     argument_examples: list[dict[str, Any]] = Field(default_factory=list)
     output_schema: dict[str, Any] = Field(default_factory=dict)
@@ -29,14 +26,7 @@ class ToolSpec(BaseModel):
     task_kind: str = ""
 
     def formal_parameters_schema(self) -> dict[str, Any]:
-        if self.parameters_schema:
-            return self.parameters_schema
-        if (
-            self.input_schema.get("type") == "object"
-            and isinstance(self.input_schema.get("properties"), dict)
-        ):
-            return self.input_schema
-        return {}
+        return self.parameters_schema
 
 
 class ToolRegistry:

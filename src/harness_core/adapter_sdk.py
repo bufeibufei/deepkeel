@@ -57,7 +57,6 @@ from harness_core.mcp import (
     StreamableHttpMcpClient,
 )
 from harness_core.model import (
-    HarnessModelAdapter,
     ModelGateway,
     ModelInvocation,
     ModelProviderAdapter,
@@ -113,7 +112,6 @@ ADAPTER_SDK_API = (
     "GovernanceBundle",
     "GovernanceScope",
     "GraphCheckpointer",
-    "HarnessModelAdapter",
     "HarnessRuntimeBuilder",
     "INPUT_TOKENS",
     "InMemoryBudgetLedger",

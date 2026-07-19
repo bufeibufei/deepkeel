@@ -105,7 +105,7 @@ class ModelGateway(Protocol):
 
 
 class NativeChatProviderAdapter:
-    """Compatibility adapter for providers exposing stream_chat/complete_chat."""
+    """Adapter for providers exposing stream_chat or complete_chat."""
 
     def __init__(self, provider, *, request_timeout: int = 300):
         self.provider = provider
@@ -244,10 +244,6 @@ class NativeChatProviderAdapter:
             request_timeout=request_timeout,
             max_tokens=max_output_tokens,
         )
-
-
-class HarnessModelAdapter(NativeChatProviderAdapter):
-    """Backward-compatible name for the native provider adapter."""
 
 
 class RoutedModelGateway:
@@ -821,31 +817,7 @@ def _model_parameters_schema(spec) -> dict[str, Any]:
     schema = formal_schema() if callable(formal_schema) else {}
     if schema.get("type") == "object" and isinstance(schema.get("properties"), dict):
         return deepcopy(schema)
-
-    schema = spec.input_schema if isinstance(spec.input_schema, dict) else {}
-    parameters: dict[str, Any] = {
-        "type": "object",
-        "properties": {
-            str(name): _json_schema_for_example(example)
-            for name, example in schema.items()
-        },
-        "additionalProperties": False,
-    }
-    required = [name for name in spec.required_args if "." not in name]
-    if required:
-        parameters["required"] = required
-    groups = [
-        [name for name in group if "." not in name]
-        for group in spec.required_arg_groups
-    ]
-    groups = [group for group in groups if group]
-    if groups:
-        parameters["anyOf"] = [
-            {"required": [name]}
-            for group in groups
-            for name in group
-        ]
-    return parameters
+    return {"type": "object", "properties": {}, "additionalProperties": False}
 
 
 def _assemble_streamed_turn(
@@ -947,39 +919,6 @@ def _json_arguments(value: Any) -> dict[str, Any]:
     if not isinstance(parsed, dict):
         raise RuntimeError("model native tool arguments must be a JSON object")
     return parsed
-
-
-def _json_schema_for_example(example: Any) -> dict[str, Any]:
-    if isinstance(example, bool):
-        return {"type": "boolean", "default": example}
-    if isinstance(example, int):
-        return {"type": "integer", "default": example}
-    if isinstance(example, float):
-        return {"type": "number", "default": example}
-    if isinstance(example, list):
-        item = example[0] if example else "string"
-        item_schema = _json_schema_for_example(item)
-        item_schema.pop("default", None)
-        return {"type": "array", "items": item_schema}
-    if isinstance(example, dict):
-        return {
-            "type": "object",
-            "properties": {str(key): _json_schema_for_example(value) for key, value in example.items()},
-            "additionalProperties": False,
-        }
-    text = str(example or "string")
-    if "|" in text and all(part.strip() for part in text.split("|")):
-        return {"type": "string", "enum": [part.strip() for part in text.split("|")]}
-    normalized = text.strip().lower()
-    if normalized in {"int", "integer"}:
-        return {"type": "integer"}
-    if normalized in {"bool", "boolean"}:
-        return {"type": "boolean"}
-    if normalized in {"array", "list"}:
-        return {"type": "array", "items": {}}
-    if normalized in {"object", "dict"}:
-        return {"type": "object"}
-    return {"type": "string"}
 
 
 def _model_tool_description(spec: ToolSpec) -> str:

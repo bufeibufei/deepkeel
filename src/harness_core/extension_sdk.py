@@ -52,7 +52,7 @@ from harness_core.subagents import (
     SubAgentResult,
     SubAgentRunStore,
     SubAgentSpec,
-    delegation_tool_input_schema,
+    delegation_tool_parameters_schema,
 )
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tools import (
@@ -105,7 +105,7 @@ EXTENSION_SDK_API = (
     "capability_pack_spec",
     "clarification_from_validation_error",
     "clarification_tool_result",
-    "delegation_tool_input_schema",
+    "delegation_tool_parameters_schema",
     "harness_system_prompt",
     "load_skill_packages",
     "standardize_pending_action_payload",

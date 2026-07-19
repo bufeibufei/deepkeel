@@ -4,7 +4,7 @@ from harness_core.subagents.contracts import (
     DelegationTask,
     SubAgentResult,
     SubAgentSpec,
-    delegation_tool_input_schema,
+    delegation_tool_parameters_schema,
 )
 from harness_core.subagents.executor import SubAgentExecutor
 from harness_core.subagents.capability import DelegationToolHandler
@@ -21,5 +21,5 @@ __all__ = [
     "SubAgentRunStore",
     "SubAgentResult",
     "SubAgentSpec",
-    "delegation_tool_input_schema",
+    "delegation_tool_parameters_schema",
 ]

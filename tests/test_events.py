@@ -21,7 +21,7 @@ def test_runtime_event_projection_maps_user_and_async_wait_states():
     assert event_runtime_status(async_event) == "waiting_async"
 
 
-def test_tool_event_projection_keeps_one_legacy_card_identity_across_states():
+def test_tool_event_projection_preserves_typed_tool_contract():
     call = {"id": "call-1", "name": "workflow.start", "arguments": {"question": "Should this workflow proceed?"}}
     started = project_runtime_event({"event_type": "tool.started", "payload": {"tool_call": call}})
     waiting = project_runtime_event(
@@ -39,7 +39,9 @@ def test_tool_event_projection_keeps_one_legacy_card_identity_across_states():
         }
     )
 
-    assert started["payload"]["tool_args"] == waiting["payload"]["tool_args"]
-    assert waiting["payload"]["tool_status"] == "requires_user_action"
-    assert waiting["payload"]["handoff_view"] == "workflow_form"
-    assert waiting["payload"]["tool_result"]["result"]["question"] == "Should this workflow proceed?"
+    assert started["payload"]["tool_call"] == call
+    assert waiting["payload"]["tool_result"]["status"] == "requires_user_action"
+    assert waiting["payload"]["pending_action"]["handoff_view"] == "workflow_form"
+    assert waiting["payload"]["tool_result"]["data"]["question"] == "Should this workflow proceed?"
+    assert "tool_args" not in started["payload"]
+    assert "tool_status" not in waiting["payload"]

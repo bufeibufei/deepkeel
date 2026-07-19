@@ -337,10 +337,6 @@ class ToolExecutor:
                     "runtime_policy": spec.runtime_policy,
                     "tool_call_id": normalized.id,
                     "confirmation_grant": confirmation_grant,
-                    "legacy_confirmation_passthrough": context.metadata.get(
-                        "legacy_confirmation_passthrough"
-                    )
-                    is True,
                     "governance_scope": context.metadata.get("governance_scope") or {},
                 },
             )
@@ -826,6 +822,8 @@ def _failed_result(call: ToolCall, error: str, *, retryable: bool = False) -> To
 
 
 def _argument_schema_error(arguments: dict[str, Any], spec: ToolSpec) -> str:
+    if spec.runtime_policy.get("argument_validation_authority") == "handler":
+        return ""
     schema = spec.formal_parameters_schema()
     if not schema:
         return ""

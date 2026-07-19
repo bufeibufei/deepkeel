@@ -67,7 +67,6 @@ from harness_core.contracts import (
 )
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.model import (
-    HarnessModelAdapter,
     ModelGateway,
     ModelInvocation,
     ModelProviderAdapter,
@@ -157,7 +156,6 @@ __all__ = [
     "EnvironmentSecretProvider",
     "FinalAnswer",
     "GraphCheckpointer",
-    "HarnessModelAdapter",
     "HarnessRuntime",
     "HarnessRuntimeBuilder",
     "HARNESS_CORE_CONTRACT_VERSION",

@@ -574,20 +574,27 @@ def _trace_from_events(
             )
         if (action.startswith("tool.call.") and action != "tool.call.started") or action == "run.waiting_async":
             tool_result = payload.get("tool_result") if isinstance(payload.get("tool_result"), dict) else {}
-            metrics = tool_result.get("runtime_metrics") if isinstance(tool_result.get("runtime_metrics"), dict) else {}
             metadata = tool_result.get("metadata") if isinstance(tool_result.get("metadata"), dict) else {}
+            metrics = (
+                tool_result.get("runtime_metrics")
+                if isinstance(tool_result.get("runtime_metrics"), dict)
+                else metadata.get("runtime_metrics")
+                if isinstance(metadata.get("runtime_metrics"), dict)
+                else {}
+            )
             governance = metadata.get("governance") if isinstance(metadata.get("governance"), dict) else {}
+            tool_call = payload.get("tool_call") if isinstance(payload.get("tool_call"), dict) else {}
             item.update(
                 {
                     "latency_ms": int(metrics.get("latency_ms") or payload.get("latency_ms") or 0),
-                    "status": str(payload.get("typed_tool_status") or payload.get("tool_status") or tool_result.get("status") or ""),
+                    "status": str(tool_result.get("status") or ""),
                     "outcome": str(tool_result.get("outcome") or ""),
                     "diagnostics": (
                         tool_result.get("diagnostics")
                         if isinstance(tool_result.get("diagnostics"), dict)
                         else {}
                     ),
-                    "tool_calls": [{"tool_name": str(payload.get("tool_name") or tool_result.get("name") or "")}],
+                    "tool_calls": [{"tool_name": str(tool_result.get("name") or tool_call.get("name") or "")}],
                     "observations": [
                         _project_observation(tool_result["observation"], observation_kinds)
                     ]

@@ -106,7 +106,7 @@ class DelegationBatchResult(BaseModel):
         return [result for result in self.results if result.status == "completed"]
 
 
-def delegation_tool_input_schema(
+def delegation_tool_parameters_schema(
     agents: list[SubAgentSpec] | None = None,
 ) -> dict[str, Any]:
     """Return the provider-facing contract for bounded first-level delegation."""

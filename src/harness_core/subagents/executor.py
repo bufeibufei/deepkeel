@@ -9,7 +9,7 @@ from harness_core.budget import MODEL_CALLS
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from harness_core.failures import RunCanceledError
-from harness_core.model import HarnessModelAdapter, model_tools_from_registry
+from harness_core.model import NativeChatProviderAdapter, model_tools_from_registry
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import DelegationPolicy
 from harness_core.subagents.contracts import (
@@ -606,7 +606,7 @@ class SubAgentExecutor:
                         quota=quota,
                     )
                     try:
-                        turn = HarnessModelAdapter(
+                        turn = NativeChatProviderAdapter(
                             provider,
                             request_timeout=remaining_timeout_ceiling(
                                 context.deadline_monotonic,
