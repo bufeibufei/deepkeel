@@ -10,9 +10,9 @@ if TYPE_CHECKING:
     from harness_core.runtime_api import RuntimeResult
 
 
-CHECKPOINT_SCHEMA_VERSION = "harness-checkpoint-v1"
-DURABLE_CHECKPOINT_SCHEMA_VERSION = "harness-durable-checkpoint-v1"
-RUNTIME_SCHEMA_VERSION = "harness-runtime-v1"
+CHECKPOINT_SCHEMA_VERSION = "harness-checkpoint-v2"
+DURABLE_CHECKPOINT_SCHEMA_VERSION = "harness-durable-checkpoint-v2"
+RUNTIME_SCHEMA_VERSION = "harness-runtime-v2"
 
 
 class CheckpointCompatibilityError(ValueError):
@@ -180,7 +180,7 @@ def resume_payload_from_context(short_context: dict[str, Any] | None) -> dict[st
     observations = short.get("resume_observations")
     if isinstance(observations, list) and observations and isinstance(observations[-1], dict):
         return observations[-1]
-    return {"status": "succeeded", "summary": "外部操作已完成。"}
+    return {"status": "succeeded", "summary": "The external action is complete."}
 
 
 def restore_run_context(
@@ -264,7 +264,7 @@ def restore_run_context(
         or resume_payload.get("source")
         or "resume"
     )
-    summary = str(resume_payload.get("summary") or "外部操作已完成。")
+    summary = str(resume_payload.get("summary") or "The external action is complete.")
     data = resume_payload.get("data") if isinstance(resume_payload.get("data"), dict) else resume_payload
     observation = Observation(
         id=f"resume-{uuid4()}",
@@ -328,7 +328,7 @@ def restore_run_context(
             AgentMessage(
                 id=f"resume-context-{uuid4()}",
                 role="system",
-                content=f"外部任务恢复信息：{observation_content}",
+                content=f"External task resume information: {observation_content}",
             )
         )
     return RunContext(

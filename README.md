@@ -217,5 +217,7 @@ remote_search = McpServerSpec(
 )
 ```
 
-The frozen public contract is `harness-core-v1`; the current package version is
-`1.4.0`.
+The frozen public contract is `harness-core-v2`; the current package version is
+`2.0.0`. Consumers must import from `harness_core.runtime_sdk`,
+`harness_core.extension_sdk`, or `harness_core.adapter_sdk`. The versioned public
+symbol manifest is available from `harness_core.public_api`.

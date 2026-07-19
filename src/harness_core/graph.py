@@ -122,9 +122,9 @@ def create_harness_graph(
                 and str(current.get("policy_phase") or "") == "repair"
             ):
                 return _repair_or_fail_workflow(current, skill_policy, completion, config)
-            return _finish_failed(current, "Agent 达到最大推理步数，未能形成可靠答复。", config)
+            return _finish_failed(current, "The agent reached the maximum step count without a reliable answer.", config)
         current["status"] = "reasoning"
-        _emit(current, config, "agent.reasoning", "正在分析", "Agent 正在综合上下文并决定下一步。")
+        _emit(current, config, "agent.reasoning", "Reasoning", "The agent is evaluating context and selecting the next step.")
         allowed_tools = _allowed_tool_names(current, tool_registry)
         tools = model_tools_from_registry(
             tool_registry,
@@ -150,7 +150,7 @@ def create_harness_graph(
                     current,
                     config,
                     "budget.usage.recorded",
-                    "模型用量已记录",
+                    "Model usage recorded",
                     str((payload.get("usage") or {}).get("source") or ""),
                     {
                         "role": str(payload.get("role") or ""),
@@ -167,7 +167,7 @@ def create_harness_graph(
                 current,
                 config,
                 "model.route.selected",
-                "模型路由已选择",
+                "Model route selected",
                 str(payload.get("reason") or ""),
                 {**payload, "visible": False},
             )
@@ -229,7 +229,7 @@ def create_harness_graph(
                     current,
                     config,
                     "budget.usage.recorded",
-                    "模型用量已记录",
+                    "Model usage recorded",
                     str((route_payload.get("usage") or {}).get("source") or "estimated_failure"),
                     {
                         "role": str(route_payload.get("role") or ""),
@@ -243,7 +243,7 @@ def create_harness_graph(
                 current,
                 config,
                 "model.failed",
-                "模型调用失败",
+                "Model call failed",
                 str(exc),
                 {
                     "model_id": str(route_payload.get("model_id") or ""),
@@ -287,7 +287,7 @@ def create_harness_graph(
             current,
             config,
             "budget.usage.recorded",
-            "模型用量已记录",
+            "Model usage recorded",
             str(model_metrics["usage"].get("source") or ""),
             {
                 "role": turn.model_role,
@@ -321,7 +321,7 @@ def create_harness_graph(
             current,
             config,
             "model.completed",
-            "模型响应完成",
+            "Model response completed",
             turn.content[:160],
             model_metrics,
         )
@@ -342,7 +342,7 @@ def create_harness_graph(
             current["status"] = "executing_tools"
             return current
         if not turn.content.strip():
-            return _finish_failed(current, "模型本轮没有返回有效内容。", config)
+            return _finish_failed(current, "The model returned no usable content for this step.", config)
         skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
         completion = evaluate_workflow_completion(skill_policy, current)
         if not completion.allowed:
@@ -372,7 +372,7 @@ def create_harness_graph(
             current,
             config,
             "answer.completed",
-            "回答完成",
+            "Answer completed",
             answer.summary,
             {"final_answer": current["final_answer"]},
         )
@@ -740,7 +740,7 @@ def _apply_tool_result(current: dict[str, Any], result: ToolResult, config: dict
             current,
             config,
             "tool.requires_user_action",
-            "等待用户操作",
+            "Waiting for user action",
             result.summary,
             {
                 "tool_result": _tool_result_payload(result),
@@ -761,7 +761,7 @@ def _apply_tool_result(current: dict[str, Any], result: ToolResult, config: dict
             current,
             config,
             "tool.waiting_async",
-            "等待后台任务",
+            "Waiting for background task",
             result.summary,
             {"tool_result": _tool_result_payload(result)},
         )
@@ -772,7 +772,7 @@ def _apply_tool_result(current: dict[str, Any], result: ToolResult, config: dict
         current,
         config,
         event_type,
-        "工具执行完成" if result.status == "succeeded" else "工具执行失败",
+        "Tool execution completed" if result.status == "succeeded" else "Tool execution failed",
         result.summary or result.error,
         {
             "tool_result": _tool_result_payload(result),
@@ -799,7 +799,7 @@ def _apply_resume_payload(
         or source
     )
     status = str(payload.get("status") or "succeeded")
-    summary = str(payload.get("summary") or "用户操作已完成。")
+    summary = str(payload.get("summary") or "The user action is complete.")
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
     observation = Observation(
         id=f"resume-{uuid4()}",
@@ -868,7 +868,7 @@ def _apply_resume_payload(
     current["pending_action"] = None
     current["pending_async"] = None
     current["status"] = "reasoning"
-    _emit(current, config, "run.resumed", "继续执行", summary, {"observation": observation.model_dump(mode="json")})
+    _emit(current, config, "run.resumed", "Run resumed", summary, {"observation": observation.model_dump(mode="json")})
     return current
 
 
@@ -1051,8 +1051,8 @@ def _retry_or_fail_empty_model_response(
                 id=f"model-empty-repair-{uuid4()}",
                 role="system",
                 content=(
-                    "上一轮模型返回了空内容且没有工具调用。请重新完成当前步骤："
-                    "需要调用工具时输出合法工具调用，否则直接给出有效答复。"
+                    "The prior model step returned no content or tool calls. Complete the step again: "
+                    "Emit a valid tool call when needed; otherwise return a usable answer."
                 ),
                 metadata={
                     "kind": "empty_model_response_repair",
@@ -1066,8 +1066,8 @@ def _retry_or_fail_empty_model_response(
             current,
             config,
             "model.empty_response.retrying",
-            "模型空响应重试",
-            "模型未返回有效内容，正在自动重试。",
+            "Retrying empty model response",
+            "The model returned no usable content; retrying automatically.",
             {
                 "error_code": EMPTY_MODEL_RESPONSE,
                 "retry_count": empty_count,
@@ -1078,7 +1078,7 @@ def _retry_or_fail_empty_model_response(
         return current
 
     metadata.pop("empty_model_retry_pending", None)
-    message = "模型服务连续未返回有效内容，本轮已安全结束，请重新尝试。"
+    message = "The model repeatedly returned no usable content. The run ended safely; try again."
     metadata["runtime_error"] = {
         "type": "EmptyModelResponse",
         "code": EMPTY_MODEL_RESPONSE,
@@ -1091,7 +1091,7 @@ def _retry_or_fail_empty_model_response(
         current,
         config,
         "model.empty_response.exhausted",
-        "模型空响应",
+        "Empty model response",
         message,
         {
             "error_code": EMPTY_MODEL_RESPONSE,
@@ -1150,7 +1150,7 @@ def _wait_for_workflow_input(
         id=f"clarification-{uuid4()}",
         run_id=str(current.get("run_id") or ""),
         action_type="clarification",
-        title="需要补充信息",
+        title="Additional information required",
         prompt=question,
         payload={
             "state": "waiting_user_input",
@@ -1167,7 +1167,7 @@ def _wait_for_workflow_input(
         current,
         config,
         "skill.waiting_user_input",
-        "等待补充信息",
+        "Waiting for additional information",
         question,
         {
             "skill_id": skill.skill_id,
@@ -1357,7 +1357,7 @@ def _finish_failed(
     current["final_answer"] = answer.model_dump(mode="json")
     current["status"] = "failed"
     current["pending_tool_calls"] = []
-    _emit(current, config, "agent.failed", "执行失败", message, {"final_answer": current["final_answer"]})
+    _emit(current, config, "agent.failed", "Execution failed", message, {"final_answer": current["final_answer"]})
     return current
 
 

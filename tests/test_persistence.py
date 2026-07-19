@@ -115,7 +115,7 @@ def test_checkpoint_readers_keep_legacy_unversioned_payloads_compatible():
     [
         (
             checkpoint_from_runtime,
-            {"schema_version": "harness-runtime-v2", "checkpoint": {}},
+            {"schema_version": "harness-runtime-v3", "checkpoint": {}},
         ),
         (
             checkpoint_from_runtime,
@@ -126,7 +126,7 @@ def test_checkpoint_readers_keep_legacy_unversioned_payloads_compatible():
         ),
         (
             checkpoint_from_durable_state,
-            {"schema_version": "harness-durable-checkpoint-v2"},
+            {"schema_version": "harness-durable-checkpoint-v3"},
         ),
     ],
 )
@@ -139,7 +139,7 @@ def test_restore_run_context_rejects_checkpoint_from_another_run():
     with pytest.raises(CheckpointCompatibilityError, match="run_id mismatch"):
         restore_run_context(
             checkpoint={
-                "schema_version": "harness-checkpoint-v1",
+                "schema_version": "harness-checkpoint-v2",
                 "run_id": "run-2",
                 "messages": [],
                 "observations": [],

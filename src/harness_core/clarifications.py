@@ -45,7 +45,7 @@ def clarification_for_missing_arguments(call: ToolCall, spec: Any) -> Clarificat
     display_fields.extend(" / ".join(str(labels.get(name) or name) for name in group) for group in missing_groups)
     prompt = str(clarification.get("prompt") or "").strip()
     if not prompt:
-        prompt = f"请补充以下信息：{'、'.join(display_fields)}。"
+        prompt = f"Please provide: {'; '.join(display_fields)}."
     return ClarificationRequest(
         issue_type="missing_input",
         prompt=prompt,
@@ -90,7 +90,7 @@ def clarification_from_validation_error(
 
     named_fields = missing_fields or invalid_fields
     if named_fields and fallback_prompt.endswith("："):
-        fallback_prompt += "、".join(str(labels.get(name) or name) for name in named_fields)
+        fallback_prompt += "; ".join(str(labels.get(name) or name) for name in named_fields)
     return ClarificationRequest(
         issue_type=issue_type,
         prompt=fallback_prompt,
@@ -105,7 +105,7 @@ def clarification_tool_result(
     *,
     run_id: str,
     request: ClarificationRequest,
-    visible_label: str = "需要补充信息",
+    visible_label: str = "Additional information required",
 ) -> ToolResult:
     payload = request.payload()
     pending_action = PendingAction(

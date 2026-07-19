@@ -986,9 +986,9 @@ def _model_tool_description(spec: ToolSpec) -> str:
     parts = [spec.description.strip()]
     policy = spec.usage_policy if isinstance(spec.usage_policy, dict) else {}
     if policy.get("when_to_use"):
-        parts.append(f"适用：{policy['when_to_use']}")
+        parts.append(f"Use when: {policy['when_to_use']}")
     if policy.get("when_not_to_use"):
-        parts.append(f"不适用：{policy['when_not_to_use']}")
+        parts.append(f"Do not use when: {policy['when_not_to_use']}")
     return "\n".join(part for part in parts if part)
 
 

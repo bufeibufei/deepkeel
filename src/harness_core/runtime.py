@@ -420,7 +420,7 @@ class HarnessRuntime:
             if failure.category != "canceled":
                 emit({
                     "event_type": "agent.failed",
-                    "title": "Agent 运行失败",
+                    "title": "Agent run failed",
                     "summary": failure.user_message,
                     "payload": {
                         "error": failure.detail,
@@ -645,7 +645,7 @@ class HarnessRuntime:
         event = project_runtime_event(
             {
                 "event_type": "agent.failed",
-                "title": "Agent 上下文准备失败",
+                "title": "Agent context setup failed",
                 "summary": failure.user_message,
                 "payload": {
                     "error": failure.detail,
@@ -1107,7 +1107,7 @@ def project_harness_result(
         _project_observation(item, observation_kinds or {}) for item in checkpoint_observations
     ]
     checkpoint = {
-        "schema_version": "harness-checkpoint-v1",
+        "schema_version": "harness-checkpoint-v2",
         "run_id": str(state.get("run_id") or ""),
         "graph_thread_id": str(state.get("thread_id") or ""),
         "turn_id": str(state.get("turn_id") or ""),
@@ -1129,7 +1129,7 @@ def project_harness_result(
     trace = _trace_from_events(streamed_events, observation_kinds=observation_kinds or {})
     context_snapshot = build_context_snapshot(question, context_bundle, short_context, skill)
     runtime = {
-        "schema_version": "harness-runtime-v1",
+        "schema_version": "harness-runtime-v2",
         "core_contract_version": HARNESS_CORE_CONTRACT_VERSION,
         "core_version": HARNESS_CORE_VERSION,
         "loop_engine": "langgraph_native_tools",
@@ -1205,13 +1205,12 @@ def project_harness_result(
         for key, value in final_answer.items()
         if key in answer_fields and key != "metadata"
     }
-    answer_values.setdefault(
-        "status",
+    answer_values["status"] = (
         "completed"
         if runtime_status == "completed"
         else "failed"
         if runtime_status == "failed"
-        else "interrupted",
+        else "interrupted"
     )
     answer_values.setdefault("stop_reason", stop_reason)
     typed_pending_action = (
@@ -1502,7 +1501,7 @@ def _project_final_answer(
         "",
     )
     if runtime_status in {"waiting_user_action", "waiting_user_input"}:
-        summary = str((pending_action or {}).get("prompt") or latest_summary or "需要你先完成一项操作，我会继续处理当前问题。")
+        summary = str((pending_action or {}).get("prompt") or latest_summary or "Complete the required action and the agent will continue.")
         return {
             "answer_mode": "tool_handoff",
             "summary": summary,
@@ -1510,9 +1509,9 @@ def _project_final_answer(
             "pending_action": pending_action or {},
         }
     if runtime_status == "task_running":
-        summary = latest_summary or "任务已开始生成，完成后我会继续承接当前问题。"
+        summary = latest_summary or "The asynchronous task has started; the agent will continue when it finishes."
         return {"answer_mode": "task_running", "summary": summary, "markdown": summary}
-    summary = "本轮执行未能形成有效答复。"
+    summary = "The run did not produce a usable answer."
     return {"answer_mode": "bubble", "summary": summary, "markdown": summary, "status": "failed"}
 
 

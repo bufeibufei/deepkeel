@@ -118,8 +118,8 @@ class SubAgentExecutor:
         self._emit(
             event_sink,
             "subagent.batch.started",
-            "并行专业判断",
-            f"已分派 {len(request.tasks)} 个受约束的专业判断。",
+            "Parallel specialist analysis",
+            f"Dispatched {len(request.tasks)} bounded specialist tasks.",
             request,
             visible=True,
         )
@@ -239,7 +239,7 @@ class SubAgentExecutor:
                                 "risks": [],
                                 "recommendations": [],
                                 "claims": [],
-                                "warnings": ["父运行已结束，迟到结果未进入主运行上下文。"],
+                                "warnings": ["The parent run ended; the late result was not merged."],
                                 "output": {},
                                 "error": "parent agent run became terminal",
                                 "metadata": {
@@ -297,10 +297,10 @@ class SubAgentExecutor:
         self._emit(
             event_sink,
             "subagent.batch.completed",
-            "专业判断已汇总",
+            "Specialist results synthesized",
             (
-                f"{completed}/{len(ordered)} 个专业判断已返回主 Agent。"
-                + (f"其中 {degraded} 个使用了结构化降级结果。" if degraded else "")
+                f"{completed}/{len(ordered)} specialist results returned to the lead agent."
+                + (f"Of these, {degraded} used structured degraded results." if degraded else "")
             ),
             request,
             visible=True,
@@ -1134,8 +1134,8 @@ def _emit_subagent_tools(
     names = [call.name for call in calls]
     sink({
         "event_type": f"subagent.tools.{status}",
-        "title": "子 Agent 正在补充依据" if status == "started" else "子 Agent 已完成依据核验",
-        "summary": "、".join(names),
+        "title": "Subagent is gathering evidence" if status == "started" else "Subagent evidence verified",
+        "summary": "; ".join(names),
         "payload": {
             "visible": False,
             "child_run_id": child_run_id,
@@ -1159,8 +1159,8 @@ def _emit_subagent_model_retry(
         return
     sink({
         "event_type": "subagent.model.retrying",
-        "title": "专业判断正在重试",
-        "summary": "模型本次未返回有效内容，正在自动重试。",
+        "title": "Retrying specialist analysis",
+        "summary": "The model returned no usable content; retrying automatically.",
         "payload": {
             "visible": False,
             "child_run_id": child_run_id,
@@ -1196,7 +1196,7 @@ def _repair_prompt(
 ) -> str:
     return json.dumps(
         {
-            "task": "修复上一份输出，使其严格满足 JSON Schema。只输出 JSON 对象，不添加解释。",
+            "task": "Repair the prior output to satisfy the JSON Schema. Return only a JSON object.",
             "validation_error": error,
             "output_schema": schema,
             "invalid_output": str(raw or "")[-12000:],
@@ -1210,9 +1210,9 @@ def _repair_prompt(
 
 def _default_system_prompt(spec: SubAgentSpec) -> str:
     return (
-        f"你是{spec.label}。只完成被委派的单一判断，不与用户对话，不扩展任务边界。"
-        "不得递归委派，也不得执行有副作用的操作。必须区分输入事实、规则推论与不确定项。"
-        "严格按照给定 JSON Schema 输出，不要附加 Markdown。"
+        f"You are {spec.label}. Complete only the delegated task; do not converse with the user or expand scope."
+        "Do not delegate recursively or perform side effects. Separate input facts, inference, and uncertainty."
+        "Return exactly the given JSON Schema without Markdown."
     )
 
 
@@ -1358,7 +1358,7 @@ def _fallback_subagent_output(value: str) -> dict[str, Any] | None:
         "risks": [],
         "recommendations": [],
         "claims": [],
-        "warnings": ["模型返回了可用文本，但结构化格式未通过校验；主 Agent 应降低置信度并复核。"],
+        "warnings": ["The model returned usable text but failed schema validation; the lead agent should lower confidence and verify."],
         "confidence": 0.35,
         "abstained": False,
     }

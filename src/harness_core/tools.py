@@ -302,7 +302,7 @@ class ToolExecutor:
                     normalized,
                     run_id=context.run_id,
                     request=clarification,
-                    visible_label="需要补充信息",
+                    visible_label="Additional information required",
                 ),
                 started_at,
                 phase="validation",
@@ -412,7 +412,7 @@ class ToolExecutor:
             except Exception as exc:
                 failed = _failed_result(
                     normalized,
-                    "工具执行状态恢复失败，请重试本次操作。",
+                    "Tool execution recovery failed. Retry the operation.",
                     retryable=True,
                 )
                 failed.metadata["replay_error"] = str(exc)
@@ -458,9 +458,9 @@ class ToolExecutor:
             )
         if claim.status in {"corrupt", "uncertain", "exhausted"}:
             messages = {
-                "corrupt": "工具执行记录已损坏，本轮已安全终止，请重新发起操作。",
-                "uncertain": "上次工具执行结果未能确认，为避免重复操作，本轮已安全终止。",
-                "exhausted": "工具执行已达到最大恢复次数，本轮已安全终止。",
+                "corrupt": "The tool execution record is corrupt. The run ended safely; start again.",
+                "uncertain": "The prior tool result is uncertain. The run ended safely to avoid duplication.",
+                "exhausted": "Tool recovery attempts were exhausted and the run ended safely.",
             }
             failed = _failed_result(normalized, messages[claim.status])
             failed.metadata = {
@@ -570,7 +570,7 @@ class ToolExecutor:
             if suspension_seen:
                 rejected = _failed_result(
                     call,
-                    "需先完成上一项操作，本工具尚未执行。",
+                    "The previous action must finish before this tool can run.",
                 )
                 rejected.metadata["suspension_rejected"] = True
                 rejected.metadata["executed"] = False
@@ -879,7 +879,7 @@ def tool_result_from_legacy(
             run_id=context.run_id,
             tool_call_id=call.id,
             action_type=str(raw.get("action_type") or raw.get("handoff_view") or call.name),
-            title=str(raw.get("visible_label") or "等待用户操作"),
+            title=str(raw.get("visible_label") or "Waiting for user action"),
             prompt=summary,
             handoff_view=str(raw.get("handoff_view") or ""),
             payload=data,
@@ -980,7 +980,7 @@ def _invalid_arguments_result(
             "executed": False,
         }
         return result
-    summary = "本轮工具参数不符合约束，已跳过并交由主 Agent 继续处理。"
+    summary = "Tool arguments violated the contract; the call was skipped and control returned to the agent."
     data = {
         "status": "skipped",
         "reason_code": "invalid_tool_arguments",

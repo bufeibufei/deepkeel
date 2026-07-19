@@ -22,6 +22,7 @@ from harness_core import (
     ModelProviderInfo,
     ModelTurn,
     PendingAction,
+    RuntimeRequest,
     RuntimePorts,
     RuntimeStateConflict,
     RuntimeStateMutation,
@@ -40,6 +41,18 @@ from harness_core import (
 from harness_core.handoffs import HandoffSpec
 from harness_core.mcp import McpServerSpec
 from harness_core.subagents import SubAgentSpec
+
+
+def run_runtime(runtime, question: str, **kwargs):
+    request = RuntimeRequest(
+        question=question,
+        user_id=str(kwargs.pop("user_id", "local-device")),
+        short_context=dict(kwargs.pop("short_context", {})),
+        context_bundle=dict(kwargs.pop("context_bundle", {})),
+        skill_activation=dict(kwargs.pop("skill_activation", {})),
+        model_policy=dict(kwargs.pop("model_policy", {})),
+    )
+    return runtime.run(request, **kwargs)
 
 
 class EchoModelAdapter:
@@ -160,7 +173,7 @@ def test_runtime_ports_reject_unknown_configuration_keys() -> None:
         HarnessRuntimeBuilder().configure_ports(database=object())
 
 
-def test_legacy_capability_pack_remains_supported() -> None:
+def test_v1_capability_pack_is_explicitly_rejected() -> None:
     @dataclass(frozen=True, slots=True)
     class LegacyPack:
         package_id = "example.legacy"
@@ -177,10 +190,10 @@ def test_legacy_capability_pack_remains_supported() -> None:
             executor.register("legacy.read", lambda *_args: {"status": "ok"})
 
     registry = ToolRegistry()
-    runtime = HarnessRuntimeBuilder(registry).add_capability_pack(LegacyPack()).build()
+    with pytest.raises(ValueError, match="unsupported contract harness-core-v1"):
+        HarnessRuntimeBuilder(registry).add_capability_pack(LegacyPack())
 
-    assert runtime.tool_registry is registry
-    assert runtime.capability_contributions[0].tools == ("legacy.read",)
+    assert registry.list_tools() == []
 
 
 def test_runtime_ports_dataclass_remains_directly_constructible() -> None:
@@ -195,13 +208,14 @@ def test_explicit_model_adapter_and_telemetry_port_run_without_legacy_reflection
         .build()
     )
 
-    result = runtime.run_turn(
+    result = run_runtime(
+        runtime,
         "hello",
         provider=EchoModelAdapter(),
         context_bundle={"agent_session_id": "run-explicit-adapter"},
     )
 
-    assert result["final_answer"]["markdown"] == "hello back"
+    assert result.final_answer.markdown == "hello back"
     events = telemetry.snapshot()
     assert events
     assert all(event.run_id == "run-explicit-adapter" for event in events)
@@ -225,14 +239,15 @@ def test_telemetry_failure_is_fail_open_and_visible_in_diagnostics() -> None:
         .build()
     )
 
-    result = runtime.run_turn(
+    result = run_runtime(
+        runtime,
         "hello",
         provider=EchoModelAdapter(),
         context_bundle={"agent_session_id": "run-broken-telemetry"},
     )
 
-    assert result["agent_runtime"]["status"] == "completed"
-    diagnostics = result["agent_runtime"]["diagnostics"]["telemetry"]
+    assert result.status.value == "completed"
+    diagnostics = result.diagnostics["telemetry"]
     assert diagnostics["status"] == "degraded"
     assert diagnostics["error_count"] > 0
 
@@ -325,8 +340,8 @@ def test_capability_pack_installs_every_extension_kind_from_real_registrations()
             )
             return super().invoke(request, on_text_delta=on_text_delta)
 
-    result = runtime.run_turn("hello", provider=ContextAwareModel())
-    assert result["final_answer"]["markdown"] == "hello back"
+    result = run_runtime(runtime, "hello", provider=ContextAwareModel())
+    assert result.final_answer.markdown == "hello back"
 
 
 def test_failed_capability_install_rolls_back_all_partial_registrations() -> None:
@@ -389,7 +404,8 @@ def test_context_setup_failure_returns_standard_terminal_contract() -> None:
         .build()
     )
 
-    result = runtime.run_turn(
+    result = run_runtime(
+        runtime,
         "hello",
         provider=EchoModelAdapter(),
         context_bundle={
@@ -399,13 +415,13 @@ def test_context_setup_failure_returns_standard_terminal_contract() -> None:
         event_sink=events.append,
     )
 
-    assert result["agent_runtime"]["status"] == "failed"
-    assert result["final_answer"]["status"] == "failed"
+    assert result.status.value == "failed"
+    assert result.final_answer.status == "failed"
     assert events[-1]["event_type"] == "agent.failed"
     assert events[-1]["payload"]["phase"] == "context_setup"
-    assert result["agent_runtime"]["ui_state"]["can_send"] is True
-    assert result["agent_runtime"]["ui_state"]["composer_mode"] == "ready"
-    assert result["error"]["message"] != "context backend unavailable"
+    assert result.ui_state["can_send"] is True
+    assert result.ui_state["composer_mode"] == "ready"
+    assert result.error["message"] != "context backend unavailable"
     settled = telemetry.snapshot()[-1]
     assert settled.event_name == "runtime.settled"
     assert settled.status == "failed"
@@ -450,7 +466,8 @@ def test_context_window_deduplicates_history_and_enforces_a_deterministic_budget
 def test_runtime_exposes_context_window_diagnostics_without_prompt_payloads() -> None:
     runtime = HarnessRuntimeBuilder().build()
 
-    result = runtime.run_turn(
+    result = run_runtime(
+        runtime,
         "hello",
         provider=EchoModelAdapter(),
         context_bundle={
@@ -459,13 +476,13 @@ def test_runtime_exposes_context_window_diagnostics_without_prompt_payloads() ->
         },
     )
 
-    diagnostics = result["agent_runtime"]["diagnostics"]["context_window"]
+    diagnostics = result.diagnostics["context_window"]
     assert diagnostics["schema_version"] == "harness-context-window-v1"
     assert diagnostics["final_tokens"] > 0
     assert "facts" not in diagnostics
     assert any(
-        event.get("source_event_type") == "budget.usage.recorded"
-        for event in result["events"]
+        event.source_event_type == "budget.usage.recorded"
+        for event in result.events
     )
 
 
@@ -639,7 +656,7 @@ def test_runtime_state_store_commits_status_event_and_checkpoint_atomically() ->
         event_type="runtime.checkpoint.committed",
         target_status="waiting_user_input",
         event_payload={"status": "waiting_user_input"},
-        checkpoint_state={"schema_version": "harness-durable-checkpoint-v1"},
+        checkpoint_state={"schema_version": "harness-durable-checkpoint-v2"},
         expected_version=0,
         expected_sequence=0,
     )
@@ -827,15 +844,16 @@ def test_runtime_waiting_action_is_committed_through_atomic_state_store() -> Non
         RuntimePorts(runtime_state_store=store)
     ).build()
 
-    result = runtime.run_turn(
+    result = run_runtime(
+        runtime,
         "start workflow",
         provider=HandoffModelAdapter(),
         context_bundle={"agent_session_id": "run-handoff"},
     )
     snapshot = store.snapshot("run-handoff")
 
-    assert result["agent_runtime"]["status"] == "waiting_user_action"
-    recovery = result["agent_runtime"]["diagnostics"]["recovery"]
+    assert result.status.value == "waiting_user_action"
+    recovery = result.diagnostics["recovery"]
     assert recovery["atomic_checkpoint"] == "persisted"
     assert recovery["state_receipt"]["status"] == "waiting_user_action"
     assert snapshot["status"] == "waiting_user_action"
@@ -979,8 +997,8 @@ def test_capability_resources_close_with_runtime_and_failed_install() -> None:
 def test_runtime_diagnostics_expose_installed_capabilities_without_payloads() -> None:
     runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
 
-    result = runtime.run_turn("hello", provider=EchoModelAdapter())
-    capabilities = result["agent_runtime"]["diagnostics"]["capabilities"]
+    result = run_runtime(runtime, "hello", provider=EchoModelAdapter())
+    capabilities = result.diagnostics["capabilities"]
 
     assert capabilities["packages"] == [
         {

@@ -24,7 +24,7 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             True,
             status_code or 429,
             retry_after,
-            "当前模型请求较多，已尝试切换备用模型。",
+            "The model is rate limited; a fallback was attempted.",
         )
     if isinstance(exc, (TimeoutError, socket.timeout)) or any(
         token in message for token in ("timed out", "timeout")
@@ -34,7 +34,7 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             True,
             status_code,
             retry_after,
-            "模型响应超时，已尝试切换备用模型。",
+            "The model timed out; a fallback was attempted.",
         )
     if status_code in {400, 401, 403, 404, 409, 422}:
         return ModelFailureInfo(
@@ -42,7 +42,7 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             False,
             status_code,
             0.0,
-            "模型请求未被服务接受，请检查模型配置。",
+            "The model request was rejected. Check model configuration.",
         )
     if (
         status_code in {500, 502, 503, 504}
@@ -62,14 +62,14 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             True,
             status_code,
             retry_after,
-            "模型服务暂时不可用，已尝试切换备用模型。",
+            "The model is unavailable; a fallback was attempted.",
         )
     return ModelFailureInfo(
         "provider_error",
         False,
         status_code,
         0.0,
-        "模型服务本轮调用失败，请稍后重试。",
+        "The model call failed. Try again later.",
     )
 
 

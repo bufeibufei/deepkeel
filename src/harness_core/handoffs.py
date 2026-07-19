@@ -17,7 +17,7 @@ class HandoffSpec:
     cancel_label: str
     handoff_view: str = ""
     secondary_label: str = ""
-    aria_label: str = "待用户操作"
+    aria_label: str = "User action pending"
     completion_artifact_type: str = ""
 
     def presentation(self) -> dict[str, str]:
@@ -64,15 +64,15 @@ def handoff_spec(
     if configured is not None:
         return configured
     source = payload if isinstance(payload, dict) else {}
-    title = str(source.get("title") or "继续当前操作").strip()
-    summary = str(source.get("summary") or "完成操作后，Agent 会自动继续当前对话").strip()
+    title = str(source.get("title") or "Continue current action").strip()
+    summary = str(source.get("summary") or "The agent will resume after the action is complete").strip()
     return HandoffSpec(
         action_kind="tool_handoff",
-        noun="操作",
+        noun="action",
         title=title,
         summary=summary,
-        primary_label="继续操作",
-        cancel_label="取消本次操作",
+        primary_label="Continue",
+        cancel_label="Cancel",
         handoff_view=_handoff_view(source),
     )
 

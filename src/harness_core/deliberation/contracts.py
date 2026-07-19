@@ -17,7 +17,7 @@ class DeliberationParticipant(BaseModel):
 class DeliberationSpec(BaseModel):
     deliberation_id: str = Field(min_length=1, max_length=128)
     question: str = Field(min_length=1, max_length=2000)
-    fact_packet: dict[str, Any]
+    facts: dict[str, Any]
     participants: list[DeliberationParticipant] = Field(min_length=2, max_length=3)
     moderator_agent_id: str = Field(min_length=1, max_length=80)
     max_rounds: int = Field(default=2, ge=1, le=3)

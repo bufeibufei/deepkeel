@@ -68,7 +68,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "RUN_CANCELED",
             category="canceled",
             retryable=False,
-            user_message="本轮任务已取消。",
+            user_message="The run was canceled.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -78,7 +78,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "POLICY_DENIED",
             category="policy",
             retryable=False,
-            user_message="当前操作未通过安全策略校验，请调整请求后再试。",
+            user_message="The operation was denied by policy. Revise the request and try again.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -87,7 +87,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "BUDGET_EXCEEDED",
             category="budget",
             retryable=False,
-            user_message="本轮任务已达到执行预算，请缩小问题范围后重新发起。",
+            user_message="The run exhausted its budget. Narrow the request and try again.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -96,7 +96,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "UPSTREAM_TIMEOUT",
             category="timeout",
             retryable=True,
-            user_message="上游服务响应超时，本轮已安全结束，可以重新尝试。",
+            user_message="The upstream service timed out. The run ended safely and may be retried.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -115,7 +115,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "UPSTREAM_UNAVAILABLE",
             category="upstream",
             retryable=True,
-            user_message="依赖服务暂时不可用，本轮已安全结束，请稍后重试。",
+            user_message="A dependency is unavailable. The run ended safely; try again later.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -124,7 +124,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code or "RUNTIME_CONTRACT_INVALID",
             category="contract",
             retryable=False,
-            user_message="本轮执行结果未通过结构校验，任务已安全结束。",
+            user_message="The result failed contract validation and the run ended safely.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -133,7 +133,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             code=explicit_code,
             category="canceled",
             retryable=False,
-            user_message="本轮任务已取消。",
+            user_message="The run was canceled.",
             detail=detail,
             exception_type=exception_type,
         )
@@ -141,7 +141,7 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
         code=explicit_code or "RUNTIME_INTERNAL_ERROR",
         category="internal",
         retryable=True,
-        user_message="本轮执行遇到异常并已安全结束，可以重新尝试。",
+        user_message="The run failed safely and may be retried.",
         detail=detail,
         exception_type=exception_type,
     )
@@ -153,31 +153,31 @@ def failure_from_code(code: str, detail: str = "") -> RuntimeFailure:
     if normalized == "POLICY_DENIED":
         category: FailureCategory = "policy"
         retryable = False
-        user_message = "当前操作未通过安全策略校验，请调整请求后再试。"
+        user_message = "The operation was denied by policy. Revise the request and try again."
     elif normalized == "BUDGET_EXCEEDED":
         category = "budget"
         retryable = False
-        user_message = "本轮任务已达到执行预算，请缩小问题范围后重新发起。"
+        user_message = "The run exhausted its budget. Narrow the request and try again."
     elif "TIMEOUT" in normalized:
         category = "timeout"
         retryable = True
-        user_message = "上游服务响应超时，本轮已安全结束，可以重新尝试。"
+        user_message = "The upstream service timed out. The run ended safely and may be retried."
     elif any(marker in normalized for marker in ("PROVIDER", "UPSTREAM", "ASYNC_TOOL")):
         category = "upstream"
         retryable = True
-        user_message = "依赖服务暂时不可用，本轮已安全结束，请稍后重试。"
+        user_message = "A dependency is unavailable. The run ended safely; try again later."
     elif any(marker in normalized for marker in ("CONTRACT", "SCHEMA", "VALIDATION")):
         category = "contract"
         retryable = False
-        user_message = "本轮执行结果未通过结构校验，任务已安全结束。"
+        user_message = "The result failed contract validation and the run ended safely."
     elif any(marker in normalized for marker in ("CANCEL", "CANCELED", "CANCELLED")):
         category = "canceled"
         retryable = False
-        user_message = "本轮任务已取消。"
+        user_message = "The run was canceled."
     else:
         category = "internal"
         retryable = not any(marker in normalized for marker in ("MISSING", "INVALID"))
-        user_message = "本轮执行遇到异常并已安全结束，可以重新尝试。"
+        user_message = "The run failed safely and may be retried."
     return RuntimeFailure(
         code=normalized,
         category=category,

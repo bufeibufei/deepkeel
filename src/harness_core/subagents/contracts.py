@@ -121,8 +121,8 @@ def delegation_tool_input_schema(
         "type": "string",
         "minLength": 1,
         "description": (
-            "必须选择已注册且与任务领域匹配的专业 Agent。"
-            + (f"\n当前可用 Agent：\n{catalog}" if catalog else "")
+            "Select a registered specialist agent that matches the task domain."
+            + (f"\nAvailable agents:\n{catalog}" if catalog else "")
         ),
     }
     if agent_ids:
@@ -134,7 +134,7 @@ def delegation_tool_input_schema(
             "delegation_id": {
                 "type": "string",
                 "minLength": 1,
-                "description": "本批专业协作的稳定标识。",
+                "description": "Stable identifier for this specialist batch.",
             },
             "max_concurrency": {
                 "type": "integer",
@@ -146,7 +146,7 @@ def delegation_tool_input_schema(
                 "type": "array",
                 "minItems": 1,
                 "maxItems": 3,
-                "description": "仅放入 1-3 个边界清晰、互不依赖的专业判断任务。",
+                "description": "Include 1-3 bounded and independent specialist tasks.",
                 "items": {
                     "type": "object",
                     "properties": {
@@ -160,11 +160,11 @@ def delegation_tool_input_schema(
                             "type": "string",
                             "minLength": 1,
                             "maxLength": 2000,
-                            "description": "该专业 Agent 要独立完成的明确判断目标。",
+                            "description": "A precise objective for the specialist agent.",
                         },
                         "input_data": {
                             "type": "object",
-                            "description": "完成判断所需的事实输入，不要放提示词或模型配置。",
+                            "description": "Facts required for the task; exclude prompts and model configuration.",
                             "additionalProperties": True,
                         },
                         "constraints": {

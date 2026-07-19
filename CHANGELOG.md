@@ -1,5 +1,19 @@
 # Changelog
 
+## 2.0.0
+
+- Made `HarnessRuntime.run(RuntimeRequest) -> RuntimeResult` the sole Runtime
+  execution API and removed the v1 mapping entrypoint.
+- Moved product dictionaries, localization, and domain context adaptation to
+  the Host boundary.
+- Replaced product-shaped context fields with generic `subject`, `facts`,
+  provenance, and metadata contracts; incompatible v1 snapshots now fail
+  explicitly.
+- Added versioned Runtime, Extension, and Adapter SDKs plus a machine-readable
+  public API manifest.
+- Added workspace packaging so the Host depends on the installable
+  `harness-agent-core` distribution rather than scanning Core source files.
+
 ## 1.4.0
 
 - Added a product-neutral reference projection Port with generic record and web

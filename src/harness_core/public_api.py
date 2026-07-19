@@ -1,0 +1,19 @@
+"""Machine-readable manifest for the frozen Harness Core v2 public surface."""
+
+from harness_core.adapter_sdk import ADAPTER_SDK_API
+from harness_core.extension_sdk import EXTENSION_SDK_API
+from harness_core.runtime_sdk import RUNTIME_SDK_API
+
+PUBLIC_API_VERSION = "2.0.0"
+PUBLIC_API_BY_LAYER = {
+    "runtime": RUNTIME_SDK_API,
+    "extension": EXTENSION_SDK_API,
+    "adapter": ADAPTER_SDK_API,
+}
+PUBLIC_API_SYMBOLS = frozenset(
+    symbol
+    for symbols in PUBLIC_API_BY_LAYER.values()
+    for symbol in symbols
+)
+
+__all__ = ["PUBLIC_API_BY_LAYER", "PUBLIC_API_SYMBOLS", "PUBLIC_API_VERSION"]

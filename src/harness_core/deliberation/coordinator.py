@@ -36,7 +36,7 @@ class DeliberationCoordinator:
     ) -> DeliberationResult:
         stop_requested = should_stop or (lambda: False)
         state = self._restore_state(resume_state)
-        self._emit(event_sink, "deliberation.started", "多学派辩论已开始", spec, {
+        self._emit(event_sink, "deliberation.started", "Deliberation started", spec, {
             "participants": [item.model_dump(mode="json") for item in spec.participants],
         })
 
@@ -208,9 +208,9 @@ class DeliberationCoordinator:
     @staticmethod
     def _participant_task(spec, participant, phase, round_index, prior_arguments, moderator):
         objective = (
-            f"以{participant.label}立场独立提出首轮判断：{spec.question}"
+            f"From the {participant.label} perspective, provide an independent opening judgment: {spec.question}"
             if phase == "opening"
-            else f"以{participant.label}立场回应主持人指定的未决分歧：{spec.question}"
+            else f"From the {participant.label} perspective, address the moderator-selected disagreement: {spec.question}"
         )
         return DelegationTask(
             id=f"{phase}-{round_index}-{participant.participant_instance_id}",
@@ -218,24 +218,24 @@ class DeliberationCoordinator:
             objective=objective,
             input_data={
                 "question": spec.question,
-                "fact_packet": spec.fact_packet,
+                "facts": spec.facts,
                 "phase": phase,
                 "round_index": round_index,
                 "other_views": [item.model_dump(mode="json") for item in prior_arguments],
                 "moderator": moderator or {},
             },
             constraints=[
-                "所有参与者以同一份事实包为基线，不得补造外部事实",
-                "事实包缺少完成本轮判断所需的信息时，只能使用允许的只读工具补证，并明确工具来源",
-                "回应观点而不是评价其他参与者身份，不以投票决定结论",
+                "All participants must use the same facts and must not fabricate external facts",
+                "When facts are insufficient, use only allowed read-only tools and cite their source",
+                "Address arguments rather than identities; do not decide by vote",
             ],
         )
 
     def _moderate(self, spec, arguments, context, providers, event_sink, *, phase: str, round_index: int):
         objective = (
-            "识别事实共识、实质分歧并决定继续讨论、定向回应或直接总结。"
+            "Identify factual consensus and substantive disagreement, then continue, target a response, or synthesize."
             if phase == "moderate"
-            else "综合全部发言，形成直接主结论、共同依据、保留分歧、成立条件、行动建议和判断边界。"
+            else "Synthesize a direct conclusion, shared evidence, remaining disagreements, conditions, actions, and boundaries."
         )
         task = DelegationTask(
             id=f"{phase}-{round_index}-moderator",
@@ -243,15 +243,15 @@ class DeliberationCoordinator:
             objective=objective,
             input_data={
                 "question": spec.question,
-                "fact_packet": spec.fact_packet,
+                "facts": spec.facts,
                 "participant_views": [item.model_dump(mode="json") for item in arguments],
                 "phase": phase,
                 "round_index": round_index,
                 "max_rounds": spec.max_rounds,
             },
             constraints=[
-                "不按票数裁决，不引入事实包或只读工具结果之外的新外部事实",
-                "moderate 阶段必须明确 decision、未决问题和需要回应的 agent_id",
+                "Do not decide by vote or introduce facts beyond the supplied facts and read-only tool results",
+                "The moderation phase must state its decision, unresolved questions, and target agent IDs",
             ],
         )
         results, calls, retries = self._execute_with_retry(
@@ -280,7 +280,7 @@ class DeliberationCoordinator:
             "round_index": round_index,
             "error": item.error if item else "moderator result is missing",
         }
-        self._emit(event_sink, f"deliberation.{phase}.completed", "主 Agent 已完成阶段整理", spec, payload)
+        self._emit(event_sink, f"deliberation.{phase}.completed", "The lead agent completed phase synthesis", spec, payload)
         return payload, calls, retries
 
     def _execute_with_retry(self, spec, tasks, *, context, providers, event_sink, stage):
@@ -354,7 +354,7 @@ class DeliberationCoordinator:
             model_calls=state["model_calls"],
             retry_count=state["retry_count"],
         )
-        self._emit(sink, "deliberation.completed", "多学派辩论已完成", spec, {
+        self._emit(sink, "deliberation.completed", "Deliberation completed", spec, {
             "status": status,
             "stop_reason": reason,
             "summary": synthesis.get("summary", ""),
