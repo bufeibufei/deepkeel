@@ -1,0 +1,21 @@
+[project]
+name = "kuitianjiandi-harness-core"
+version = "1.0.0"
+description = "Product-neutral Harness Agent runtime core."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "jsonschema>=4.23.0",
+  "langchain-core>=1.2.0",
+  "langgraph>=1.2.0",
+  "pydantic>=2.8.0",
+]
+
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["harness_core*"]
+
