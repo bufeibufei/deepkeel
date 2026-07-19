@@ -21,6 +21,7 @@ from harness_core.model_routing import ModelRouter
 from harness_core.persistence import DurableCheckpointStore
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.policy import PolicyEngine
+from harness_core.references import ReferenceProjector
 from harness_core.runtime import HarnessRuntime, SystemPromptFactory
 from harness_core.state_store import RuntimeStateStore
 from harness_core.telemetry import TelemetryPort
@@ -47,6 +48,7 @@ class RuntimePorts:
     context_builder: ContextBuilder | None = None
     context_window_manager: ContextWindowManager | None = None
     runtime_state_store: RuntimeStateStore | None = None
+    reference_projector: ReferenceProjector | None = None
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -178,6 +180,7 @@ class HarnessRuntimeBuilder:
             context_builder=self._ports.context_builder,
             context_window_manager=self._ports.context_window_manager,
             runtime_state_store=self._ports.runtime_state_store,
+            reference_projector=self._ports.reference_projector,
         )
 
     def _install_pack(

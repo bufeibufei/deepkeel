@@ -46,6 +46,10 @@ from harness_core.capabilities import CapabilityCatalog, CapabilityContribution
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.prompts import harness_system_prompt
 from harness_core.policy import DefaultPolicyEngine, PolicyEngine
+from harness_core.references import (
+    DefaultReferenceProjector,
+    ReferenceProjector,
+)
 from harness_core.runtime_api import RuntimeRequest, RuntimeResult
 from harness_core.skills import SkillPolicy
 from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
@@ -112,6 +116,7 @@ class HarnessRuntime:
         context_builder: ContextBuilder | None = None,
         context_window_manager: ContextWindowManager | None = None,
         runtime_state_store: RuntimeStateStore | None = None,
+        reference_projector: ReferenceProjector | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
@@ -132,6 +137,7 @@ class HarnessRuntime:
             context_window_manager or DeterministicContextWindowManager()
         )
         self.runtime_state_store = runtime_state_store
+        self.reference_projector = reference_projector or DefaultReferenceProjector()
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
 
@@ -463,6 +469,7 @@ class HarnessRuntime:
             max_steps=self.max_steps,
             previous_diagnostics=previous_diagnostics,
             capability_manifest=self._capability_manifest(),
+            reference_projector=self.reference_projector,
         )
         if recovery_source:
             runtime_state = result.get("agent_runtime") if isinstance(result.get("agent_runtime"), dict) else {}
@@ -1088,6 +1095,7 @@ def project_harness_result(
     max_steps: int = 12,
     previous_diagnostics: dict[str, Any] | None = None,
     capability_manifest: dict[str, Any] | None = None,
+    reference_projector: ReferenceProjector | None = None,
 ) -> dict[str, Any]:
     graph_status = str(state.get("status") or "failed")
     state_error = (
@@ -1129,11 +1137,15 @@ def project_harness_result(
     legacy_results = [_legacy_tool_result(item) for item in typed_tool_results]
     legacy_results = [item for item in legacy_results if item]
     final_answer = _project_final_answer(state, runtime_status, pending_action, legacy_results)
-    references = _project_answer_references(typed_tool_results, final_answer)
+    reference_projection = (reference_projector or DefaultReferenceProjector())(
+        typed_tool_results,
+        final_answer,
+    )
+    references = reference_projection.references
     final_answer["references"] = references
-    literature_evidence = [item for item in references if item.get("kind") == "literature"]
-    if literature_evidence and not final_answer.get("evidence"):
-        final_answer["evidence"] = literature_evidence
+    evidence = reference_projection.evidence
+    if evidence and not final_answer.get("evidence"):
+        final_answer["evidence"] = evidence
     checkpoint_observations = [
         item for item in state.get("observations", []) if isinstance(item, dict)
     ]
@@ -1216,7 +1228,7 @@ def project_harness_result(
         "context_snapshot": context_snapshot,
         "skill_activation": skill,
         "references": references,
-        "evidence": literature_evidence,
+        "evidence": evidence,
         "needs_user_input": runtime_status in {"waiting_user_action", "waiting_user_input"},
         "answer_delta_streamed": answer_delta_streamed,
     }
@@ -1236,135 +1248,6 @@ def project_harness_result(
     if pending_action is not None:
         result["pending_action"] = pending_action
     return result
-
-
-def _project_answer_references(
-    typed_tool_results: list[dict[str, Any]],
-    final_answer: dict[str, Any],
-    *,
-    limit: int = 12,
-) -> list[dict[str, Any]]:
-    candidates: list[dict[str, Any]] = []
-    for item in final_answer.get("references") or []:
-        if isinstance(item, dict):
-            candidates.append(_normalize_reference(item, source_tool="agent.final"))
-    for tool_result in typed_tool_results:
-        tool_name = str(tool_result.get("name") or "")
-        data = tool_result.get("data") if isinstance(tool_result.get("data"), dict) else {}
-        query = str(data.get("query") or "")
-        if tool_name == "web.search":
-            for reference in data.get("results") or []:
-                if isinstance(reference, dict):
-                    candidates.append(
-                        _normalize_reference(
-                            reference,
-                            kind="web",
-                            source_tool=tool_name,
-                            query=query,
-                        )
-                    )
-        for reference in _nested_reference_candidates(data):
-            candidates.append(
-                _normalize_reference(
-                    reference,
-                    source_tool=tool_name,
-                    query=query,
-                )
-            )
-        for artifact in tool_result.get("artifacts") or []:
-            if not isinstance(artifact, dict):
-                continue
-            artifact_data = artifact.get("data") if isinstance(artifact.get("data"), dict) else {}
-            for reference in _nested_reference_candidates(artifact_data):
-                candidates.append(
-                    _normalize_reference(
-                        reference,
-                        source_tool=tool_name,
-                        query=query,
-                    )
-                )
-
-    references: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if not candidate:
-            continue
-        identity = str(
-            candidate.get("unit_id")
-            or candidate.get("url")
-            or candidate.get("reference_id")
-            or f"{candidate.get('kind')}:{candidate.get('title')}:{candidate.get('snippet')}"
-        )
-        if identity in seen:
-            continue
-        seen.add(identity)
-        references.append(candidate)
-        if len(references) >= limit:
-            break
-    return references
-
-
-def _nested_reference_candidates(value: Any, *, depth: int = 0) -> list[dict[str, Any]]:
-    if depth > 5:
-        return []
-    if isinstance(value, list):
-        candidates: list[dict[str, Any]] = []
-        for item in value:
-            candidates.extend(_nested_reference_candidates(item, depth=depth + 1))
-        return candidates
-    if not isinstance(value, dict):
-        return []
-    candidates = []
-    for key, item in value.items():
-        if key in {"citations", "evidence", "evidence_refs", "evidence_ledger", "references"} and isinstance(item, list):
-            candidates.extend(reference for reference in item if isinstance(reference, dict))
-            continue
-        if isinstance(item, (dict, list)):
-            candidates.extend(_nested_reference_candidates(item, depth=depth + 1))
-    return candidates
-
-
-def _normalize_reference(
-    value: dict[str, Any],
-    *,
-    kind: str = "",
-    source_tool: str = "",
-    query: str = "",
-) -> dict[str, Any]:
-    unit_id = str(value.get("unit_id") or value.get("id") or "").strip()
-    url = str(value.get("url") or "").strip()
-    resolved_kind = kind or str(value.get("kind") or ("web" if url else "literature" if unit_id else ""))
-    title = str(value.get("title") or value.get("title_cn") or value.get("site_name") or "").strip()
-    snippet = str(
-        value.get("snippet")
-        or value.get("summary")
-        or value.get("text_preview")
-        or ""
-    ).strip()[:360]
-    if not resolved_kind or (not unit_id and not url and not title):
-        return {}
-    reference_id = unit_id or url or f"{resolved_kind}:{title}:{snippet[:80]}"
-    normalized = {
-        "reference_id": reference_id,
-        "kind": resolved_kind,
-        "title": title or ("网页来源" if resolved_kind == "web" else "典籍依据"),
-        "snippet": snippet,
-        "source_tool": source_tool or str(value.get("source_tool") or ""),
-        "query": query or str(value.get("query") or ""),
-    }
-    optional = {
-        "unit_id": unit_id,
-        "url": url,
-        "site_name": str(value.get("site_name") or ""),
-        "publish_time": str(value.get("publish_time") or ""),
-        "flow": str(value.get("flow") or ""),
-        "quality_grade": str(value.get("quality_grade") or value.get("grade") or ""),
-        "page": str(value.get("page") or ""),
-        "chapter": str(value.get("chapter") or ""),
-        "source_file": str(value.get("source_file") or ""),
-    }
-    normalized.update({key: item for key, item in optional.items() if item})
-    return normalized
 
 
 def _failed_runtime_state(

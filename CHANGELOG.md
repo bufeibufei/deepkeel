@@ -1,5 +1,17 @@
 # Changelog
 
+## 1.4.0
+
+- Added a product-neutral reference projection Port with generic record and web
+  source normalization.
+- Removed product tool names, literature categories and localized source labels
+  from the runtime kernel; Hosts now inject those policies explicitly.
+- Migrated the product runtime boundary to typed `RuntimeRequest` and
+  `RuntimeResult` while retaining one compatibility adapter for existing APIs.
+- Added active monorepo CI for the standalone package and Host contract suite.
+- Added source-boundary gates preventing direct product use of the legacy Core
+  mapping entrypoint and future product reference leakage.
+
 ## 1.3.0
 
 - Added the typed `RuntimeRequest`, `RuntimeResult` and `RuntimeStreamEvent`

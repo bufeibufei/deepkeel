@@ -49,7 +49,9 @@ runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
 The preferred execution boundary is typed. Providers and sessions remain
 injected runtime ports, while request and result data are serializable Core
 contracts. `run_turn()` remains available as the v1 mapping adapter while
-existing hosts migrate.
+existing hosts migrate. Product hosts should keep any temporary v1 conversion
+in one adapter at their boundary rather than spreading mapping access through
+application services.
 
 ```python
 from harness_core import RuntimeRequest
@@ -64,6 +66,11 @@ result = runtime.run(
 )
 print(result.status, result.final_answer.markdown)
 ```
+
+Reference extraction is also a Port. The default projector discovers generic
+records and web sources without knowing tool names or business vocabulary.
+Products may inject `RuntimePorts(reference_projector=...)` to map those records
+to domain-specific source kinds, labels and evidence policies.
 
 The builder derives installed contributions from the registrations that
 actually occurred; a pack cannot claim an extension it did not install. Pack
@@ -87,6 +94,11 @@ that envelope with registered context contributors. Domain-specific field
 names and filtering policies belong in the product adapter, not the Core.
 Failures in either context stage are projected into the same terminal runtime
 and event contracts as model or tool failures.
+
+The v1 context snapshot still accepts and emits `profile_id` as a deprecated
+compatibility alias for hosts with persisted snapshots. New integrations must
+address subjects through `subject_id`; the alias is not part of the long-term
+product-neutral subject model and will be removed in the next major contract.
 
 Before model execution, the injected `ContextWindowManager` converts recent
 conversation history into role messages exactly once and applies a deterministic
@@ -206,4 +218,4 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v1`; the current package version is
-`1.3.0`.
+`1.4.0`.
