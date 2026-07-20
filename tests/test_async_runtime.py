@@ -4,8 +4,12 @@ import asyncio
 import time
 
 from harness_core.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
+from harness_core.contracts import ToolCall, ToolResult
+from harness_core.model import ModelInvocation, ModelProviderInfo, ModelTurn
 from harness_core.runtime_sdk import InMemoryRunControl
 from harness_core.runtime_sdk import RuntimeRequest
+from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tools import ToolExecutionContext, ToolExecutor
 
 
 class StreamingProvider:
@@ -114,3 +118,161 @@ def test_astream_applies_backpressure_and_cooperatively_cancels_on_disconnect() 
     cancel_calls, produced_before_close = asyncio.run(scenario())
     assert cancel_calls == 1
     assert produced_before_close < 40
+
+
+def test_async_tool_handler_runs_in_host_loop_and_propagates_cancellation() -> None:
+    async def scenario() -> bool:
+        registry = ToolRegistry()
+        registry.register(
+            ToolSpec(
+                name="async.wait",
+                parameters_schema={"type": "object", "properties": {}},
+                read_only=True,
+                parallel_safe=True,
+            )
+        )
+        executor = ToolExecutor(registry)
+        started = asyncio.Event()
+
+        async def wait_handler(call, _context):
+            started.set()
+            await asyncio.sleep(60)
+            return ToolResult(call=call, status="succeeded")
+
+        executor.register("async.wait", wait_handler)
+        task = asyncio.create_task(
+            executor.aexecute(
+                ToolCall(id="async-call", name="async.wait", arguments={}),
+                ToolExecutionContext(run_id="async-tool-run", user_id="user-1"),
+            )
+        )
+        await started.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            return True
+        return False
+
+    assert asyncio.run(scenario()) is True
+
+
+def test_async_tool_executor_preserves_parallel_result_order() -> None:
+    async def scenario() -> tuple[list[str], float]:
+        registry = ToolRegistry()
+        executor = ToolExecutor(registry, max_parallel_tools=2)
+        for name in ("async.first", "async.second"):
+            registry.register(
+                ToolSpec(
+                    name=name,
+                    parameters_schema={"type": "object", "properties": {}},
+                    read_only=True,
+                    parallel_safe=True,
+                )
+            )
+
+            async def handler(call, _context):
+                await asyncio.sleep(0.05)
+                return ToolResult(call=call, status="succeeded", summary=call.name)
+
+            executor.register(name, handler)
+        calls = [
+            ToolCall(id="first", name="async.first", arguments={}),
+            ToolCall(id="second", name="async.second", arguments={}),
+        ]
+        started_at = time.perf_counter()
+        results = await executor.aexecute_many(
+            calls,
+            ToolExecutionContext(run_id="parallel-run", user_id="user-1"),
+        )
+        return [result.name for result in results], time.perf_counter() - started_at
+
+    names, elapsed = asyncio.run(scenario())
+    assert names == ["async.first", "async.second"]
+    assert elapsed < 0.09
+
+
+def test_native_async_model_provider_runs_in_host_loop() -> None:
+    class AsyncProvider:
+        info = ModelProviderInfo(
+            provider_id="example.async",
+            model_id="async-v1",
+            model_role="fast",
+        )
+
+        def __init__(self) -> None:
+            self.loop: asyncio.AbstractEventLoop | None = None
+
+        async def ainvoke(self, _request: ModelInvocation, *, on_text_delta=None):
+            self.loop = asyncio.get_running_loop()
+            if on_text_delta is not None:
+                on_text_delta("native ")
+                await asyncio.sleep(0)
+                on_text_delta("async")
+            return ModelTurn(
+                content="native async",
+                finish_reason="stop",
+                model_id=self.info.model_id,
+            )
+
+    async def scenario():
+        provider = AsyncProvider()
+        host_loop = asyncio.get_running_loop()
+        result = await HarnessRuntimeBuilder().build().arun(
+            RuntimeRequest(
+                question="hello",
+                run_id="native-async-run",
+                model_policy={"mode": "single", "primary_role": "fast"},
+            ),
+            provider=provider,
+        )
+        return result, provider.loop is host_loop
+
+    result, used_host_loop = asyncio.run(scenario())
+    assert result.final_answer.markdown == "native async"
+    assert used_host_loop is True
+
+
+def test_native_async_model_provider_receives_task_cancellation() -> None:
+    class WaitingProvider:
+        info = ModelProviderInfo(
+            provider_id="example.waiting",
+            model_id="waiting-v1",
+            model_role="fast",
+        )
+
+        def __init__(self) -> None:
+            self.started = asyncio.Event()
+            self.canceled = False
+
+        async def ainvoke(self, _request: ModelInvocation, *, on_text_delta=None):
+            del on_text_delta
+            self.started.set()
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                self.canceled = True
+                raise
+
+    async def scenario() -> bool:
+        provider = WaitingProvider()
+        runtime = HarnessRuntimeBuilder().build()
+        task = asyncio.create_task(
+            runtime.arun(
+                RuntimeRequest(
+                    question="hello",
+                    run_id="cancel-model-run",
+                    model_policy={"mode": "single", "primary_role": "fast"},
+                ),
+                provider=provider,
+            )
+        )
+        await provider.started.wait()
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        return provider.canceled
+
+    assert asyncio.run(scenario()) is True

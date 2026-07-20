@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Mapping
 from typing import Any
@@ -64,6 +65,13 @@ class GraphNodes:
         return migrate_legacy_graph_state(normalized, thread_id=thread_id or str(normalized.get("run_id") or "checkpoint"))
 
     def model_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        return asyncio.run(self.amodel_node(state, config))
+
+    async def amodel_node(
+        self,
+        state: dict[str, Any],
+        config: RunnableConfig,
+    ) -> dict[str, Any]:
         normalized_state = self.normalize_state(state, config)
         if not normalized_state["messages"]:
             raise ValueError("graph checkpoint cannot resume model execution without messages")
@@ -153,14 +161,7 @@ class GraphNodes:
             delta_index += 1
 
         try:
-            turn = model.run_turn(
-                _messages(current),
-                tools=tools,
-                system_prompt=prompt,
-                # Forced workflow transitions only extract tool arguments. Their
-                # provisional prose must not be shown as a user-facing answer.
-                on_text_delta=None if forced_tool_name else on_delta,
-                step_context=ModelStepContext(
+            model_step_context = ModelStepContext(
                     run_id=str(current.get("run_id") or ""),
                     user_id=str(current.get("user_id") or ""),
                     thread_id=str(current.get("thread_id") or ""),
@@ -178,9 +179,27 @@ class GraphNodes:
                         (current.get("metadata") or {}).get("governance_scope") or {}
                     ),
                     deadline_monotonic=deadline_monotonic,
-                ),
-                on_route=on_route,
-            )
+                )
+            async_run_turn = getattr(model, "arun_turn", None)
+            if callable(async_run_turn):
+                turn = await async_run_turn(
+                    _messages(current),
+                    tools=tools,
+                    system_prompt=prompt,
+                    on_text_delta=None if forced_tool_name else on_delta,
+                    step_context=model_step_context,
+                    on_route=on_route,
+                )
+            else:
+                turn = await asyncio.to_thread(
+                    model.run_turn,
+                    _messages(current),
+                    tools=tools,
+                    system_prompt=prompt,
+                    on_text_delta=None if forced_tool_name else on_delta,
+                    step_context=model_step_context,
+                    on_route=on_route,
+                )
             self.ensure_active(current, force=True)
         except AgentEventPersistenceError:
             raise
@@ -342,6 +361,13 @@ class GraphNodes:
         return current
 
     def tool_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        return asyncio.run(self.atool_node(state, config))
+
+    async def atool_node(
+        self,
+        state: dict[str, Any],
+        config: RunnableConfig,
+    ) -> dict[str, Any]:
         normalized_state = self.normalize_state(state, config)
         tool_registry = self.tool_registry
         tool_executor = self.tool_executor
@@ -382,7 +408,7 @@ class GraphNodes:
                         "visible": start_event_visible,
                     },
                 )
-            results = tool_executor.execute_many(calls, context)
+            results = await tool_executor.aexecute_many(calls, context)
         current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
         current["pending_tool_calls"] = []
         current["pending_action"] = None

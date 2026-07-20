@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any, NotRequired, TypedDict
+from typing import Any, Literal, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -91,11 +91,19 @@ class RuntimeResultStatus(StrEnum):
     CANCELED = "canceled"
 
 
-class RuntimeStreamEvent(BaseModel):
-    """Event emitted while a run is executing, before host persistence metadata."""
+class RuntimeEventEnvelope(BaseModel):
+    """Cursor-addressable event emitted by the canonical runtime."""
 
     model_config = ConfigDict(extra="allow")
 
+    schema_version: str = "harness-runtime-event-v1"
+    event_id: str = ""
+    sequence: int = Field(default=0, ge=0)
+    run_version: int = Field(default=0, ge=0)
+    run_id: str = ""
+    thread_id: str = ""
+    turn_id: str = ""
+    visibility: Literal["public", "internal"] = "internal"
     event_type: str = Field(min_length=1)
     source_event_type: str = ""
     title: str = ""
@@ -103,6 +111,14 @@ class RuntimeStreamEvent(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
     ephemeral: bool = False
     created_at: datetime | None = None
+
+    @property
+    def cursor(self) -> str:
+        return f"{self.run_id}:{self.sequence}" if self.run_id and self.sequence else ""
+
+
+class RuntimeStreamEvent(RuntimeEventEnvelope):
+    """Backward-compatible name for streaming API consumers."""
 
 
 class RuntimeResult(BaseModel):

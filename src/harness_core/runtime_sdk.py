@@ -18,12 +18,26 @@ from harness_core.context_snapshot import (
 )
 from harness_core.control import InMemoryRunControl, NoopRunControl, RunControl
 from harness_core.events import AgentEventPersistenceError
+from harness_core.event_journal import (
+    EventJournalConflict,
+    InMemoryRuntimeEventJournal,
+    RuntimeEventJournal,
+)
+from harness_core.model import (
+    InMemoryModelInvocationStore,
+    ModelInvocationClaim,
+    ModelInvocationConflict,
+    ModelInvocationRecord,
+    ModelInvocationStore,
+    ModelInvocationUnavailable,
+)
 from harness_core.failures import RunCanceledError, failure_from_code
 from harness_core.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from harness_core.runtime import HarnessRuntime
 from harness_core.runtime_api import (
     RuntimeActiveTask,
     RuntimeErrorPayload,
+    RuntimeEventEnvelope,
     RuntimeReference,
     RuntimeRequest,
     RuntimeResult,
@@ -52,6 +66,7 @@ RUNTIME_SDK_API = (
     "AgentMessage",
     "Artifact",
     "DurableCheckpointStore",
+    "EventJournalConflict",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",
     "HARNESS_CORE_VERSION",
@@ -59,6 +74,8 @@ RUNTIME_SDK_API = (
     "InMemoryRunControl",
     "InMemoryDurableCheckpointStore",
     "InMemoryRuntimeStateStore",
+    "InMemoryRuntimeEventJournal",
+    "InMemoryModelInvocationStore",
     "NoopRunControl",
     "Observation",
     "PendingAction",
@@ -72,6 +89,13 @@ RUNTIME_SDK_API = (
     "RuntimeEvent",
     "RuntimeActiveTask",
     "RuntimeErrorPayload",
+    "RuntimeEventEnvelope",
+    "RuntimeEventJournal",
+    "ModelInvocationClaim",
+    "ModelInvocationConflict",
+    "ModelInvocationRecord",
+    "ModelInvocationStore",
+    "ModelInvocationUnavailable",
     "RuntimeReference",
     "RuntimeRequest",
     "RuntimeResult",

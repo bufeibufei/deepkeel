@@ -1,10 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import hashlib
 import json
 from copy import deepcopy
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from threading import Lock
 from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
@@ -148,6 +149,207 @@ class ModelInvocationRecorder(Protocol):
     def get(self, invocation_id: str) -> ModelInvocationEnvelope | None: ...
 
 
+class ModelInvocationConflict(RuntimeError):
+    """Raised when an invocation identity is reused with different input."""
+
+
+class ModelInvocationUnavailable(RuntimeError):
+    """Raised when a prior invocation cannot be safely repeated or replayed."""
+
+
+class ModelInvocationClaim(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "model-invocation-claim-v1"
+    invocation_id: str
+    outcome: str
+    claim_token: str = ""
+    result: ModelTurn | None = None
+    failure_type: str = ""
+    failure_message: str = ""
+
+
+class ModelInvocationRecord(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "model-invocation-record-v1"
+    envelope: ModelInvocationEnvelope
+    status: str = "running"
+    claim_token: str = ""
+    claim_expires_at: datetime | None = None
+    result: ModelTurn | None = None
+    failure_type: str = ""
+    failure_message: str = ""
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ModelInvocationStore(Protocol):
+    """Atomic ownership and settlement boundary for provider invocations."""
+
+    def claim(
+        self,
+        envelope: ModelInvocationEnvelope,
+        *,
+        lease_seconds: float = 300.0,
+    ) -> ModelInvocationClaim: ...
+
+    def complete(
+        self,
+        invocation_id: str,
+        *,
+        claim_token: str,
+        result: ModelTurn,
+    ) -> ModelInvocationRecord: ...
+
+    def fail(
+        self,
+        invocation_id: str,
+        *,
+        claim_token: str,
+        failure_type: str,
+        failure_message: str,
+    ) -> ModelInvocationRecord: ...
+
+    def get_record(self, invocation_id: str) -> ModelInvocationRecord | None: ...
+
+
+class InMemoryModelInvocationStore:
+    """Thread-safe reference store with fail-closed ambiguous recovery."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, ModelInvocationRecord] = {}
+        self._lock = Lock()
+
+    def claim(
+        self,
+        envelope: ModelInvocationEnvelope,
+        *,
+        lease_seconds: float = 300.0,
+    ) -> ModelInvocationClaim:
+        now = datetime.now(UTC)
+        with self._lock:
+            record = self._records.get(envelope.invocation_id)
+            if record is not None:
+                if record.envelope.request_fingerprint != envelope.request_fingerprint:
+                    raise ModelInvocationConflict(
+                        "invocation_id cannot be reused with a different request"
+                    )
+                if record.status == "completed" and record.result is not None:
+                    return ModelInvocationClaim(
+                        invocation_id=envelope.invocation_id,
+                        outcome="replay",
+                        result=record.result.model_copy(deep=True),
+                    )
+                if record.status == "failed":
+                    return ModelInvocationClaim(
+                        invocation_id=envelope.invocation_id,
+                        outcome="failed",
+                        failure_type=record.failure_type,
+                        failure_message=record.failure_message,
+                    )
+                if record.claim_expires_at is None or record.claim_expires_at > now:
+                    return ModelInvocationClaim(
+                        invocation_id=envelope.invocation_id,
+                        outcome="in_progress",
+                    )
+                return ModelInvocationClaim(
+                    invocation_id=envelope.invocation_id,
+                    outcome="uncertain",
+                    failure_type="claim_expired",
+                    failure_message=(
+                        "the previous provider invocation expired without a durable result"
+                    ),
+                )
+
+            claim_token = uuid4().hex
+            self._records[envelope.invocation_id] = ModelInvocationRecord(
+                envelope=envelope.model_copy(deep=True),
+                status="running",
+                claim_token=claim_token,
+                claim_expires_at=now + timedelta(seconds=max(1.0, float(lease_seconds))),
+                updated_at=now,
+            )
+            return ModelInvocationClaim(
+                invocation_id=envelope.invocation_id,
+                outcome="acquired",
+                claim_token=claim_token,
+            )
+
+    def complete(
+        self,
+        invocation_id: str,
+        *,
+        claim_token: str,
+        result: ModelTurn,
+    ) -> ModelInvocationRecord:
+        return self._settle(
+            invocation_id,
+            claim_token=claim_token,
+            status="completed",
+            result=result,
+        )
+
+    def fail(
+        self,
+        invocation_id: str,
+        *,
+        claim_token: str,
+        failure_type: str,
+        failure_message: str,
+    ) -> ModelInvocationRecord:
+        return self._settle(
+            invocation_id,
+            claim_token=claim_token,
+            status="failed",
+            failure_type=failure_type,
+            failure_message=failure_message,
+        )
+
+    def get_record(self, invocation_id: str) -> ModelInvocationRecord | None:
+        with self._lock:
+            record = self._records.get(str(invocation_id or ""))
+            return record.model_copy(deep=True) if record is not None else None
+
+    def _settle(
+        self,
+        invocation_id: str,
+        *,
+        claim_token: str,
+        status: str,
+        result: ModelTurn | None = None,
+        failure_type: str = "",
+        failure_message: str = "",
+    ) -> ModelInvocationRecord:
+        with self._lock:
+            record = self._records.get(str(invocation_id or ""))
+            if record is None:
+                raise ModelInvocationConflict("cannot settle an unknown invocation")
+            if record.status in {"completed", "failed"}:
+                same_result = status == record.status and (
+                    status == "failed"
+                    or (record.result is not None and record.result == result)
+                )
+                if same_result:
+                    return record.model_copy(deep=True)
+                raise ModelInvocationConflict("invocation is already settled")
+            if not claim_token or claim_token != record.claim_token:
+                raise ModelInvocationConflict("model invocation claim token changed")
+            settled = record.model_copy(
+                update={
+                    "status": status,
+                    "claim_token": "",
+                    "claim_expires_at": None,
+                    "result": result.model_copy(deep=True) if result is not None else None,
+                    "failure_type": str(failure_type or ""),
+                    "failure_message": str(failure_message or "")[:500],
+                    "updated_at": datetime.now(UTC),
+                },
+                deep=True,
+            )
+            self._records[invocation_id] = settled
+            return settled.model_copy(deep=True)
+
+
 class InMemoryModelInvocationRecorder:
     """Reference recorder that keeps exact prompts outside ordinary event payloads."""
 
@@ -183,10 +385,36 @@ class ModelProviderAdapter(Protocol):
     ) -> ModelTurn: ...
 
 
+@runtime_checkable
+class AsyncModelProviderAdapter(Protocol):
+    """Native async provider boundary used without a worker-thread bridge."""
+
+    @property
+    def info(self) -> ModelProviderInfo: ...
+
+    async def ainvoke(
+        self,
+        request: ModelInvocation,
+        *,
+        on_text_delta: Callable[[str], None] | None = None,
+    ) -> ModelTurn: ...
+
+
 class ModelGateway(Protocol):
     """Provider-neutral model execution port used by the graph."""
 
     def run_turn(
+        self,
+        messages: list[AgentMessage],
+        *,
+        tools: list[dict[str, Any]],
+        system_prompt: str = "",
+        on_text_delta: Callable[[str], None] | None = None,
+        step_context: ModelStepContext | None = None,
+        on_route: ModelRouteSink | None = None,
+    ) -> ModelTurn: ...
+
+    async def arun_turn(
         self,
         messages: list[AgentMessage],
         *,
@@ -355,6 +583,7 @@ class RoutedModelGateway:
         policy_engine: PolicyEngine,
         budget_ledger: BudgetLedger,
         invocation_recorder: ModelInvocationRecorder | None = None,
+        invocation_store: ModelInvocationStore | None = None,
         request_timeout: int = 300,
     ) -> None:
         self.providers = {
@@ -366,9 +595,33 @@ class RoutedModelGateway:
         self.policy_engine = policy_engine
         self.budget_ledger = budget_ledger
         self.invocation_recorder = invocation_recorder
+        self.invocation_store = invocation_store
         self.request_timeout = request_timeout
 
     def run_turn(
+        self,
+        messages: list[AgentMessage],
+        *,
+        tools: list[dict[str, Any]],
+        system_prompt: str = "",
+        on_text_delta: Callable[[str], None] | None = None,
+        step_context: ModelStepContext | None = None,
+        on_route: ModelRouteSink | None = None,
+    ) -> ModelTurn:
+        """Compatibility entrypoint for synchronous graph hosts."""
+
+        return asyncio.run(
+            self.arun_turn(
+                messages,
+                tools=tools,
+                system_prompt=system_prompt,
+                on_text_delta=on_text_delta,
+                step_context=step_context,
+                on_route=on_route,
+            )
+        )
+
+    async def arun_turn(
         self,
         messages: list[AgentMessage],
         *,
@@ -591,6 +844,8 @@ class RoutedModelGateway:
                 if on_text_delta is not None and not forced_tool_name:
                     on_text_delta(delta)
 
+            envelope: ModelInvocationEnvelope | None = None
+            claim_token = ""
             try:
                 ensure_time_remaining(step_context.deadline_monotonic)
                 if not provider.info.supports_native_tools:
@@ -631,13 +886,66 @@ class RoutedModelGateway:
                         route_payload["invocation"]["recorder_error"] = type(
                             recorder_error
                         ).__name__
-                turn = provider.invoke(
-                    invocation,
-                    on_text_delta=tracked_delta,
-                )
+                if self.invocation_store is not None:
+                    claim = self.invocation_store.claim(
+                        envelope,
+                        lease_seconds=max(30.0, float(request_timeout) + 30.0),
+                    )
+                    route_payload["invocation"]["claim_outcome"] = claim.outcome
+                    if claim.outcome == "replay" and claim.result is not None:
+                        turn = claim.result.model_copy(deep=True)
+                        route_payload["invocation"]["replayed"] = True
+                    elif claim.outcome == "acquired":
+                        claim_token = claim.claim_token
+                        turn = await _ainvoke_provider(
+                            provider,
+                            invocation,
+                            on_text_delta=tracked_delta,
+                        )
+                    else:
+                        detail = claim.failure_message or (
+                            "the model invocation is already executing"
+                            if claim.outcome == "in_progress"
+                            else "the model invocation cannot be safely replayed"
+                        )
+                        raise ModelInvocationUnavailable(
+                            f"model invocation {claim.outcome}: {detail}"
+                        )
+                else:
+                    turn = await _ainvoke_provider(
+                        provider,
+                        invocation,
+                        on_text_delta=tracked_delta,
+                    )
                 _validate_forced_tool_turn(turn, step_context)
                 ensure_time_remaining(step_context.deadline_monotonic)
+                if (
+                    self.invocation_store is not None
+                    and envelope is not None
+                    and claim_token
+                ):
+                    self.invocation_store.complete(
+                        envelope.invocation_id,
+                        claim_token=claim_token,
+                        result=turn,
+                    )
             except Exception as exc:
+                if (
+                    self.invocation_store is not None
+                    and envelope is not None
+                    and claim_token
+                ):
+                    try:
+                        self.invocation_store.fail(
+                            envelope.invocation_id,
+                            claim_token=claim_token,
+                            failure_type=type(exc).__name__,
+                            failure_message=str(exc),
+                        )
+                    except Exception as settlement_error:
+                        route_payload["invocation"]["settlement_error"] = type(
+                            settlement_error
+                        ).__name__
                 failed_output_tokens = (
                     token_estimator.estimate("".join(streamed_output_parts))
                     if streamed_output_parts
@@ -765,7 +1073,13 @@ class RoutedModelGateway:
     def _attempts(
         self,
         primary_route: ModelRouteDecision,
-    ) -> list[tuple[ModelRouteDecision, ModelProviderAdapter, str]]:
+    ) -> list[
+        tuple[
+            ModelRouteDecision,
+            ModelProviderAdapter | AsyncModelProviderAdapter,
+            str,
+        ]
+    ]:
         primary = self.providers.get(primary_route.role)
         if primary is None:
             raise RuntimeError(
@@ -814,17 +1128,40 @@ class RoutedModelGateway:
         return result
 
 
-def _as_provider_adapter(provider: Any) -> ModelProviderAdapter:
+def _as_provider_adapter(provider: Any) -> ModelProviderAdapter | AsyncModelProviderAdapter:
     return (
         provider
-        if isinstance(provider, ModelProviderAdapter)
+        if isinstance(provider, (ModelProviderAdapter, AsyncModelProviderAdapter))
         else NativeChatProviderAdapter(provider)
     )
 
 
-def _adapter_fingerprint(provider: ModelProviderAdapter) -> tuple[str, str, str]:
+def _adapter_fingerprint(
+    provider: ModelProviderAdapter | AsyncModelProviderAdapter,
+) -> tuple[str, str, str]:
     info = provider.info
     return (info.provider_id, info.model_id, info.model_role)
+
+
+async def _ainvoke_provider(
+    provider: ModelProviderAdapter | AsyncModelProviderAdapter,
+    request: ModelInvocation,
+    *,
+    on_text_delta: Callable[[str], None] | None = None,
+) -> ModelTurn:
+    if isinstance(provider, AsyncModelProviderAdapter):
+        return await asyncio.wait_for(
+            provider.ainvoke(request, on_text_delta=on_text_delta),
+            timeout=max(1, request.request_timeout),
+        )
+    return await asyncio.wait_for(
+        asyncio.to_thread(
+            provider.invoke,
+            request,
+            on_text_delta=on_text_delta,
+        ),
+        timeout=max(1, request.request_timeout),
+    )
 
 
 def _tool_choice(step_context: ModelStepContext | None) -> str | dict[str, Any]:

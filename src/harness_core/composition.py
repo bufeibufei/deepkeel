@@ -14,10 +14,11 @@ from harness_core.capabilities import (
     assert_capability_contribution,
 )
 from harness_core.control import RunControl
+from harness_core.event_journal import RuntimeEventJournal
 from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
 from harness_core.model_routing import ModelRouter
-from harness_core.model import ModelInvocationRecorder
+from harness_core.model import ModelInvocationRecorder, ModelInvocationStore
 from harness_core.leases import RunLeaseStore
 from harness_core.migrations import StateMigrationRegistry
 from harness_core.persistence import DurableCheckpointStore
@@ -38,6 +39,7 @@ class RuntimePortChanges(TypedDict, total=False):
     session_factory: SessionFactory | None
     model_router: ModelRouter | None
     model_invocation_recorder: ModelInvocationRecorder | None
+    model_invocation_store: ModelInvocationStore | None
     policy_engine: PolicyEngine | None
     budget_ledger: BudgetLedger | None
     run_control: RunControl | None
@@ -48,6 +50,7 @@ class RuntimePortChanges(TypedDict, total=False):
     context_builder: ContextBuilder | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
+    event_journal: RuntimeEventJournal | None
     reference_projector: ReferenceProjector | None
     run_lease_store: RunLeaseStore | None
     run_lease_owner_id: str
@@ -65,6 +68,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     session_factory: SessionFactory | None
     model_router: ModelRouter | None
     model_invocation_recorder: ModelInvocationRecorder | None
+    model_invocation_store: ModelInvocationStore | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
     tool_preflight: ToolPreflight | None
@@ -72,6 +76,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     context_builder: ContextBuilder | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
+    event_journal: RuntimeEventJournal | None
     reference_projector: ReferenceProjector | None
     run_lease_store: RunLeaseStore | None
     run_lease_owner_id: str
@@ -92,6 +97,7 @@ class RuntimePorts:
     session_factory: SessionFactory | None = None
     model_router: ModelRouter | None = None
     model_invocation_recorder: ModelInvocationRecorder | None = None
+    model_invocation_store: ModelInvocationStore | None = None
     policy_engine: PolicyEngine | None = None
     budget_ledger: BudgetLedger | None = None
     run_control: RunControl | None = None
@@ -102,6 +108,7 @@ class RuntimePorts:
     context_builder: ContextBuilder | None = None
     context_window_manager: ContextWindowManager | None = None
     runtime_state_store: RuntimeStateStore | None = None
+    event_journal: RuntimeEventJournal | None = None
     reference_projector: ReferenceProjector | None = None
     run_lease_store: RunLeaseStore | None = None
     run_lease_owner_id: str = ""
@@ -236,6 +243,7 @@ class HarnessRuntimeBuilder:
             max_steps=self._max_steps,
             model_router=self._ports.model_router,
             model_invocation_recorder=self._ports.model_invocation_recorder,
+            model_invocation_store=self._ports.model_invocation_store,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
             run_control=self._ports.run_control,
@@ -245,6 +253,7 @@ class HarnessRuntimeBuilder:
             context_builder=self._ports.context_builder,
             context_window_manager=self._ports.context_window_manager,
             runtime_state_store=self._ports.runtime_state_store,
+            event_journal=self._ports.event_journal,
             reference_projector=self._ports.reference_projector,
             run_lease_store=self._ports.run_lease_store,
             run_lease_owner_id=self._ports.run_lease_owner_id,

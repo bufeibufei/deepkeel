@@ -4,8 +4,18 @@ from typing import Any
 from uuid import uuid4
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
+from harness_core.event_journal import EventJournalConflict, RuntimeEventJournal
 from harness_core.leases import RunLeaseConflict, RunLeaseStore
 from harness_core.persistence import DurableCheckpointStore
+from harness_core.events import envelope_runtime_event
+from harness_core.model import (
+    ModelInvocation,
+    ModelInvocationConflict,
+    ModelInvocationEnvelope,
+    ModelInvocationStore,
+    ModelTurn,
+)
+from harness_core.runtime_api import RuntimeEventEnvelope
 from harness_core.state_store import (
     RUN_SETTLED_EVENT,
     RuntimeStateConflict,
@@ -13,6 +23,86 @@ from harness_core.state_store import (
     RuntimeStateStore,
 )
 from harness_core.tools import ToolExecutionStore
+
+
+def verify_runtime_event_journal_contract(
+    journal: RuntimeEventJournal,
+    *,
+    run_id: str,
+) -> None:
+    """Assert stable identities, monotonic cursors, and idempotent replay."""
+
+    first = RuntimeEventEnvelope.model_validate(
+        envelope_runtime_event(
+            {"event_type": "run.created", "payload": {"phase": "created"}},
+            run_id=run_id,
+            thread_id=f"{run_id}:thread",
+            turn_id=f"{run_id}:turn",
+            sequence=1,
+        )
+    )
+    third = RuntimeEventEnvelope.model_validate(
+        envelope_runtime_event(
+            {"event_type": "agent.reasoning", "payload": {"phase": "reasoning"}},
+            run_id=run_id,
+            thread_id=f"{run_id}:thread",
+            turn_id=f"{run_id}:turn",
+            sequence=3,
+        )
+    )
+    journal.append(first)
+    journal.append(third)
+    assert journal.append(third).event_id == third.event_id
+    assert journal.latest_sequence(run_id) == 3
+    assert [event.sequence for event in journal.read_after(run_id, after_sequence=1)] == [3]
+
+    conflicting = third.model_copy(update={"summary": "changed"})
+    try:
+        journal.append(conflicting)
+    except EventJournalConflict:
+        return
+    raise AssertionError("runtime event journal accepted conflicting event content")
+
+
+def verify_model_invocation_store_contract(
+    store: ModelInvocationStore,
+    *,
+    run_id: str,
+) -> None:
+    """Assert atomic claim, durable settlement, and exact result replay."""
+
+    envelope = ModelInvocationEnvelope(
+        invocation_id=f"{run_id}:model:0:attempt:1",
+        run_id=run_id,
+        thread_id=f"{run_id}:thread",
+        turn_id=f"{run_id}:turn",
+        request=ModelInvocation(messages=[{"role": "user", "content": "hello"}]),
+    )
+    claim = store.claim(envelope, lease_seconds=30)
+    assert claim.outcome == "acquired" and claim.claim_token
+    assert store.claim(envelope, lease_seconds=30).outcome == "in_progress"
+
+    result = ModelTurn(content="answer", finish_reason="stop")
+    store.complete(
+        envelope.invocation_id,
+        claim_token=claim.claim_token,
+        result=result,
+    )
+    replay = store.claim(envelope, lease_seconds=30)
+    assert replay.outcome == "replay" and replay.result == result
+
+    changed = envelope.model_copy(
+        update={
+            "request": ModelInvocation(
+                messages=[{"role": "user", "content": "changed"}]
+            )
+        }
+    )
+    try:
+        store.claim(changed, lease_seconds=30)
+    except ModelInvocationConflict:
+        return
+    raise AssertionError("model invocation store accepted a changed request")
 
 
 def verify_run_lease_store_contract(

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
-from langchain_core.runnables import RunnableConfig
+from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -75,6 +75,46 @@ class HarnessGraph:
             config=_graph_config(thread_id, tool_context, event_sink),
         ), thread_id=thread_id)
 
+    async def ainvoke(
+        self,
+        context: RunContext,
+        *,
+        tool_context: ToolExecutionContext,
+        event_sink: EventSink | None = None,
+    ) -> HarnessGraphState:
+        state = await self.compiled_graph.ainvoke(
+            _state_from_context(context),
+            config=_graph_config(context.thread_id, tool_context, event_sink),
+        )
+        return validate_graph_state(state)
+
+    async def aresume(
+        self,
+        thread_id: str,
+        resume_payload: dict[str, Any],
+        *,
+        tool_context: ToolExecutionContext,
+        event_sink: EventSink | None = None,
+    ) -> HarnessGraphState:
+        state = await self.compiled_graph.ainvoke(
+            Command(resume=resume_payload),
+            config=_graph_config(thread_id, tool_context, event_sink),
+        )
+        return migrate_legacy_graph_state(state, thread_id=thread_id)
+
+    async def arecover(
+        self,
+        thread_id: str,
+        *,
+        tool_context: ToolExecutionContext,
+        event_sink: EventSink | None = None,
+    ) -> HarnessGraphState:
+        state = await self.compiled_graph.ainvoke(
+            None,
+            config=_graph_config(thread_id, tool_context, event_sink),
+        )
+        return migrate_legacy_graph_state(state, thread_id=thread_id)
+
 
 def create_harness_graph(
     *,
@@ -110,14 +150,26 @@ def create_harness_graph(
     def tool_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
         return cast(HarnessGraphState, nodes.tool_node(dict(state), config))
 
+    async def async_model_node(
+        state: HarnessGraphState,
+        config: RunnableConfig,
+    ) -> HarnessGraphState:
+        return cast(HarnessGraphState, await nodes.amodel_node(dict(state), config))
+
+    async def async_tool_node(
+        state: HarnessGraphState,
+        config: RunnableConfig,
+    ) -> HarnessGraphState:
+        return cast(HarnessGraphState, await nodes.atool_node(dict(state), config))
+
     def await_user_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
         return cast(HarnessGraphState, nodes.await_user_node(dict(state), config))
 
     def await_async_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
         return cast(HarnessGraphState, nodes.await_async_node(dict(state), config))
 
-    graph.add_node("model", model_node)
-    graph.add_node("tools", tool_node)
+    graph.add_node("model", RunnableLambda(model_node, async_model_node))
+    graph.add_node("tools", RunnableLambda(tool_node, async_tool_node))
     graph.add_node("await_user", await_user_node)
     graph.add_node("await_async", await_async_node)
     graph.add_conditional_edges(

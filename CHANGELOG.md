@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.4.0
+
+- Added cursor-addressable runtime event envelopes and a durable event-journal
+  Port with replay and adapter conformance contracts.
+- Added atomic model-invocation claims, durable settlement, exact result replay,
+  and fail-closed recovery for ambiguous provider calls.
+- Reworked the canonical LangGraph execution path to be async-first while
+  retaining synchronous Host compatibility; native async model and tool
+  adapters now receive timeout and cancellation propagation.
+- Added telemetry v2 correlation fields and strict operational-metadata privacy
+  filtering across run, model, tool, and event identities.
+
 ## 3.3.0
 
 - Extended run leases into an end-to-end execution fence available to tool

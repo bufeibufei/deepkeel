@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
 from copy import deepcopy
+import inspect
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from typing import Any, Callable, Literal, Mapping, Protocol
+from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol
 from uuid import uuid4
 
 from jsonschema import Draft202012Validator
@@ -36,7 +38,10 @@ from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.type_narrowing import as_dict
 
 
-ToolHandler = Callable[[ToolCall, "ToolExecutionContext"], ToolResult]
+ToolHandler = Callable[
+    [ToolCall, "ToolExecutionContext"],
+    ToolResult | Awaitable[ToolResult],
+]
 ToolPreflight = Callable[[ToolCall, "ToolExecutionContext", ToolSpec], str | None]
 
 
@@ -297,6 +302,11 @@ class ToolExecutor:
         return frozenset(self._handlers)
 
     def execute(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        """Compatibility entrypoint for synchronous hosts."""
+
+        return asyncio.run(self.aexecute(call, context))
+
+    async def aexecute(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
         context.raise_if_fence_lost()
         context.run_control.raise_if_cancelled(context.run_id)
         ensure_time_remaining(context.deadline_monotonic)
@@ -388,7 +398,7 @@ class ToolExecutor:
             )
 
         if not normalized.idempotency_key:
-            result = self._invoke(
+            result = await self._ainvoke(
                 handler,
                 normalized,
                 context,
@@ -493,7 +503,7 @@ class ToolExecutor:
                 phase=f"idempotent_{claim.status}",
                 executed=False,
             )
-        result = self._invoke(
+        result = await self._ainvoke(
             handler,
             normalized,
             context,
@@ -511,7 +521,7 @@ class ToolExecutor:
             except Exception as exc:
                 settlement_error = exc
                 if settlement_attempt < 2:
-                    time.sleep(0.05 * (settlement_attempt + 1))
+                    await asyncio.sleep(0.05 * (settlement_attempt + 1))
         if settlement_error is not None:
             failed = _failed_result(
                 normalized,
@@ -602,6 +612,92 @@ class ToolExecutor:
             [result for result in results if result is not None]
         )
 
+    async def aexecute_many(
+        self,
+        calls: list[ToolCall],
+        context: ToolExecutionContext,
+    ) -> list[ToolResult]:
+        """Execute independent async-safe tools concurrently in the host loop."""
+
+        if len(calls) < 2:
+            return [await self.aexecute(call, context) for call in calls]
+
+        results: list[ToolResult | None] = [None] * len(calls)
+        parallel: list[tuple[int, ToolCall]] = []
+        serial: list[tuple[int, ToolCall]] = []
+        for index, call in enumerate(calls):
+            try:
+                spec = self.registry.get(call.name)
+            except KeyError:
+                serial.append((index, call))
+                continue
+            can_isolate_session = context.session is None or context.session_factory is not None
+            target = parallel if spec.read_only and spec.parallel_safe and can_isolate_session else serial
+            target.append((index, call))
+
+        if parallel:
+            configured_limit = int(
+                context.budget_limits.get(TOOL_CONCURRENCY)
+                or self.max_parallel_tools
+            )
+            workers = max(1, min(self.max_parallel_tools, configured_limit, len(parallel)))
+            concurrency_budget = self.budget_ledger.consume(
+                BudgetRequest(
+                    run_id=context.run_id,
+                    metric=TOOL_CONCURRENCY,
+                    amount=workers,
+                    limit=configured_limit,
+                    operation_id=(
+                        f"tool-concurrency:{context.turn_id}:"
+                        + ":".join(sorted(call.id for _, call in parallel))
+                    ),
+                    aggregation="max",
+                    metadata={"parallel_call_count": len(parallel)},
+                )
+            )
+            if not concurrency_budget.allowed:
+                workers = 1
+            semaphore = asyncio.Semaphore(workers)
+
+            async def execute_parallel(index: int, call: ToolCall) -> tuple[int, ToolResult]:
+                async with semaphore:
+                    try:
+                        return index, await self._aexecute_parallel(call, context)
+                    except (RunCanceledError, RunDeadlineExceededError):
+                        raise
+                    except Exception as exc:
+                        failed = _failed_result(call, str(exc), retryable=True)
+                        failed.metadata["parallel_worker_failed"] = True
+                        return index, failed
+
+            completed = await asyncio.gather(
+                *(execute_parallel(index, call) for index, call in parallel)
+            )
+            for index, result in completed:
+                results[index] = result
+
+        suspension_seen = any(
+            result is not None and result.status in {"requires_user_action", "waiting_async"}
+            for result in results
+        )
+        for index, call in serial:
+            if suspension_seen:
+                rejected = _failed_result(
+                    call,
+                    "The previous action must finish before this tool can run.",
+                )
+                rejected.metadata["suspension_rejected"] = True
+                rejected.metadata["executed"] = False
+                results[index] = rejected
+                continue
+            result = await self.aexecute(call, context)
+            results[index] = result
+            if result.status in {"requires_user_action", "waiting_async"}:
+                suspension_seen = True
+        return _keep_single_suspending_result(
+            [result for result in results if result is not None]
+        )
+
     def _execute_parallel(
         self,
         call: ToolCall,
@@ -617,7 +713,28 @@ class ToolExecutor:
             if callable(close):
                 close()
 
-    def _invoke(
+    async def _aexecute_parallel(
+        self,
+        call: ToolCall,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
+        if context.session_factory is None:
+            return await self.aexecute(call, context.fork(session=None))
+        isolated_session = context.session_factory()
+        try:
+            return await self.aexecute(call, context.fork(session=isolated_session))
+        finally:
+            close = getattr(isolated_session, "aclose", None)
+            if callable(close):
+                closed = close()
+                if inspect.isawaitable(closed):
+                    await closed
+            else:
+                close = getattr(isolated_session, "close", None)
+                if callable(close):
+                    close()
+
+    async def _ainvoke(
         self,
         handler: ToolHandler,
         call: ToolCall,
@@ -646,6 +763,8 @@ class ToolExecutor:
             return _with_runtime_metrics(result, started_at, phase="budget", executed=False)
         try:
             raw = handler(call, context)
+            if inspect.isawaitable(raw):
+                raw = await raw
             context.raise_if_fence_lost()
             context.run_control.raise_if_cancelled(context.run_id, force=True)
             ensure_time_remaining(context.deadline_monotonic)

@@ -1,4 +1,8 @@
 from harness_core.adapter_sdk import (
+    InMemoryModelInvocationStore,
+    InMemoryRuntimeEventJournal,
+    verify_model_invocation_store_contract,
+    verify_runtime_event_journal_contract,
     verify_durable_checkpoint_store_contract,
     verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
@@ -36,3 +40,17 @@ def test_durable_checkpoint_reference_adapter_passes_contract() -> None:
 
 def test_run_lease_reference_adapter_passes_contract() -> None:
     verify_run_lease_store_contract(InMemoryRunLeaseStore(), run_id="conformance-lease")
+
+
+def test_runtime_event_journal_reference_adapter_passes_contract() -> None:
+    verify_runtime_event_journal_contract(
+        InMemoryRuntimeEventJournal(),
+        run_id="conformance-events",
+    )
+
+
+def test_model_invocation_store_reference_adapter_passes_contract() -> None:
+    verify_model_invocation_store_contract(
+        InMemoryModelInvocationStore(),
+        run_id="conformance-model",
+    )

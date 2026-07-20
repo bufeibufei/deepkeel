@@ -1,6 +1,8 @@
 """Versioned Adapter SDK for models, persistence, policy, and telemetry."""
 
 from harness_core.adapter_conformance import (
+    verify_model_invocation_store_contract,
+    verify_runtime_event_journal_contract,
     verify_durable_checkpoint_store_contract,
     verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
@@ -25,6 +27,11 @@ from harness_core.budget import (
     preview_budget,
 )
 from harness_core.composition import HarnessRuntimeBuilder, RuntimePorts
+from harness_core.event_journal import (
+    EventJournalConflict,
+    InMemoryRuntimeEventJournal,
+    RuntimeEventJournal,
+)
 from harness_core.context_window import (
     ConservativeTokenEstimator,
     ContextSegment,
@@ -64,11 +71,18 @@ from harness_core.migrations import (
 )
 from harness_core.langgraph_adapter import LangGraphCheckpointerAdapter
 from harness_core.model import (
+    AsyncModelProviderAdapter,
     InMemoryModelInvocationRecorder,
+    InMemoryModelInvocationStore,
     ModelGateway,
     ModelInvocation,
+    ModelInvocationClaim,
+    ModelInvocationConflict,
     ModelInvocationEnvelope,
     ModelInvocationRecorder,
+    ModelInvocationRecord,
+    ModelInvocationStore,
+    ModelInvocationUnavailable,
     ModelProviderAdapter,
     ModelProviderInfo,
     ModelTurn,
@@ -101,6 +115,7 @@ from harness_core.telemetry import (
 
 ADAPTER_SDK_API = (
     "AdaptiveStepModelRouter",
+    "AsyncModelProviderAdapter",
     "BudgetDecision",
     "BudgetLedger",
     "BudgetPolicy",
@@ -119,6 +134,7 @@ ADAPTER_SDK_API = (
     "DeterministicContextWindowManager",
     "ELAPSED_SECONDS",
     "EnvironmentSecretProvider",
+    "EventJournalConflict",
     "ExecutionFence",
     "GovernanceBundle",
     "GovernanceScope",
@@ -129,6 +145,8 @@ ADAPTER_SDK_API = (
     "InMemoryContextSummaryCache",
     "InMemoryTelemetry",
     "InMemoryModelInvocationRecorder",
+    "InMemoryModelInvocationStore",
+    "InMemoryRuntimeEventJournal",
     "InMemoryRunLeaseStore",
     "LangGraphCheckpointerAdapter",
     "MODEL_CALLS",
@@ -137,8 +155,13 @@ ADAPTER_SDK_API = (
     "ModelFailureInfo",
     "ModelGateway",
     "ModelInvocation",
+    "ModelInvocationClaim",
+    "ModelInvocationConflict",
     "ModelInvocationEnvelope",
     "ModelInvocationRecorder",
+    "ModelInvocationRecord",
+    "ModelInvocationStore",
+    "ModelInvocationUnavailable",
     "ModelProviderAdapter",
     "ModelProviderInfo",
     "ModelRouter",
@@ -155,6 +178,7 @@ ADAPTER_SDK_API = (
     "RunLeaseLost",
     "RunLeaseStore",
     "RuntimePorts",
+    "RuntimeEventJournal",
     "RuntimeSession",
     "SecretProvider",
     "SecretRequest",
@@ -174,7 +198,9 @@ ADAPTER_SDK_API = (
     "preview_budget",
     "provider_fingerprint",
     "verify_durable_checkpoint_store_contract",
+    "verify_model_invocation_store_contract",
     "verify_run_lease_store_contract",
+    "verify_runtime_event_journal_contract",
     "verify_runtime_state_store_contract",
     "verify_tool_execution_store_contract",
 )

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+import hashlib
 from typing import Any
 
 from harness_core.type_narrowing import as_dict
@@ -28,6 +30,35 @@ def project_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
         "event_type": EVENT_PROJECTION.get(source_type, source_type),
         "source_event_type": source_type,
         "payload": {**payload, "source_event_type": source_type},
+    }
+
+
+def envelope_runtime_event(
+    event: dict[str, Any],
+    *,
+    run_id: str,
+    thread_id: str,
+    turn_id: str,
+    sequence: int,
+    run_version: int = 0,
+) -> dict[str, Any]:
+    projected = project_runtime_event(event)
+    source_type = str(
+        projected.get("source_event_type") or projected.get("event_type") or ""
+    )
+    event_key = f"{run_id}:{turn_id}:{sequence}:{source_type}"
+    visibility = str(projected.get("visibility") or "internal")
+    return {
+        **projected,
+        "schema_version": "harness-runtime-event-v1",
+        "event_id": hashlib.sha256(event_key.encode("utf-8")).hexdigest(),
+        "sequence": max(1, int(sequence)),
+        "run_version": max(0, int(run_version)),
+        "run_id": run_id,
+        "thread_id": thread_id,
+        "turn_id": turn_id,
+        "visibility": visibility if visibility in {"public", "internal"} else "internal",
+        "created_at": projected.get("created_at") or datetime.now(UTC).isoformat(),
     }
 
 

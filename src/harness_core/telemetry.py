@@ -1,10 +1,11 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from harness_core.type_narrowing import as_dict
 
@@ -14,15 +15,33 @@ class TelemetryRecord(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    schema_version: str = "harness-telemetry-v1"
+    schema_version: str = "harness-telemetry-v2"
+    telemetry_id: str = ""
+    event_id: str = ""
+    sequence: int = 0
+    run_version: int = 0
     event_name: str
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
     step_index: int | None = None
     status: str = ""
+    component: str = "runtime"
+    operation_id: str = ""
+    parent_operation_id: str = ""
+    privacy_class: Literal["operational_metadata"] = "operational_metadata"
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def populate_identity(self) -> "TelemetryRecord":
+        if not self.telemetry_id:
+            identity = self.event_id or (
+                f"{self.run_id}:{self.turn_id}:{self.sequence}:"
+                f"{self.event_name}:{self.operation_id}"
+            )
+            self.telemetry_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        return self
 
     @classmethod
     def from_runtime_event(
@@ -39,13 +58,34 @@ class TelemetryRecord(BaseModel):
             step_index = int(raw_step) if raw_step is not None else None
         except (TypeError, ValueError):
             step_index = None
+        event_id = str(event.get("event_id") or "")
+        sequence = _safe_int(event.get("sequence"))
+        run_version = _safe_int(event.get("run_version"))
+        event_name = str(event.get("event_type") or "runtime.event")
+        operation_id = str(
+            payload.get("invocation_id")
+            or payload.get("tool_call_id")
+            or payload.get("operation_id")
+            or event_id
+        )
+        identity = event_id or (
+            f"{run_id}:{turn_id}:{sequence}:{event_name}:{operation_id}"
+        )
         return cls(
-            event_name=str(event.get("event_type") or "runtime.event"),
+            telemetry_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+            event_id=event_id,
+            sequence=sequence,
+            run_version=run_version,
+            event_name=event_name,
             run_id=run_id,
             thread_id=thread_id,
             turn_id=turn_id,
             step_index=step_index,
             status=str(event.get("status") or payload.get("status") or ""),
+            component=_event_component(event_name),
+            operation_id=operation_id,
+            parent_operation_id=str(payload.get("parent_operation_id") or ""),
+            occurred_at=_event_occurred_at(event.get("created_at")),
             attributes={
                 "source_event_type": str(event.get("source_event_type") or ""),
                 **_safe_runtime_attributes(payload),
@@ -92,6 +132,9 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "finish_reason",
     "model_id",
     "model_role",
+    "invocation_id",
+    "operation_id",
+    "parent_operation_id",
     "package_id",
     "phase",
     "provider_id",
@@ -103,6 +146,7 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "stop_reason",
     "step_index",
     "tool_name",
+    "tool_call_id",
     "tool_status",
 }
 
@@ -116,3 +160,25 @@ def _safe_runtime_attributes(payload: dict[str, Any]) -> dict[str, Any]:
         if key in _SAFE_RUNTIME_ATTRIBUTE_KEYS
         and isinstance(value, (str, int, float, bool, type(None)))
     }
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return max(0, int(value or 0))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _event_occurred_at(value: Any) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    try:
+        parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    except ValueError:
+        return datetime.now(UTC)
+
+
+def _event_component(event_name: str) -> str:
+    prefix = str(event_name or "runtime").split(".", 1)[0]
+    return prefix if prefix in {"agent", "answer", "budget", "model", "run", "tool"} else "runtime"

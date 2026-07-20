@@ -5,7 +5,7 @@ import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
-from threading import Event as ThreadEvent
+from threading import Event as ThreadEvent, Lock
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -37,7 +37,8 @@ from harness_core.context_window import (
     DeterministicContextWindowManager,
 )
 from harness_core.control import NoopRunControl, RunControl
-from harness_core.events import AgentEventPersistenceError, project_runtime_event
+from harness_core.event_journal import RuntimeEventJournal
+from harness_core.events import AgentEventPersistenceError, envelope_runtime_event
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.graph import create_harness_graph
 from harness_core.langgraph_adapter import (
@@ -46,6 +47,7 @@ from harness_core.langgraph_adapter import (
 )
 from harness_core.model import (
     ModelInvocationRecorder,
+    ModelInvocationStore,
     ModelProviderAdapter,
     RoutedModelGateway,
 )
@@ -147,6 +149,7 @@ class HarnessRuntime:
         max_steps: int = 12,
         model_router: ModelRouter | None = None,
         model_invocation_recorder: ModelInvocationRecorder | None = None,
+        model_invocation_store: ModelInvocationStore | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         run_control: RunControl | None = None,
@@ -156,6 +159,7 @@ class HarnessRuntime:
         context_builder: ContextBuilder | None = None,
         context_window_manager: ContextWindowManager | None = None,
         runtime_state_store: RuntimeStateStore | None = None,
+        event_journal: RuntimeEventJournal | None = None,
         reference_projector: ReferenceProjector | None = None,
         run_lease_store: RunLeaseStore | None = None,
         run_lease_owner_id: str = "",
@@ -173,6 +177,7 @@ class HarnessRuntime:
         self.max_steps = max(2, int(max_steps))
         self.model_router = model_router or AdaptiveStepModelRouter()
         self.model_invocation_recorder = model_invocation_recorder
+        self.model_invocation_store = model_invocation_store
         self.policy_engine = policy_engine or getattr(tool_executor, "policy_engine", None) or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or getattr(tool_executor, "budget_ledger", None) or InMemoryBudgetLedger()
         self.run_control = run_control or NoopRunControl()
@@ -184,6 +189,7 @@ class HarnessRuntime:
             context_window_manager or DeterministicContextWindowManager()
         )
         self.runtime_state_store = runtime_state_store
+        self.event_journal = event_journal
         self.reference_projector = reference_projector or DefaultReferenceProjector()
         self.run_lease_store = run_lease_store
         self.run_lease_owner_id = str(run_lease_owner_id or f"runtime-{uuid4().hex}")
@@ -196,6 +202,24 @@ class HarnessRuntime:
 
     def close(self) -> None:
         self.capability_catalog.close()
+
+    def replay_events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> tuple[RuntimeStreamEvent, ...]:
+        if self.event_journal is None:
+            return ()
+        return tuple(
+            RuntimeStreamEvent.model_validate(event)
+            for event in self.event_journal.read_after(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        )
 
     @staticmethod
     def supports_native_tools(provider: Any) -> bool:
@@ -253,16 +277,37 @@ class HarnessRuntime:
         session: Any = None,
         event_sink: EventSink | None = None,
     ) -> RuntimeResult:
-        """Run the canonical state machine without blocking an async host."""
+        """Run the canonical async state machine in the host event loop."""
         prepared = self._ensure_request_identity(request)
-        return await asyncio.to_thread(
-            self.run,
-            prepared,
-            provider=provider,
-            providers=providers,
-            session=session,
-            event_sink=event_sink,
-        )
+        if self.run_lease_store is None:
+            return await self._arun_claimed(
+                prepared,
+                provider=provider,
+                providers=providers,
+                session=session,
+                event_sink=event_sink,
+            )
+        with RunLeaseGuard(
+            self.run_lease_store,
+            run_id=prepared.run_id,
+            owner_id=self.run_lease_owner_id,
+            ttl_seconds=self.run_lease_ttl_seconds,
+        ) as lease_guard:
+            def guarded_sink(event: dict[str, Any]) -> None:
+                lease_guard.raise_if_lost()
+                if event_sink is not None:
+                    event_sink(event)
+
+            result = await self._arun_claimed(
+                prepared,
+                provider=provider,
+                providers=providers,
+                session=session,
+                event_sink=guarded_sink,
+                execution_fence=lease_guard,
+            )
+            lease_guard.raise_if_lost()
+            return result
 
     async def astream(
         self,
@@ -279,10 +324,23 @@ class HarnessRuntime:
             maxsize=self.async_stream_buffer_size
         )
         closed = ThreadEvent()
+        pending_puts: set[asyncio.Task[None]] = set()
 
         def sink(event: dict[str, Any]) -> None:
             if closed.is_set():
                 self.run_control.raise_if_cancelled(prepared.run_id, force=True)
+                return
+            try:
+                producer_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                producer_loop = None
+            if producer_loop is loop:
+                try:
+                    queue.put_nowait(("event", event))
+                except asyncio.QueueFull:
+                    pending = loop.create_task(queue.put(("event", event)))
+                    pending_puts.add(pending)
+                    pending.add_done_callback(pending_puts.discard)
                 return
             future = asyncio.run_coroutine_threadsafe(queue.put(("event", event)), loop)
             while True:
@@ -322,15 +380,21 @@ class HarnessRuntime:
                     raise value
                 result = value
                 yield RuntimeStreamEvent(
+                    run_id=result.run_id,
+                    thread_id=result.thread_id,
+                    turn_id=result.turn_id,
                     event_type="runtime.result",
                     title="Runtime result",
                     summary=result.final_answer.summary,
                     payload={"result": result.model_dump(mode="json")},
+                    ephemeral=True,
                 )
                 completed = True
                 return
         finally:
             closed.set()
+            for pending in tuple(pending_puts):
+                pending.cancel()
             if not completed and not task.done():
                 cancel = getattr(self.run_control, "cancel", None)
                 if callable(cancel):
@@ -372,6 +436,27 @@ class HarnessRuntime:
         )
 
     def _run_claimed(
+        self,
+        request: RuntimeRequest,
+        *,
+        provider: Any = None,
+        providers: dict[str, Any] | None = None,
+        session: Any = None,
+        event_sink: EventSink | None = None,
+        execution_fence: ExecutionFence | None = None,
+    ) -> RuntimeResult:
+        return asyncio.run(
+            self._arun_claimed(
+                request,
+                provider=provider,
+                providers=providers,
+                session=session,
+                event_sink=event_sink,
+                execution_fence=execution_fence,
+            )
+        )
+
+    async def _arun_claimed(
         self,
         request: RuntimeRequest,
         *,
@@ -472,23 +557,57 @@ class HarnessRuntime:
             or f"turn-{uuid4()}"
         )
         events: list[dict[str, Any]] = []
+        event_lock = Lock()
+        event_sequence = (
+            self.event_journal.latest_sequence(run_id)
+            if self.event_journal is not None
+            else max(
+                0,
+                _optional_int(bundle.get("event_sequence")) or 0,
+                _optional_int(short.get("event_sequence")) or 0,
+            )
+        )
+        run_version = max(
+            0,
+            _optional_int(bundle.get("run_version")) or 0,
+            _optional_int(short.get("run_version")) or 0,
+        )
         telemetry_error_count = 0
         telemetry_last_error = ""
         answer_delta_streamed = False
 
         def emit(event: dict[str, Any]) -> None:
             nonlocal answer_delta_streamed, telemetry_error_count, telemetry_last_error
+            nonlocal event_sequence
             if execution_fence is not None:
                 execution_fence.raise_if_lost()
             self.run_control.raise_if_cancelled(run_id)
-            projected = project_runtime_event(event)
-            payload = as_dict(projected.get("payload"))
-            payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
-            projected["payload"] = payload
-            if projected.get("event_type") == "answer.delta":
-                answer_delta_streamed = True
-            if not projected.get("ephemeral"):
-                events.append(projected)
+            with event_lock:
+                event_sequence += 1
+                projected = envelope_runtime_event(
+                    event,
+                    run_id=run_id,
+                    thread_id=conversation_thread_id,
+                    turn_id=turn_id,
+                    sequence=event_sequence,
+                    run_version=run_version,
+                )
+                payload = as_dict(projected.get("payload"))
+                payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
+                projected["payload"] = payload
+                envelope = RuntimeStreamEvent.model_validate(projected)
+                if not envelope.ephemeral and self.event_journal is not None:
+                    try:
+                        self.event_journal.append(envelope)
+                    except Exception as exc:
+                        raise AgentEventPersistenceError(
+                            f"runtime event journal append failed: {exc}"
+                        ) from exc
+                projected = envelope.model_dump(mode="json")
+                if projected.get("event_type") == "answer.delta":
+                    answer_delta_streamed = True
+                if not projected.get("ephemeral"):
+                    events.append(projected)
             try:
                 self.telemetry.record(
                     TelemetryRecord.from_runtime_event(
@@ -511,6 +630,7 @@ class HarnessRuntime:
             policy_engine=self.policy_engine,
             budget_ledger=self.budget_ledger,
             invocation_recorder=self.model_invocation_recorder,
+            invocation_store=self.model_invocation_store,
         )
         graph = create_harness_graph(
             model=model_gateway,
@@ -557,7 +677,7 @@ class HarnessRuntime:
         try:
             if short.get("recover_interrupted"):
                 if self._has_graph_checkpoint(graph_thread_id):
-                    state = dict(graph.recover(
+                    state = dict(await graph.arecover(
                         graph_thread_id,
                         tool_context=tool_context,
                         event_sink=emit,
@@ -578,7 +698,7 @@ class HarnessRuntime:
                         model_policy=resolved_model_policy,
                         budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
                     )
-                    state = dict(graph.invoke(
+                    state = dict(await graph.ainvoke(
                         context,
                         tool_context=tool_context,
                         event_sink=emit,
@@ -587,7 +707,7 @@ class HarnessRuntime:
             elif short.get("resume"):
                 resume_payload = resume_payload_from_context(short)
                 try:
-                    state = dict(graph.resume(
+                    state = dict(await graph.aresume(
                         graph_thread_id,
                         resume_payload,
                         tool_context=tool_context,
@@ -634,7 +754,7 @@ class HarnessRuntime:
                     if not any(message.role == "user" for message in recovered.messages):
                         recovered.messages = [*build_initial_messages(question, short, bundle), *recovered.messages]
                     active_graph_thread_id = recovered_thread_id
-                    state = dict(graph.invoke(
+                    state = dict(await graph.ainvoke(
                         recovered,
                         tool_context=tool_context,
                         event_sink=emit,
@@ -658,7 +778,7 @@ class HarnessRuntime:
                     budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
                     pending_tool_calls=precondition_calls,
                 )
-                state = dict(graph.invoke(
+                state = dict(await graph.ainvoke(
                     context,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -891,7 +1011,16 @@ class HarnessRuntime:
         )
         failure = classify_runtime_failure(exc)
         resolved_skill = SkillPolicy.from_snapshot(skill_activation).runtime_snapshot()
-        event = project_runtime_event(
+        sequence = (
+            self.event_journal.latest_sequence(run_id)
+            if self.event_journal is not None
+            else max(
+                0,
+                _optional_int(context_bundle.get("event_sequence")) or 0,
+                _optional_int(short_context.get("event_sequence")) or 0,
+            )
+        ) + 1
+        event = envelope_runtime_event(
             {
                 "event_type": "agent.failed",
                 "title": "Agent context setup failed",
@@ -904,8 +1033,26 @@ class HarnessRuntime:
                     "phase": "context_setup",
                     "skill_id": str(resolved_skill.get("skill_id") or ""),
                 },
-            }
+            },
+            run_id=run_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            sequence=sequence,
+            run_version=max(
+                0,
+                _optional_int(context_bundle.get("run_version")) or 0,
+                _optional_int(short_context.get("run_version")) or 0,
+            ),
         )
+        envelope = RuntimeStreamEvent.model_validate(event)
+        if self.event_journal is not None:
+            try:
+                self.event_journal.append(envelope)
+            except Exception as journal_exc:
+                raise AgentEventPersistenceError(
+                    f"runtime event journal append failed: {journal_exc}"
+                ) from journal_exc
+        event = envelope.model_dump(mode="json")
         try:
             self.telemetry.record(
                 TelemetryRecord.from_runtime_event(
