@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import importlib.util
 import json
 from pathlib import Path
@@ -253,6 +254,24 @@ def verify_runtime_and_streaming() -> None:
     assert streamed.final_answer.markdown == "streamed answer"
     assert "".join(deltas) == "streamed answer"
     assert streamed.answer_delta_streamed is True
+
+    async def verify_async_entrypoints() -> None:
+        async_result = await runtime.arun(
+            _request("async", "Async"),
+            provider=CompletionProvider(["async answer"]),
+        )
+        assert async_result.final_answer.markdown == "async answer"
+        events = [
+            event
+            async for event in runtime.astream(
+                _request("async-stream", "Async stream"),
+                provider=StreamingProvider(),
+            )
+        ]
+        assert events[-1].event_type == "runtime.result"
+        assert events[-1].payload["result"]["status"] == "completed"
+
+    asyncio.run(verify_async_entrypoints())
 
 
 def verify_tools_parallel_failure_and_references() -> None:
@@ -556,7 +575,7 @@ def verify_installation_isolation() -> None:
     package_path = Path(harness_core.__file__).resolve()
     assert "packages/harness_core/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert harness_core.HARNESS_CORE_VERSION == "3.1.0"
+    assert harness_core.HARNESS_CORE_VERSION == "3.2.0"
     assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",

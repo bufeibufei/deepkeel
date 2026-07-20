@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.2.0
+
+- Added distributed run leases with fencing tokens, heartbeat renewal, expiry
+  takeover and a public adapter conformance contract.
+- Added explicit state migration chains for durable runtime and checkpoint
+  contracts instead of forcing Hosts to guess or silently coerce old state.
+- Added `arun()` and `astream()` async Host APIs while retaining one canonical
+  synchronous state machine and cooperative stream cancellation.
+- Added concurrency, migration and async streaming fault coverage.
+
 ## 3.1.0
 
 - Added a public, typed `CompiledSkillSpec` contract and manifest compiler so Hosts no

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from harness_core.contracts import AgentMessage, Artifact, Observation, RunContext, RunStatus, ToolCall
+from harness_core.migrations import StateMigrationError, StateMigrationRegistry
 
 if TYPE_CHECKING:
     from harness_core.runtime_api import RuntimeResult
@@ -155,14 +156,30 @@ class InMemoryDurableCheckpointStore:
         return tuple(run_ids[: max(0, int(limit))])
 
 
-def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str, Any]:
+def checkpoint_from_runtime(
+    previous_runtime: dict[str, Any] | None,
+    *,
+    migrations: StateMigrationRegistry | None = None,
+) -> dict[str, Any]:
     runtime = previous_runtime if isinstance(previous_runtime, dict) else {}
+    runtime = _migrate_if_needed(
+        runtime,
+        state_kind="runtime",
+        target_version=RUNTIME_SCHEMA_VERSION,
+        migrations=migrations,
+    )
     _require_supported_version(
         runtime,
         supported={RUNTIME_SCHEMA_VERSION},
         contract_name="runtime",
     )
     checkpoint = as_dict(runtime.get("checkpoint"))
+    checkpoint = _migrate_if_needed(
+        checkpoint,
+        state_kind="checkpoint",
+        target_version=CHECKPOINT_SCHEMA_VERSION,
+        migrations=migrations,
+    )
     _require_supported_version(
         checkpoint,
         supported={CHECKPOINT_SCHEMA_VERSION},
@@ -171,8 +188,20 @@ def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str
     return checkpoint
 
 
-def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any]:
+def checkpoint_from_durable_state(
+    value: dict[str, Any] | None,
+    *,
+    migrations: StateMigrationRegistry | None = None,
+) -> dict[str, Any]:
     state = value if isinstance(value, dict) else {}
+    version = str(state.get("schema_version") or "").strip()
+    if version and version not in {CHECKPOINT_SCHEMA_VERSION, DURABLE_CHECKPOINT_SCHEMA_VERSION}:
+        state = _migrate_if_needed(
+            state,
+            state_kind="durable_checkpoint",
+            target_version=DURABLE_CHECKPOINT_SCHEMA_VERSION,
+            migrations=migrations,
+        )
     _require_supported_version(
         state,
         supported={CHECKPOINT_SCHEMA_VERSION, DURABLE_CHECKPOINT_SCHEMA_VERSION},
@@ -182,6 +211,12 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
         return state
     direct = as_dict(state.get("checkpoint"))
     if direct:
+        direct = _migrate_if_needed(
+            direct,
+            state_kind="checkpoint",
+            target_version=CHECKPOINT_SCHEMA_VERSION,
+            migrations=migrations,
+        )
         _require_supported_version(
             direct,
             supported={CHECKPOINT_SCHEMA_VERSION},
@@ -189,7 +224,7 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
         )
         return direct
     runtime = as_dict(state.get("runtime"))
-    return checkpoint_from_runtime(runtime)
+    return checkpoint_from_runtime(runtime, migrations=migrations)
 
 
 def durable_state_from_result(
@@ -267,7 +302,14 @@ def restore_run_context(
     user_id: str,
     skill_activation: dict[str, Any] | None = None,
     model_policy: dict[str, Any] | None = None,
+    migrations: StateMigrationRegistry | None = None,
 ) -> RunContext:
+    checkpoint = _migrate_if_needed(
+        checkpoint,
+        state_kind="checkpoint",
+        target_version=CHECKPOINT_SCHEMA_VERSION,
+        migrations=migrations,
+    )
     _require_supported_version(
         checkpoint,
         supported={CHECKPOINT_SCHEMA_VERSION},
@@ -417,6 +459,28 @@ def restore_run_context(
         },
         step_count=int(checkpoint.get("step_count") or 0),
     )
+
+
+def _migrate_if_needed(
+    payload: dict[str, Any],
+    *,
+    state_kind: str,
+    target_version: str,
+    migrations: StateMigrationRegistry | None,
+) -> dict[str, Any]:
+    if not payload:
+        return payload
+    version = str(payload.get("schema_version") or "").strip()
+    if not version or version == target_version or migrations is None:
+        return payload
+    try:
+        return migrations.migrate(
+            state_kind,
+            payload,
+            target_version=target_version,
+        )
+    except StateMigrationError as exc:
+        raise CheckpointCompatibilityError(str(exc)) from exc
 
 
 def _confirmed_policy_tool_call(

@@ -4,6 +4,7 @@ from typing import Any
 from uuid import uuid4
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
+from harness_core.leases import RunLeaseConflict, RunLeaseStore
 from harness_core.persistence import DurableCheckpointStore
 from harness_core.state_store import (
     RUN_SETTLED_EVENT,
@@ -12,6 +13,31 @@ from harness_core.state_store import (
     RuntimeStateStore,
 )
 from harness_core.tools import ToolExecutionStore
+
+
+def verify_run_lease_store_contract(
+    store: RunLeaseStore,
+    *,
+    run_id: str,
+) -> None:
+    """Assert exclusive ownership, renewal, fencing, and release semantics."""
+
+    lease = store.claim(run_id, owner_id="worker-a", ttl_seconds=30)
+    assert lease.run_id == run_id
+    assert lease.owner_id == "worker-a"
+    assert store.inspect(run_id) is not None
+    try:
+        store.claim(run_id, owner_id="worker-b", ttl_seconds=30)
+    except RunLeaseConflict:
+        pass
+    else:
+        raise AssertionError("run lease store allowed concurrent ownership")
+    renewed = store.renew(lease, ttl_seconds=60)
+    assert renewed.token == lease.token
+    assert renewed.generation == lease.generation
+    assert renewed.expires_at > lease.expires_at
+    store.release(renewed)
+    assert store.inspect(run_id) is None
 
 
 def verify_runtime_state_store_contract(

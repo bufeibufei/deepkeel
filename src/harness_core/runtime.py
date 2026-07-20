@@ -1,7 +1,9 @@
 from __future__ import annotations
+import asyncio
 import hashlib
 import json
 import time
+from collections.abc import AsyncIterator
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -46,6 +48,8 @@ from harness_core.model import (
     RoutedModelGateway,
 )
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
+from harness_core.leases import RunLeaseGuard, RunLeaseStore
+from harness_core.migrations import StateMigrationRegistry
 from harness_core.persistence import (
     DurableCheckpointStore,
     checkpoint_from_durable_state,
@@ -151,6 +155,10 @@ class HarnessRuntime:
         context_window_manager: ContextWindowManager | None = None,
         runtime_state_store: RuntimeStateStore | None = None,
         reference_projector: ReferenceProjector | None = None,
+        run_lease_store: RunLeaseStore | None = None,
+        run_lease_owner_id: str = "",
+        run_lease_ttl_seconds: float = 60.0,
+        state_migrations: StateMigrationRegistry | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
@@ -173,6 +181,10 @@ class HarnessRuntime:
         )
         self.runtime_state_store = runtime_state_store
         self.reference_projector = reference_projector or DefaultReferenceProjector()
+        self.run_lease_store = run_lease_store
+        self.run_lease_owner_id = str(run_lease_owner_id or f"runtime-{uuid4().hex}")
+        self.run_lease_ttl_seconds = float(run_lease_ttl_seconds)
+        self.state_migrations = state_migrations
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
 
@@ -186,6 +198,149 @@ class HarnessRuntime:
         ) or callable(getattr(provider, "complete_chat", None))
 
     def run(
+        self,
+        request: RuntimeRequest,
+        *,
+        provider: Any = None,
+        providers: dict[str, Any] | None = None,
+        session: Any = None,
+        event_sink: EventSink | None = None,
+    ) -> RuntimeResult:
+        prepared = self._ensure_request_identity(request)
+        if self.run_lease_store is None:
+            return self._run_claimed(
+                prepared,
+                provider=provider,
+                providers=providers,
+                session=session,
+                event_sink=event_sink,
+            )
+        with RunLeaseGuard(
+            self.run_lease_store,
+            run_id=prepared.run_id,
+            owner_id=self.run_lease_owner_id,
+            ttl_seconds=self.run_lease_ttl_seconds,
+        ) as lease_guard:
+
+            def guarded_sink(event: dict[str, Any]) -> None:
+                lease_guard.raise_if_lost()
+                if event_sink is not None:
+                    event_sink(event)
+
+            result = self._run_claimed(
+                prepared,
+                provider=provider,
+                providers=providers,
+                session=session,
+                event_sink=guarded_sink,
+            )
+            lease_guard.raise_if_lost()
+            return result
+
+    async def arun(
+        self,
+        request: RuntimeRequest,
+        *,
+        provider: Any = None,
+        providers: dict[str, Any] | None = None,
+        session: Any = None,
+        event_sink: EventSink | None = None,
+    ) -> RuntimeResult:
+        """Run the canonical state machine without blocking an async host."""
+        prepared = self._ensure_request_identity(request)
+        return await asyncio.to_thread(
+            self.run,
+            prepared,
+            provider=provider,
+            providers=providers,
+            session=session,
+            event_sink=event_sink,
+        )
+
+    async def astream(
+        self,
+        request: RuntimeRequest,
+        *,
+        provider: Any = None,
+        providers: dict[str, Any] | None = None,
+        session: Any = None,
+    ) -> AsyncIterator[RuntimeStreamEvent]:
+        """Stream runtime events with cooperative cancellation for async hosts."""
+        prepared = self._ensure_request_identity(request)
+        loop = asyncio.get_running_loop()
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+        def sink(event: dict[str, Any]) -> None:
+            loop.call_soon_threadsafe(queue.put_nowait, ("event", event))
+
+        async def execute() -> None:
+            try:
+                result = await self.arun(
+                    prepared,
+                    provider=provider,
+                    providers=providers,
+                    session=session,
+                    event_sink=sink,
+                )
+                await queue.put(("result", result))
+            except BaseException as exc:
+                await queue.put(("error", exc))
+
+        task = asyncio.create_task(execute())
+        completed = False
+        try:
+            while True:
+                kind, value = await queue.get()
+                if kind == "event":
+                    yield RuntimeStreamEvent.model_validate(value)
+                    continue
+                if kind == "error":
+                    raise value
+                result = value
+                yield RuntimeStreamEvent(
+                    event_type="runtime.result",
+                    title="Runtime result",
+                    summary=result.final_answer.summary,
+                    payload={"result": result.model_dump(mode="json")},
+                )
+                completed = True
+                return
+        finally:
+            if not completed and not task.done():
+                cancel = getattr(self.run_control, "cancel", None)
+                if callable(cancel):
+                    cancel(prepared.run_id)
+                task.cancel()
+
+    def _ensure_request_identity(self, request: RuntimeRequest) -> RuntimeRequest:
+        bundle = dict(request.context_bundle)
+        run_id = str(
+            request.run_id
+            or bundle.get("agent_session_id")
+            or bundle.get("agent_run_id")
+            or bundle.get("run_id")
+            or uuid4()
+        )
+        thread_id = str(
+            request.thread_id
+            or bundle.get("thread_id")
+            or bundle.get("ask_thread_id")
+            or run_id
+        )
+        turn_id = str(request.turn_id or bundle.get("turn_id") or f"turn-{uuid4()}")
+        bundle.setdefault("run_id", run_id)
+        bundle.setdefault("thread_id", thread_id)
+        bundle.setdefault("turn_id", turn_id)
+        return request.model_copy(
+            update={
+                "run_id": run_id,
+                "thread_id": thread_id,
+                "turn_id": turn_id,
+                "context_bundle": bundle,
+            }
+        )
+
+    def _run_claimed(
         self,
         request: RuntimeRequest,
         *,
@@ -236,7 +391,13 @@ class HarnessRuntime:
                 session=session,
                 event_sink=event_sink,
             )
-        run_id = str(bundle.get("agent_session_id") or bundle.get("agent_run_id") or bundle.get("run_id") or uuid4())
+        run_id = str(
+            request.run_id
+            or bundle.get("agent_session_id")
+            or bundle.get("agent_run_id")
+            or bundle.get("run_id")
+            or uuid4()
+        )
         durable_state = (
             self._load_durable_checkpoint(run_id, session=session, user_id=str(user_id or "local-device"))
             if short.get("resume")
@@ -264,10 +425,19 @@ class HarnessRuntime:
         skill_policy = SkillPolicy.from_snapshot(resolved_skill)
         skill = skill_policy.runtime_snapshot()
         conversation_thread_id = str(
-            bundle.get("thread_id") or bundle.get("ask_thread_id") or short.get("ask_thread_id") or run_id
+            request.thread_id
+            or bundle.get("thread_id")
+            or bundle.get("ask_thread_id")
+            or short.get("ask_thread_id")
+            or run_id
         )
         graph_thread_id = run_id
-        turn_id = str(bundle.get("turn_id") or short.get("turn_id") or f"turn-{uuid4()}")
+        turn_id = str(
+            request.turn_id
+            or bundle.get("turn_id")
+            or short.get("turn_id")
+            or f"turn-{uuid4()}"
+        )
         events: list[dict[str, Any]] = []
         telemetry_error_count = 0
         telemetry_last_error = ""
@@ -394,14 +564,25 @@ class HarnessRuntime:
                     raise
                 except (RuntimeError, ValueError, AttributeError):
                     previous_runtime = short.get("previous_runtime")
-                    recovered_checkpoint = checkpoint_from_durable_state(durable_state)
+                    recovered_checkpoint = checkpoint_from_durable_state(
+                        durable_state,
+                        migrations=self.state_migrations,
+                    )
                     if not recovered_checkpoint:
                         recovered_checkpoint = checkpoint_from_runtime(
-                            previous_runtime if isinstance(previous_runtime, dict) else {}
+                            previous_runtime if isinstance(previous_runtime, dict) else {},
+                            migrations=self.state_migrations,
                         )
                     if not recovered_checkpoint:
                         raise RuntimeError("durable checkpoint is unavailable")
-                    recovery_source = "agent_run_checkpoint" if checkpoint_from_durable_state(durable_state) else "session_projection"
+                    recovery_source = (
+                        "agent_run_checkpoint"
+                        if checkpoint_from_durable_state(
+                            durable_state,
+                            migrations=self.state_migrations,
+                        )
+                        else "session_projection"
+                    )
                     recovered_thread_id = f"{graph_thread_id}:recovered:{uuid4().hex[:8]}"
                     recovered = restore_run_context(
                         checkpoint=recovered_checkpoint,
@@ -412,6 +593,7 @@ class HarnessRuntime:
                         user_id=str(user_id or "local-device"),
                         skill_activation=skill,
                         model_policy=resolved_model_policy,
+                        migrations=self.state_migrations,
                     )
                     if not any(message.role == "user" for message in recovered.messages):
                         recovered.messages = [*build_initial_messages(question, short, bundle), *recovered.messages]

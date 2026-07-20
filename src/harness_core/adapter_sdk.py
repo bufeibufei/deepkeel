@@ -2,6 +2,7 @@
 
 from harness_core.adapter_conformance import (
     verify_durable_checkpoint_store_contract,
+    verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
     verify_tool_execution_store_contract,
 )
@@ -45,6 +46,19 @@ from harness_core.governance import (
     MappingSecretProvider,
     SecretProvider,
     SecretRequest,
+)
+from harness_core.leases import (
+    InMemoryRunLeaseStore,
+    RunLease,
+    RunLeaseConflict,
+    RunLeaseGuard,
+    RunLeaseLost,
+    RunLeaseStore,
+)
+from harness_core.migrations import (
+    StateMigration,
+    StateMigrationError,
+    StateMigrationRegistry,
 )
 from harness_core.langgraph_adapter import LangGraphCheckpointerAdapter
 from harness_core.model import (
@@ -112,6 +126,7 @@ ADAPTER_SDK_API = (
     "InMemoryContextSummaryCache",
     "InMemoryTelemetry",
     "InMemoryModelInvocationRecorder",
+    "InMemoryRunLeaseStore",
     "LangGraphCheckpointerAdapter",
     "MODEL_CALLS",
     "MODEL_RETRIES",
@@ -131,11 +146,19 @@ ADAPTER_SDK_API = (
     "PolicyEngine",
     "PolicyRule",
     "RuleBasedPolicyEngine",
+    "RunLease",
+    "RunLeaseConflict",
+    "RunLeaseGuard",
+    "RunLeaseLost",
+    "RunLeaseStore",
     "RuntimePorts",
     "RuntimeSession",
     "SecretProvider",
     "SecretRequest",
     "SessionFactory",
+    "StateMigration",
+    "StateMigrationError",
+    "StateMigrationRegistry",
     "TOOL_CALLS",
     "TOOL_CONCURRENCY",
     "TelemetryPort",
@@ -147,6 +170,7 @@ ADAPTER_SDK_API = (
     "preview_budget",
     "provider_fingerprint",
     "verify_durable_checkpoint_store_contract",
+    "verify_run_lease_store_contract",
     "verify_runtime_state_store_contract",
     "verify_tool_execution_store_contract",
 )

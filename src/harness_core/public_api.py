@@ -6,7 +6,7 @@ from harness_core.mcp_sdk import MCP_SDK_API
 from harness_core.orchestration_sdk import ORCHESTRATION_SDK_API
 from harness_core.runtime_sdk import RUNTIME_SDK_API
 
-PUBLIC_API_VERSION = "3.1.0"
+PUBLIC_API_VERSION = "3.2.0"
 PUBLIC_API_BY_LAYER = {
     "runtime": RUNTIME_SDK_API,
     "extension": EXTENSION_SDK_API,

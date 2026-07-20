@@ -1,5 +1,6 @@
 from harness_core.adapter_sdk import (
     verify_durable_checkpoint_store_contract,
+    verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
     verify_tool_execution_store_contract,
 )
@@ -7,6 +8,7 @@ from harness_core.runtime_sdk import (
     InMemoryDurableCheckpointStore,
     InMemoryRuntimeStateStore,
 )
+from harness_core.adapter_sdk import InMemoryRunLeaseStore
 from harness_core.tools import InMemoryToolExecutionStore
 
 
@@ -30,3 +32,7 @@ def test_durable_checkpoint_reference_adapter_passes_contract() -> None:
         run_id="conformance-checkpoint",
         user_id="user-1",
     )
+
+
+def test_run_lease_reference_adapter_passes_contract() -> None:
+    verify_run_lease_store_contract(InMemoryRunLeaseStore(), run_id="conformance-lease")

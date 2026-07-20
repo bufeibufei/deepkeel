@@ -18,6 +18,8 @@ from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
 from harness_core.model_routing import ModelRouter
 from harness_core.model import ModelInvocationRecorder
+from harness_core.leases import RunLeaseStore
+from harness_core.migrations import StateMigrationRegistry
 from harness_core.persistence import DurableCheckpointStore
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.policy import PolicyEngine
@@ -47,6 +49,10 @@ class RuntimePortChanges(TypedDict, total=False):
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
     reference_projector: ReferenceProjector | None
+    run_lease_store: RunLeaseStore | None
+    run_lease_owner_id: str
+    run_lease_ttl_seconds: float
+    state_migrations: StateMigrationRegistry | None
     capability_services: Mapping[str, object]
 
 
@@ -65,6 +71,10 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
     reference_projector: ReferenceProjector | None
+    run_lease_store: RunLeaseStore | None
+    run_lease_owner_id: str
+    run_lease_ttl_seconds: float
+    state_migrations: StateMigrationRegistry | None
     capability_services: Mapping[str, object]
 
 
@@ -89,6 +99,10 @@ class RuntimePorts:
     context_window_manager: ContextWindowManager | None = None
     runtime_state_store: RuntimeStateStore | None = None
     reference_projector: ReferenceProjector | None = None
+    run_lease_store: RunLeaseStore | None = None
+    run_lease_owner_id: str = ""
+    run_lease_ttl_seconds: float = 60.0
+    state_migrations: StateMigrationRegistry | None = None
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -226,6 +240,10 @@ class HarnessRuntimeBuilder:
             context_window_manager=self._ports.context_window_manager,
             runtime_state_store=self._ports.runtime_state_store,
             reference_projector=self._ports.reference_projector,
+            run_lease_store=self._ports.run_lease_store,
+            run_lease_owner_id=self._ports.run_lease_owner_id,
+            run_lease_ttl_seconds=self._ports.run_lease_ttl_seconds,
+            state_migrations=self._ports.state_migrations,
         )
 
     def _install_pack(

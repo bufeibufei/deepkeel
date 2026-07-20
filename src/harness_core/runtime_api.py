@@ -72,6 +72,9 @@ class RuntimeRequest(BaseModel):
 
     question: str = Field(min_length=1)
     user_id: str = "local-device"
+    run_id: str = ""
+    thread_id: str = ""
+    turn_id: str = ""
     short_context: dict[str, Any] = Field(default_factory=dict)
     context_bundle: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
