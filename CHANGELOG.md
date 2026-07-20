@@ -1,11 +1,16 @@
 # Changelog
 
-## 3.4.1
+## 3.4.2
 
 - Preserved async-first runtime execution when a Host supplies a synchronous
   LangGraph checkpointer by running the same compiled graph in a worker thread.
-- Added an explicit checkpointer async-capability contract instead of probing
-  persistence methods during a live run.
+- Added an explicit checkpointer async-capability contract, with safe detection
+  for legacy sync-only LangGraph savers that inherit unsupported async methods.
+
+## 3.4.1
+
+- Preserved async-first runtime execution when a Host explicitly marks its
+  LangGraph checkpointer as synchronous.
 
 ## 3.4.0
 

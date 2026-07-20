@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 
@@ -44,4 +45,9 @@ def compiler_checkpointer(value: Any) -> Any:
 def checkpointer_supports_async(value: Any) -> bool:
     """Return the Host-declared async capability without probing persistence."""
 
-    return bool(getattr(value, "supports_async", True))
+    declared = getattr(value, "supports_async", None)
+    if declared is not None:
+        return bool(declared)
+    saver = compiler_checkpointer(value)
+    async_write = getattr(type(saver), "aput_writes", None)
+    return async_write is not BaseCheckpointSaver.aput_writes
