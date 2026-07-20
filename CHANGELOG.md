@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.0.2
+
+- Make the stdio MCP process launch flags portable across Windows and POSIX type checks.
+
 ## 3.0.1
 
 - Aligned the standalone package and Host dependency versions before repository extraction.

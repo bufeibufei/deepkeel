@@ -201,7 +201,9 @@ class StdioMcpClient:
             if key in os.environ
         }
         environment.update(self.spec.environment)
-        creation_flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        creation_flags = (
+            int(getattr(subprocess, "CREATE_NO_WINDOW", 0)) if os.name == "nt" else 0
+        )
         try:
             self._process = subprocess.Popen(
                 [self.spec.command, *self.spec.args],
