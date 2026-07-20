@@ -4,7 +4,8 @@ import asyncio
 import time
 
 from harness_core.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.contracts import ToolCall, ToolResult
+from harness_core.contracts import AgentMessage, RunContext, ToolCall, ToolResult
+from harness_core.graph import HarnessGraph
 from harness_core.model import ModelInvocation, ModelProviderInfo, ModelTurn
 from harness_core.runtime_sdk import InMemoryRunControl
 from harness_core.runtime_sdk import RuntimeRequest
@@ -40,6 +41,47 @@ def test_arun_uses_the_same_canonical_runtime_contract() -> None:
     assert result.run_id == "async-run"
     assert result.final_answer.markdown == "async answer"
     assert result.answer_delta_streamed is True
+
+
+def test_async_graph_falls_back_to_sync_for_sync_only_checkpointer() -> None:
+    class SyncOnlyCompiledGraph:
+        def __init__(self) -> None:
+            self.sync_calls = 0
+
+        def invoke(self, value, *, config):
+            del config
+            self.sync_calls += 1
+            return value
+
+        async def ainvoke(self, value, *, config):
+            del value, config
+            raise AssertionError("sync-only checkpointer must not use ainvoke")
+
+    async def scenario():
+        compiled = SyncOnlyCompiledGraph()
+        graph = HarnessGraph(
+            compiled_graph=compiled,
+            supports_async_checkpointer=False,
+        )
+        context = RunContext(
+            run_id="sync-checkpointer-run",
+            thread_id="sync-checkpointer-thread",
+            turn_id="sync-checkpointer-turn",
+            user_id="user-1",
+            messages=[AgentMessage(id="message-1", role="user", content="hello")],
+        )
+        state = await graph.ainvoke(
+            context,
+            tool_context=ToolExecutionContext(
+                run_id=context.run_id,
+                user_id=context.user_id,
+            ),
+        )
+        return compiled, state
+
+    compiled, state = asyncio.run(scenario())
+    assert compiled.sync_calls == 1
+    assert state["run_id"] == "sync-checkpointer-run"
 
 
 def test_astream_emits_deltas_and_one_typed_terminal_result() -> None:

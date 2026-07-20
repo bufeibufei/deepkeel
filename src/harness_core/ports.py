@@ -16,6 +16,8 @@ SessionFactory: TypeAlias = Callable[[], RuntimeSession]
 class GraphCheckpointer(Protocol):
     """Engine-managed graph state; business recovery uses DurableCheckpointStore."""
 
+    supports_async: bool
+
     @property
     def compiler_checkpointer(self) -> Any: ...
 

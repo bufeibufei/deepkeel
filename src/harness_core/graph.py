@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, Callable, cast
 
@@ -36,6 +37,7 @@ EventSink = Callable[[dict[str, Any]], None]
 @dataclass(slots=True)
 class HarnessGraph:
     compiled_graph: Any
+    supports_async_checkpointer: bool = True
 
     def invoke(
         self,
@@ -82,6 +84,13 @@ class HarnessGraph:
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
     ) -> HarnessGraphState:
+        if not self.supports_async_checkpointer:
+            return await asyncio.to_thread(
+                self.invoke,
+                context,
+                tool_context=tool_context,
+                event_sink=event_sink,
+            )
         state = await self.compiled_graph.ainvoke(
             _state_from_context(context),
             config=_graph_config(context.thread_id, tool_context, event_sink),
@@ -96,6 +105,14 @@ class HarnessGraph:
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
     ) -> HarnessGraphState:
+        if not self.supports_async_checkpointer:
+            return await asyncio.to_thread(
+                self.resume,
+                thread_id,
+                resume_payload,
+                tool_context=tool_context,
+                event_sink=event_sink,
+            )
         state = await self.compiled_graph.ainvoke(
             Command(resume=resume_payload),
             config=_graph_config(thread_id, tool_context, event_sink),
@@ -109,6 +126,13 @@ class HarnessGraph:
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
     ) -> HarnessGraphState:
+        if not self.supports_async_checkpointer:
+            return await asyncio.to_thread(
+                self.recover,
+                thread_id,
+                tool_context=tool_context,
+                event_sink=event_sink,
+            )
         state = await self.compiled_graph.ainvoke(
             None,
             config=_graph_config(thread_id, tool_context, event_sink),
@@ -124,6 +148,7 @@ def create_harness_graph(
     system_prompt: str = "",
     max_steps: int = 12,
     checkpointer=None,
+    supports_async_checkpointer: bool = True,
     budget_ledger: BudgetLedger | None = None,
     deadline_monotonic: float | None = None,
     run_control: RunControl | None = None,
@@ -197,4 +222,7 @@ def create_harness_graph(
         {"tools": "tools", "model": "model"},
     )
     graph.add_edge("await_async", "model")
-    return HarnessGraph(compiled_graph=graph.compile(checkpointer=checkpointer))
+    return HarnessGraph(
+        compiled_graph=graph.compile(checkpointer=checkpointer),
+        supports_async_checkpointer=supports_async_checkpointer,
+    )

@@ -8,8 +8,14 @@ from langgraph.checkpoint.memory import InMemorySaver
 class LangGraphCheckpointerAdapter:
     """Keeps LangGraph saver details behind the Harness checkpoint port."""
 
-    def __init__(self, saver: Any | None = None) -> None:
+    def __init__(
+        self,
+        saver: Any | None = None,
+        *,
+        supports_async: bool = True,
+    ) -> None:
         self.saver = saver or InMemorySaver()
+        self.supports_async = bool(supports_async)
 
     @property
     def compiler_checkpointer(self) -> Any:
@@ -33,3 +39,9 @@ class LangGraphCheckpointerAdapter:
 def compiler_checkpointer(value: Any) -> Any:
     target = getattr(value, "compiler_checkpointer", None)
     return target if target is not None else value
+
+
+def checkpointer_supports_async(value: Any) -> bool:
+    """Return the Host-declared async capability without probing persistence."""
+
+    return bool(getattr(value, "supports_async", True))

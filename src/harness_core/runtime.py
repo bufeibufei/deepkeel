@@ -43,6 +43,7 @@ from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.graph import create_harness_graph
 from harness_core.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
+    checkpointer_supports_async,
     compiler_checkpointer,
 )
 from harness_core.model import (
@@ -639,6 +640,7 @@ class HarnessRuntime:
             system_prompt=self.system_prompt_factory(skill),
             max_steps=self.max_steps,
             checkpointer=compiler_checkpointer(self.checkpointer),
+            supports_async_checkpointer=checkpointer_supports_async(self.checkpointer),
             budget_ledger=self.budget_ledger,
             deadline_monotonic=deadline_monotonic,
             run_control=self.run_control,
