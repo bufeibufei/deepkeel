@@ -193,7 +193,7 @@ uv run pytest -q --cov=harness_core --cov-fail-under=80
 Build and verify both distributions from the repository root with:
 
 ```powershell
-.\scripts\verify_harness_core_package.ps1
+.\scripts\verify.ps1
 ```
 
 The verifier installs the wheel and sdist into separate clean environments and
@@ -229,7 +229,7 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v3`; the current package version is
-`3.0.0`. Consumers import from `harness_core.runtime_sdk`,
+`3.0.1`. Consumers import from `harness_core.runtime_sdk`,
 `harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
 orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
 `harness_core.mcp_sdk`. The versioned public

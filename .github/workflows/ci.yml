@@ -31,6 +31,6 @@ jobs:
           --cov-report=term-missing
           --cov-fail-under=80
       - name: Build wheel and source distribution
-        run: uv build
+        run: uv build --clear
       - name: Verify wheel and sdist in clean environments
         run: uv run python verification/verify_distributions.py dist

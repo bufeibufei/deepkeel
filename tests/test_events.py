@@ -1,5 +1,7 @@
 """Event projection tests owned by the standalone runtime package."""
 
+import pytest
+
 from harness_core.events import event_runtime_status, is_answer_delta, project_runtime_event
 
 
@@ -45,3 +47,32 @@ def test_tool_event_projection_preserves_typed_tool_contract():
     assert waiting["payload"]["tool_result"]["data"]["question"] == "Should this workflow proceed?"
     assert "tool_args" not in started["payload"]
     assert "tool_status" not in waiting["payload"]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "expected"),
+    [
+        ("run.created", "preparing"),
+        ("agent.reasoning", "reasoning"),
+        ("tool.call.started", "executing_tools"),
+        ("answer.completed", "completed"),
+        ("run.failed", "failed"),
+        ("run.canceled", "canceled"),
+        ("unknown", None),
+    ],
+)
+def test_runtime_event_status_covers_terminal_and_progress_states(
+    event_type: str,
+    expected: str | None,
+) -> None:
+    assert event_runtime_status({"event_type": event_type}) == expected
+
+
+def test_settled_event_accepts_only_terminal_statuses() -> None:
+    assert event_runtime_status(
+        {"event_type": "run.settled", "payload": {"status": " COMPLETED "}}
+    ) == "completed"
+    assert event_runtime_status(
+        {"event_type": "run.settled", "payload": {"status": "running"}}
+    ) is None
+    assert is_answer_delta({"event_type": "tool.completed"}) is False

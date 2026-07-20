@@ -25,8 +25,8 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bufeibufei/kuitianjiandi"
-Issues = "https://github.com/bufeibufei/kuitianjiandi/issues"
+Repository = "https://github.com/bufeibufei/harness-agent-core"
+Issues = "https://github.com/bufeibufei/harness-agent-core/issues"
 
 [project.optional-dependencies]
 test = [
