@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
+from threading import Lock
 from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
@@ -79,6 +81,76 @@ class DurableCheckpointStore(Protocol):
         user_id: str = "",
         limit: int = 100,
     ) -> tuple[str, ...]: ...
+
+
+class InMemoryDurableCheckpointStore:
+    """Thread-safe reference adapter for the durable checkpoint Port."""
+
+    def __init__(self) -> None:
+        self._states: dict[tuple[str, str], dict[str, Any]] = {}
+        self._lock = Lock()
+
+    def load(
+        self,
+        run_id: str,
+        *,
+        session: Any = None,
+        user_id: str = "",
+    ) -> dict[str, Any] | None:
+        del session
+        with self._lock:
+            state = self._states.get((user_id, run_id))
+            return deepcopy(state) if state is not None else None
+
+    def save(
+        self,
+        run_id: str,
+        state: dict[str, Any],
+        *,
+        session: Any = None,
+        user_id: str = "",
+    ) -> None:
+        del session
+        with self._lock:
+            self._states[(user_id, run_id)] = deepcopy(state)
+
+    def delete(
+        self,
+        run_id: str,
+        *,
+        session: Any = None,
+        user_id: str = "",
+    ) -> None:
+        del session
+        with self._lock:
+            self._states.pop((user_id, run_id), None)
+
+    def exists(
+        self,
+        run_id: str,
+        *,
+        session: Any = None,
+        user_id: str = "",
+    ) -> bool:
+        del session
+        with self._lock:
+            return (user_id, run_id) in self._states
+
+    def list_ids(
+        self,
+        *,
+        session: Any = None,
+        user_id: str = "",
+        limit: int = 100,
+    ) -> tuple[str, ...]:
+        del session
+        with self._lock:
+            run_ids = sorted(
+                run_id
+                for stored_user_id, run_id in self._states
+                if stored_user_id == user_id
+            )
+        return tuple(run_ids[: max(0, int(limit))])
 
 
 def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str, Any]:

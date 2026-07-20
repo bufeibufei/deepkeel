@@ -36,6 +36,7 @@ def _assert_distribution_contents(artifact: Path) -> None:
         with zipfile.ZipFile(artifact) as archive:
             members = [_normalized_member(name, sdist=False) for name in archive.namelist()]
         assert f"{PACKAGE_IMPORT_ROOT}/__init__.py" in members
+        assert f"{PACKAGE_IMPORT_ROOT}/py.typed" in members
         allowed_roots = {PACKAGE_IMPORT_ROOT}
         allowed_roots.update(
             name.split("/", 1)[0]
@@ -57,6 +58,8 @@ def _assert_distribution_contents(artifact: Path) -> None:
             if member.isfile()
         ]
     assert f"src/{PACKAGE_IMPORT_ROOT}/__init__.py" in members
+    assert f"src/{PACKAGE_IMPORT_ROOT}/py.typed" in members
+    assert "tests/public_api_v2.sha256" in members
     forbidden = sorted(
         name for name in members if name.split("/", 1)[0] in FORBIDDEN_ROOTS
     )

@@ -12,12 +12,12 @@ prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 There is no implicit registration or legacy Pack adapter in the v2 contract.
 
 ```python
-from harness_core import (
+from harness_core.adapter_sdk import HarnessRuntimeBuilder
+from harness_core.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
     CapabilityPackSpec,
-    HarnessRuntimeBuilder,
 )
 
 class InventoryPack:
@@ -51,7 +51,7 @@ contracts. Product hosts project `RuntimeResult` into their own API, event and
 persistence DTOs without passing those mappings back into Core.
 
 ```python
-from harness_core import RuntimeRequest
+from harness_core.runtime_sdk import RuntimeRequest
 
 result = runtime.run(
     RuntimeRequest(
@@ -139,7 +139,7 @@ diagnostics and emitted as privacy-safe `budget.usage.recorded` events. Prompts
 and response text are never included in this governance payload.
 
 ```python
-from harness_core import BudgetPolicy
+from harness_core.adapter_sdk import BudgetPolicy
 
 policy = BudgetPolicy.from_mapping({
     "max_input_tokens_total": 100_000,
@@ -183,7 +183,10 @@ details stay inside diagnostics and checkpoints.
 Run the package-owned contract suite with:
 
 ```powershell
-uv run --extra test pytest -q
+uv sync --extra test
+uv run ruff check src tests verification
+uv run mypy src/harness_core/runtime_api.py src/harness_core/runtime_sdk.py src/harness_core/extension_sdk.py src/harness_core/adapter_sdk.py src/harness_core/public_api.py src/harness_core/adapter_conformance.py
+uv run pytest -q --cov=harness_core --cov-fail-under=60
 ```
 
 Build and verify both distributions from the repository root with:
@@ -213,7 +216,7 @@ endpoints, and expired HTTP sessions are re-initialized once before surfacing a
 transport failure.
 
 ```python
-from harness_core.mcp import McpServerSpec
+from harness_core.adapter_sdk import McpServerSpec
 
 remote_search = McpServerSpec(
     id="remote-search",
@@ -227,4 +230,7 @@ remote_search = McpServerSpec(
 The frozen public contract is `harness-core-v2`; the current package version is
 `2.0.0`. Consumers must import from `harness_core.runtime_sdk`,
 `harness_core.extension_sdk`, or `harness_core.adapter_sdk`. The versioned public
-symbol manifest is available from `harness_core.public_api`.
+symbol manifest is available from `harness_core.public_api`; the package root
+only exposes those SDK modules and version constants. The package-owned test
+suite stores a frozen API fingerprint, so contract changes require an explicit
+compatibility review.

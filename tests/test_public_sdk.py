@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+from pathlib import Path
 
 import pytest
 import harness_core
@@ -8,39 +11,43 @@ import harness_core.adapter_sdk as adapter_sdk
 import harness_core.extension_sdk as extension_sdk
 import harness_core.runtime_sdk as runtime_sdk
 
-from harness_core import (
+from harness_core.runtime_sdk import (
     Artifact,
+    InMemoryRuntimeStateStore,
+    PendingAction,
+    RuntimeRequest,
+    RuntimeStateConflict,
+    RuntimeStateMutation,
+    ToolCall,
+    ToolResult,
+)
+from harness_core.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
     CapabilityPackSpec,
+    ToolExecutionContext,
+    ToolExecutor,
+    ToolRegistry,
+    ToolSpec,
+    validate_capability_pack,
+)
+from harness_core.adapter_sdk import (
+    BudgetPolicy,
+    BudgetRequest,
     ContextSegment,
     ContextWindowPolicy,
     DeterministicContextWindowManager,
+    HarnessRuntimeBuilder,
     InMemoryBudgetLedger,
     InMemoryContextSummaryCache,
-    HarnessRuntimeBuilder,
-    InMemoryRuntimeStateStore,
     InMemoryTelemetry,
     ModelInvocation,
     ModelProviderInfo,
     ModelTurn,
-    PendingAction,
-    RuntimeRequest,
     RuntimePorts,
-    RuntimeStateConflict,
-    RuntimeStateMutation,
     TelemetryRecord,
-    ToolCall,
-    ToolExecutionContext,
-    ToolExecutor,
-    ToolResult,
-    ToolRegistry,
-    ToolSpec,
-    BudgetRequest,
-    BudgetPolicy,
     UsageReport,
-    validate_capability_pack,
 )
 from harness_core.handoffs import HandoffSpec
 from harness_core.mcp import McpServerSpec
@@ -48,19 +55,37 @@ from harness_core.subagents import SubAgentSpec
 from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
 
 
-def test_every_root_export_is_versioned_and_classified_in_exactly_one_sdk() -> None:
-    memberships = {
-        symbol: [
-            layer
-            for layer, symbols in PUBLIC_API_BY_LAYER.items()
-            if symbol in symbols
-        ]
-        for symbol in harness_core.__all__
-    }
-
+def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
     assert PUBLIC_API_VERSION == "2.0.0"
-    assert set(harness_core.__all__) - PUBLIC_API_SYMBOLS == set()
-    assert {symbol: layers for symbol, layers in memberships.items() if len(layers) != 1} == {}
+    assert tuple(harness_core.__all__) == (
+        "HARNESS_CORE_CONTRACT_VERSION",
+        "HARNESS_CORE_VERSION",
+        "adapter_sdk",
+        "extension_sdk",
+        "runtime_sdk",
+    )
+    root_runtime_symbols = {
+        "HARNESS_CORE_CONTRACT_VERSION",
+        "HARNESS_CORE_VERSION",
+    }
+    assert (set(harness_core.__all__) & PUBLIC_API_SYMBOLS) == root_runtime_symbols
+
+
+def test_public_api_matches_the_frozen_v2_snapshot() -> None:
+    serialized = json.dumps(
+        PUBLIC_API_BY_LAYER,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    actual = hashlib.sha256(serialized).hexdigest()
+    expected = (
+        Path(__file__).with_name("public_api_v2.sha256").read_text(encoding="ascii").strip()
+    )
+
+    assert actual == expected, (
+        "public API changed; review compatibility and update the v2 snapshot only "
+        "for an intentional contract release"
+    )
 
 
 @pytest.mark.parametrize(

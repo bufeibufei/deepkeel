@@ -8,7 +8,7 @@ from typing import Iterator
 
 import pytest
 
-from harness_core import GovernanceScope, MappingSecretProvider
+from harness_core.adapter_sdk import GovernanceScope, MappingSecretProvider
 from harness_core.mcp import McpClientPool, McpServerSpec
 
 

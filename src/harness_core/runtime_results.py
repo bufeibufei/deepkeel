@@ -191,7 +191,7 @@ def project_harness_result(
     runtime["ui_state"] = project_run_ui_state(
         runtime_status,
         pending_action=pending_action,
-        active_task=active_task,
+        active_task=active_task or None,
     )
     if answer_delta_streamed:
         final_answer["answer_delta_streamed"] = True

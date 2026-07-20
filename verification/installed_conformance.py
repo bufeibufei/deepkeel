@@ -554,6 +554,13 @@ def verify_installation_isolation() -> None:
     assert importlib.util.find_spec("app") is None
     assert harness_core.HARNESS_CORE_VERSION == "2.0.0"
     assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v2"
+    assert tuple(harness_core.__all__) == (
+        "HARNESS_CORE_CONTRACT_VERSION",
+        "HARNESS_CORE_VERSION",
+        "adapter_sdk",
+        "extension_sdk",
+        "runtime_sdk",
+    )
 
 
 def main() -> None:

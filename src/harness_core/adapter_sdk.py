@@ -1,5 +1,11 @@
 """Versioned Adapter SDK for models, persistence, policy, MCP, and telemetry."""
 
+from harness_core.adapter_conformance import (
+    verify_durable_checkpoint_store_contract,
+    verify_runtime_state_store_contract,
+    verify_tool_execution_store_contract,
+)
+
 from harness_core.budget import (
     ELAPSED_SECONDS,
     INPUT_TOKENS,
@@ -162,6 +168,9 @@ ADAPTER_SDK_API = (
     "context_fingerprint",
     "preview_budget",
     "provider_fingerprint",
+    "verify_durable_checkpoint_store_contract",
+    "verify_runtime_state_store_contract",
+    "verify_tool_execution_store_contract",
 )
 
 __all__ = list(ADAPTER_SDK_API)

@@ -3,8 +3,8 @@ import inspect
 import pytest
 from pydantic import ValidationError
 
-from harness_core import HarnessRuntime, RuntimeRequest, RuntimeResultStatus
-from harness_core.contracts import Artifact, FinalAnswer, Observation
+from harness_core.runtime_sdk import HarnessRuntime, RuntimeRequest, RuntimeResultStatus
+from harness_core.contracts import Artifact, FinalAnswer, Observation, RunContext
 from harness_core.runtime_api import RuntimeResult, RuntimeStreamEvent
 
 
@@ -40,6 +40,12 @@ def _runtime_result(
             references=[{"kind": "record", "id": "ref-1"}],
             metadata={"answer_mode": "bubble"},
         ),
+        run_context=RunContext(
+            run_id="run-1",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            user_id="user-1",
+        ),
         observations=[
             Observation(
                 id="obs-1",
@@ -66,6 +72,18 @@ def _runtime_result(
         ],
         context_snapshot={"schema_version": "runtime-context-v2"},
         skill_activation={"skill_id": "inventory-assistant"},
+        ui_state={
+            "schema_version": "harness-run-ui-v1",
+            "lifecycle": "completed",
+            "composer_mode": "ready",
+            "can_send": True,
+            "requires_user_action": False,
+            "is_resumable": False,
+            "show_progress": False,
+            "can_cancel": False,
+            "active_task": None,
+            "reason": "run_terminal",
+        },
         answer_delta_streamed=True,
     )
 

@@ -19,13 +19,17 @@ from harness_core.context_snapshot import (
 from harness_core.control import InMemoryRunControl, NoopRunControl, RunControl
 from harness_core.events import AgentEventPersistenceError
 from harness_core.failures import RunCanceledError, failure_from_code
-from harness_core.persistence import DurableCheckpointStore
+from harness_core.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from harness_core.runtime import HarnessRuntime
 from harness_core.runtime_api import (
+    RuntimeActiveTask,
+    RuntimeErrorPayload,
+    RuntimeReference,
     RuntimeRequest,
     RuntimeResult,
     RuntimeResultStatus,
     RuntimeStreamEvent,
+    RuntimeUIState,
 )
 from harness_core.state_store import (
     InMemoryRuntimeStateStore,
@@ -48,6 +52,7 @@ RUNTIME_SDK_API = (
     "HARNESS_CORE_VERSION",
     "HarnessRuntime",
     "InMemoryRunControl",
+    "InMemoryDurableCheckpointStore",
     "InMemoryRuntimeStateStore",
     "NoopRunControl",
     "Observation",
@@ -57,6 +62,9 @@ RUNTIME_SDK_API = (
     "RunControl",
     "RunStatus",
     "RuntimeEvent",
+    "RuntimeActiveTask",
+    "RuntimeErrorPayload",
+    "RuntimeReference",
     "RuntimeRequest",
     "RuntimeResult",
     "RuntimeResultStatus",
@@ -65,6 +73,7 @@ RUNTIME_SDK_API = (
     "RuntimeStateReceipt",
     "RuntimeStateStore",
     "RuntimeStreamEvent",
+    "RuntimeUIState",
     "TERMINAL_RUNTIME_STATUSES",
     "TERMINAL_WORKFLOW_STATES",
     "ToolCall",

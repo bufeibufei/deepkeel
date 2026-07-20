@@ -4,17 +4,36 @@ version = "2.0.0"
 description = "Product-neutral Harness Agent runtime core."
 readme = "README.md"
 requires-python = ">=3.12"
-dependencies = [
-  "jsonschema>=4.23.0",
-  "httpx>=0.28.0,<1.0.0",
-  "langchain-core>=1.2.0",
-  "langgraph>=1.2.0",
-  "pydantic>=2.8.0",
+authors = [
+  { name = "bufeibufei", email = "bufeibufei@users.noreply.github.com" },
 ]
+keywords = ["agent", "harness", "langgraph", "mcp", "runtime"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+dependencies = [
+  "jsonschema>=4.23.0,<5.0.0",
+  "httpx>=0.28.0,<1.0.0",
+  "langchain-core>=1.2.0,<2.0.0",
+  "langgraph>=1.2.0,<2.0.0",
+  "pydantic>=2.8.0,<3.0.0",
+]
+
+[project.urls]
+Repository = "https://github.com/bufeibufei/kuitianjiandi"
+Issues = "https://github.com/bufeibufei/kuitianjiandi/issues"
 
 [project.optional-dependencies]
 test = [
+  "mypy>=1.15.0,<2.0.0",
   "pytest>=8.3.0",
+  "pytest-cov>=6.0.0,<8.0.0",
+  "ruff>=0.11.0,<1.0.0",
 ]
 
 [build-system]
@@ -25,7 +44,25 @@ build-backend = "setuptools.build_meta"
 where = ["src"]
 include = ["harness_core*"]
 
+[tool.setuptools.package-data]
+harness_core = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
 addopts = "-p no:cacheprovider"
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E9", "F63", "F7", "F82"]
+
+[tool.mypy]
+python_version = "3.12"
+check_untyped_defs = true
+ignore_missing_imports = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+exclude = ["build", "dist"]

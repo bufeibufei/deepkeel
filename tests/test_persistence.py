@@ -10,7 +10,8 @@ from harness_core.persistence import (
     durable_state_from_result,
     restore_run_context,
 )
-from harness_core.contracts import FinalAnswer
+from harness_core.contracts import FinalAnswer, RunContext
+from harness_core.ui import project_run_ui_state
 from harness_core.runtime_api import RuntimeResult, RuntimeResultStatus
 
 
@@ -138,7 +139,14 @@ def test_durable_state_uses_the_product_neutral_runtime_key():
             status="interrupted",
             stop_reason="requires_user_action",
         ),
+        run_context=RunContext(
+            run_id="run-1",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            user_id="user-1",
+        ),
         checkpoint={"schema_version": "harness-checkpoint-v2"},
+        ui_state=project_run_ui_state("waiting_user_action"),
     )
 
     durable = durable_state_from_result(result, run_id="run-1", thread_id="thread-1")

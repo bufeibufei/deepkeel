@@ -19,6 +19,13 @@
   must declare `CapabilityPackSpec` and implement `install(context)`.
 - Added clean wheel and sdist conformance runs across Windows/Linux and Python
   3.12/3.13, plus an installed-Core Host contract gate.
+- Reduced the package root to version constants and the three versioned SDK
+  modules, and added a frozen public-API fingerprint.
+- Added reusable conformance checks for runtime-state, durable-checkpoint and
+  idempotent tool-execution adapters.
+- Added typed Host-facing runtime projections, a required `RunContext`, a
+  `py.typed` marker, dependency compatibility bounds and standalone quality
+  gates.
 
 ## 1.4.0
 

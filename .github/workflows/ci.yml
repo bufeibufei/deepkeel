@@ -20,19 +20,24 @@ jobs:
           enable-cache: true
       - name: Install package and test dependencies
         run: uv sync --extra test
-      - name: Run package-owned tests
-        run: uv run pytest -q
+      - name: Verify formatting and imports
+        run: uv run ruff check src tests verification
+      - name: Verify public type contracts
+        run: >-
+          uv run mypy
+          src/harness_core/runtime_api.py
+          src/harness_core/runtime_sdk.py
+          src/harness_core/extension_sdk.py
+          src/harness_core/adapter_sdk.py
+          src/harness_core/public_api.py
+          src/harness_core/adapter_conformance.py
+      - name: Run package-owned tests with coverage
+        run: >-
+          uv run pytest -q
+          --cov=harness_core
+          --cov-report=term-missing
+          --cov-fail-under=60
       - name: Build wheel and source distribution
         run: uv build
-      - name: Verify isolated wheel contents
-        shell: python
-        run: |
-          import glob
-          import zipfile
-
-          wheel = glob.glob("dist/*.whl")[0]
-          with zipfile.ZipFile(wheel) as archive:
-              names = set(archive.namelist())
-          assert "harness_core/__init__.py" in names
-          assert not any(name.startswith("app/") for name in names)
-          print(f"verified {wheel}")
+      - name: Verify wheel and sdist in clean environments
+        run: uv run python verification/verify_distributions.py dist

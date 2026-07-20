@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, NotRequired, TypedDict
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,54 @@ from harness_core.contracts import (
     RunContext,
     ToolResult,
 )
+
+
+class RuntimeActiveTask(TypedDict):
+    kind: str
+    tool_name: str
+    artifact_type: str
+    source_id: str
+    summary: str
+
+
+class RuntimeUIState(TypedDict):
+    schema_version: str
+    lifecycle: str
+    composer_mode: str
+    can_send: bool
+    requires_user_action: bool
+    is_resumable: bool
+    show_progress: bool
+    can_cancel: bool
+    active_task: RuntimeActiveTask | None
+    reason: str
+
+
+class RuntimeReference(TypedDict):
+    reference_id: str
+    kind: str
+    title: str
+    snippet: str
+    source_tool: str
+    query: str
+    is_evidence: bool
+    unit_id: NotRequired[str]
+    url: NotRequired[str]
+    site_name: NotRequired[str]
+    publish_time: NotRequired[str]
+    flow: NotRequired[str]
+    quality_grade: NotRequired[str]
+    page: NotRequired[str]
+    chapter: NotRequired[str]
+    source_file: NotRequired[str]
+
+
+class RuntimeErrorPayload(TypedDict):
+    type: str
+    code: str
+    category: str
+    retryable: bool
+    message: str
 
 
 class RuntimeRequest(BaseModel):
@@ -72,7 +120,7 @@ class RuntimeResult(BaseModel):
     mode: str = ""
     step_count: int = 0
     final_answer: FinalAnswer
-    run_context: RunContext | None = None
+    run_context: RunContext
     observations: list[Observation] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None
@@ -83,10 +131,10 @@ class RuntimeResult(BaseModel):
     diagnostics: dict[str, Any] = Field(default_factory=dict)
     context_snapshot: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
-    active_task: dict[str, Any] | None = None
-    ui_state: dict[str, Any] = Field(default_factory=dict)
-    references: list[dict[str, Any]] = Field(default_factory=list)
-    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    active_task: RuntimeActiveTask | None = None
+    ui_state: RuntimeUIState
+    references: list[RuntimeReference] = Field(default_factory=list)
+    evidence: list[RuntimeReference] = Field(default_factory=list)
     needs_user_input: bool = False
     answer_delta_streamed: bool = False
-    error: dict[str, Any] | None = None
+    error: RuntimeErrorPayload | None = None
