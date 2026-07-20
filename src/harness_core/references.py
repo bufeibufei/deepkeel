@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from harness_core.type_narrowing import as_dict
+
 
 @dataclass(frozen=True, slots=True)
 class ReferenceProjection:
@@ -35,7 +37,7 @@ class DefaultReferenceProjector:
                 candidates.append(_normalize_reference(item, source_tool="agent.final"))
         for tool_result in tool_results:
             tool_name = str(tool_result.get("name") or "")
-            data = tool_result.get("data") if isinstance(tool_result.get("data"), dict) else {}
+            data = as_dict(tool_result.get("data"))
             query = str(data.get("query") or "")
             for reference, is_evidence in _nested_reference_candidates(data):
                 candidates.append(

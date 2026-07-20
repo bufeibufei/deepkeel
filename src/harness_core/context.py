@@ -47,7 +47,7 @@ def build_initial_messages(
         messages.append(
             AgentMessage(
                 id=str(raw.get("id") or f"history-{uuid4()}"),
-                role=str(raw["role"]),
+                role="user" if raw["role"] == "user" else "assistant",
                 content=content,
                 metadata={"history": True, "created_at": raw.get("created_at")},
             )

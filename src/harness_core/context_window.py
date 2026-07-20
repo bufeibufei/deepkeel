@@ -8,6 +8,8 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Protocol
 
+from harness_core.type_narrowing import as_dict
+
 
 class TokenEstimator(Protocol):
     estimator_id: str
@@ -138,11 +140,7 @@ class DeterministicContextWindowManager:
     ) -> ContextWindowResult:
         policy = self.policy
         bundle = dict(context_bundle)
-        runtime_context = (
-            copy.deepcopy(bundle.get("runtime_context"))
-            if isinstance(bundle.get("runtime_context"), dict)
-            else {}
-        )
+        runtime_context = copy.deepcopy(as_dict(bundle.get("runtime_context")))
         if short_context.get("current_time") not in (None, "", [], {}):
             runtime_context.setdefault("current_time", copy.deepcopy(short_context["current_time"]))
 
@@ -441,7 +439,7 @@ class DeterministicContextWindowManager:
         if isinstance(value, str):
             return self._truncate_text(value, budget)
         if isinstance(value, list):
-            result: list[Any] = []
+            list_result: list[Any] = []
             remaining = budget
             for item in value:
                 compacted = self._compact_value(item, remaining)
@@ -450,11 +448,11 @@ class DeterministicContextWindowManager:
                 cost = self.estimator.estimate(compacted)
                 if cost > remaining:
                     break
-                result.append(compacted)
+                list_result.append(compacted)
                 remaining -= cost
-            return result
+            return list_result
         if isinstance(value, dict):
-            result: dict[str, Any] = {}
+            dict_result: dict[str, Any] = {}
             remaining = budget
             for key, item in value.items():
                 key_cost = self.estimator.estimate(str(key))
@@ -466,9 +464,9 @@ class DeterministicContextWindowManager:
                 cost = key_cost + self.estimator.estimate(compacted)
                 if cost > remaining:
                     continue
-                result[str(key)] = compacted
+                dict_result[str(key)] = compacted
                 remaining -= cost
-            return result
+            return dict_result
         return None
 
     def _truncate_text(self, value: str, max_tokens: int) -> str:

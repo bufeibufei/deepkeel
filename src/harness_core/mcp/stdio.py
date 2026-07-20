@@ -22,6 +22,7 @@ from harness_core.mcp.protocol import (
     safe_server_info,
     structured_content_from_text,
 )
+from harness_core.type_narrowing import as_dict, as_list
 
 
 logger = logging.getLogger(__name__)
@@ -90,11 +91,7 @@ class StdioMcpClient:
                         f"unsupported MCP protocol version: {negotiated_version}"
                     )
                 self._protocol_version = negotiated_version
-                self._server_info = (
-                    dict(initialized.get("serverInfo"))
-                    if isinstance(initialized.get("serverInfo"), dict)
-                    else {}
-                )
+                self._server_info = as_dict(initialized.get("serverInfo"))
                 self._write_message(
                     {
                         "jsonrpc": "2.0",
@@ -123,18 +120,14 @@ class StdioMcpClient:
                 params,
                 timeout_seconds=_remaining(deadline),
             )
-            for item in result.get("tools", []) if isinstance(result.get("tools"), list) else []:
+            for item in as_list(result.get("tools")):
                 if not isinstance(item, dict) or not str(item.get("name") or "").strip():
                     continue
                 tools.append(
                     McpRemoteTool(
                         name=str(item["name"]),
                         description=str(item.get("description") or ""),
-                        input_schema=(
-                            dict(item.get("inputSchema"))
-                            if isinstance(item.get("inputSchema"), dict)
-                            else {}
-                        ),
+                        input_schema=as_dict(item.get("inputSchema")),
                     )
                 )
             cursor = str(result.get("nextCursor") or "")
@@ -160,10 +153,10 @@ class StdioMcpClient:
             timeout_seconds=_remaining(deadline),
         )
         content = self._redact_value(
-            [item for item in result.get("content", []) if isinstance(item, dict)]
+            [item for item in as_list(result.get("content")) if isinstance(item, dict)]
         )
         structured = (
-            self._redact_value(dict(result.get("structuredContent")))
+            self._redact_value(as_dict(result.get("structuredContent")))
             if isinstance(result.get("structuredContent"), dict)
             else structured_content_from_text(content)
         )

@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from harness_core.type_narrowing import as_dict
+
 
 PENDING_ACTION_SCHEMA_VERSION = "pending-action-v2"
 
@@ -85,7 +87,7 @@ def standardize_pending_action_payload(
     registry: HandoffRegistry | None = None,
 ) -> tuple[str, dict[str, Any]]:
     source = dict(payload) if isinstance(payload, dict) else {}
-    nested = source.get("pending_action") if isinstance(source.get("pending_action"), dict) else {}
+    nested = as_dict(source.get("pending_action"))
     explicit_type = str(nested.get("action_type") or action_type or "").strip().lower()
     if explicit_type == "clarification":
         return "clarification", source
@@ -110,8 +112,8 @@ def standardize_pending_action_payload(
 
 
 def _handoff_view(payload: dict[str, Any]) -> str:
-    pending = payload.get("pending_action") if isinstance(payload.get("pending_action"), dict) else {}
-    result = payload.get("tool_result") if isinstance(payload.get("tool_result"), dict) else {}
+    pending = as_dict(payload.get("pending_action"))
+    result = as_dict(payload.get("tool_result"))
     return str(
         pending.get("handoff_view")
         or result.get("handoff_view")

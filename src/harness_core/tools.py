@@ -32,6 +32,7 @@ from harness_core.policy import (
 )
 from harness_core.ports import RuntimeSession, SessionFactory
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.type_narrowing import as_dict
 
 
 ToolHandler = Callable[[ToolCall, "ToolExecutionContext"], ToolResult]
@@ -138,8 +139,10 @@ class InMemoryToolExecutionStore:
         key = (run_id, call.idempotency_key)
         with self._lock:
             entry = self._entries.get(key)
-            if entry is not None and entry.status in {"uncertain", "exhausted"}:
-                return _memory_claim(entry.status, run_id, call.idempotency_key, entry)
+            if entry is not None and entry.status == "uncertain":
+                return _memory_claim("uncertain", run_id, call.idempotency_key, entry)
+            if entry is not None and entry.status == "exhausted":
+                return _memory_claim("exhausted", run_id, call.idempotency_key, entry)
             if entry is not None and entry.result is not None:
                 retry_failed = (
                     entry.result.status == "failed"
@@ -790,7 +793,7 @@ def _keep_single_suspending_result(results: list[ToolResult]) -> list[ToolResult
 def normalize_arguments(arguments: dict[str, Any], spec: ToolSpec) -> dict[str, Any]:
     normalized = dict(arguments or {})
     contract = spec.argument_contract if isinstance(spec.argument_contract, dict) else {}
-    aliases = contract.get("aliases") if isinstance(contract.get("aliases"), dict) else {}
+    aliases = as_dict(contract.get("aliases"))
     for canonical, candidates in aliases.items():
         if _has_value(normalized, str(canonical)):
             continue
@@ -801,7 +804,7 @@ def normalize_arguments(arguments: dict[str, Any], spec: ToolSpec) -> dict[str, 
                 if "." not in str(candidate) and str(candidate) != str(canonical):
                     normalized.pop(str(candidate), None)
                 break
-    coercions = contract.get("coerce") if isinstance(contract.get("coerce"), dict) else {}
+    coercions = as_dict(contract.get("coerce"))
     for field_name, target_type in coercions.items():
         if field_name not in normalized:
             continue
@@ -901,7 +904,7 @@ def _with_runtime_metrics(
     executed: bool = True,
 ) -> ToolResult:
     metadata = result.metadata if isinstance(result.metadata, dict) else {}
-    metrics = metadata.get("runtime_metrics") if isinstance(metadata.get("runtime_metrics"), dict) else {}
+    metrics = as_dict(metadata.get("runtime_metrics"))
     result.metadata = {
         **metadata,
         "runtime_metrics": {

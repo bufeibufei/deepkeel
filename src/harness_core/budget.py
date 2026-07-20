@@ -4,6 +4,8 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Protocol
 
+from harness_core.type_narrowing import as_dict
+
 
 MODEL_CALLS = "model_calls"
 TOOL_CALLS = "tool_calls"
@@ -34,7 +36,7 @@ class BudgetPolicy:
     @classmethod
     def from_mapping(cls, value: dict[str, Any] | None) -> "BudgetPolicy":
         raw = value if isinstance(value, dict) else {}
-        roles = raw.get("roles") if isinstance(raw.get("roles"), dict) else {}
+        roles = as_dict(raw.get("roles"))
         return cls(
             max_model_calls=_nonnegative_int(raw.get("max_model_calls")),
             max_tool_calls=_nonnegative_int(raw.get("max_tool_calls")),
@@ -230,7 +232,11 @@ class InMemoryBudgetLedger:
         if isinstance(snapshot, BudgetSnapshot):
             usage = snapshot.usage
         elif isinstance(snapshot, dict):
-            usage = snapshot.get("usage") if isinstance(snapshot.get("usage"), dict) else {}
+            usage = {
+                str(metric): float(amount)
+                for metric, amount in as_dict(snapshot.get("usage")).items()
+                if _is_nonnegative_number(amount)
+            }
         else:
             usage = {}
         with self._lock:

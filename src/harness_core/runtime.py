@@ -71,6 +71,7 @@ from harness_core.runtime_api import (
 from harness_core.skills import SkillPolicy
 from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
+from harness_core.type_narrowing import as_dict
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionContext, ToolExecutor
 from harness_core.ui import project_run_ui_state
@@ -276,11 +277,7 @@ class HarnessRuntime:
             nonlocal answer_delta_streamed, telemetry_error_count, telemetry_last_error
             self.run_control.raise_if_cancelled(run_id)
             projected = project_runtime_event(event)
-            payload = (
-                dict(projected.get("payload"))
-                if isinstance(projected.get("payload"), dict)
-                else {}
-            )
+            payload = as_dict(projected.get("payload"))
             payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
             projected["payload"] = payload
             if projected.get("event_type") == "answer.delta":
@@ -354,11 +351,11 @@ class HarnessRuntime:
         try:
             if short.get("recover_interrupted"):
                 if self._has_graph_checkpoint(graph_thread_id):
-                    state = graph.recover(
+                    state = dict(graph.recover(
                         graph_thread_id,
                         tool_context=tool_context,
                         event_sink=emit,
-                    )
+                    ))
                     if not isinstance(state, dict) or not state:
                         raise RuntimeError("langgraph recovery checkpoint is unavailable")
                     recovery_source = "durable_langgraph_restart"
@@ -375,16 +372,21 @@ class HarnessRuntime:
                         model_policy=resolved_model_policy,
                         budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
                     )
-                    state = graph.invoke(
+                    state = dict(graph.invoke(
                         context,
                         tool_context=tool_context,
                         event_sink=emit,
-                    )
+                    ))
                     recovery_source = "restart_replay_without_checkpoint"
             elif short.get("resume"):
                 resume_payload = resume_payload_from_context(short)
                 try:
-                    state = graph.resume(graph_thread_id, resume_payload, tool_context=tool_context, event_sink=emit)
+                    state = dict(graph.resume(
+                        graph_thread_id,
+                        resume_payload,
+                        tool_context=tool_context,
+                        event_sink=emit,
+                    ))
                     if not isinstance(state, dict):
                         raise RuntimeError("langgraph checkpoint is unavailable")
                     recovery_source = "live_langgraph"
@@ -414,7 +416,11 @@ class HarnessRuntime:
                     if not any(message.role == "user" for message in recovered.messages):
                         recovered.messages = [*build_initial_messages(question, short, bundle), *recovered.messages]
                     active_graph_thread_id = recovered_thread_id
-                    state = graph.invoke(recovered, tool_context=tool_context, event_sink=emit)
+                    state = dict(graph.invoke(
+                        recovered,
+                        tool_context=tool_context,
+                        event_sink=emit,
+                    ))
             else:
                 precondition_calls = _skill_precondition_tool_calls(
                     skill,
@@ -434,7 +440,11 @@ class HarnessRuntime:
                     budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
                     pending_tool_calls=precondition_calls,
                 )
-                state = graph.invoke(context, tool_context=tool_context, event_sink=emit)
+                state = dict(graph.invoke(
+                    context,
+                    tool_context=tool_context,
+                    event_sink=emit,
+                ))
         except AgentEventPersistenceError:
             raise
         except Exception as exc:
@@ -487,7 +497,7 @@ class HarnessRuntime:
         )
         if recovery_source:
             diagnostics = result.diagnostics
-            recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
+            recovery = as_dict(diagnostics.get("recovery"))
             recovery["checkpoint_source"] = recovery_source
             diagnostics["recovery"] = recovery
         diagnostics = result.diagnostics
@@ -589,7 +599,7 @@ class HarnessRuntime:
             cleanup["langgraph"] = "unsupported"
         if result is not None:
             diagnostics = result.diagnostics
-            recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
+            recovery = as_dict(diagnostics.get("recovery"))
             recovery["checkpoint_cleanup"] = cleanup
             if errors:
                 recovery["checkpoint_cleanup_errors"] = errors
@@ -641,7 +651,7 @@ class HarnessRuntime:
         model_policy: dict[str, Any] | None,
         session: Any,
         event_sink: EventSink | None,
-    ) -> dict[str, Any]:
+    ) -> RuntimeResult:
         run_id = str(
             context_bundle.get("agent_session_id")
             or context_bundle.get("agent_run_id")
@@ -796,7 +806,7 @@ class HarnessRuntime:
         }:
             return
         diagnostics = result.diagnostics
-        recovery = diagnostics.get("recovery") if isinstance(diagnostics.get("recovery"), dict) else {}
+        recovery = as_dict(diagnostics.get("recovery"))
         durable_state = durable_state_from_result(
             result,
             run_id=run_id,
@@ -838,12 +848,12 @@ class HarnessRuntime:
                         checkpoint_state=durable_state,
                         resume_token=resume_token,
                         error_code=(
-                            str(result.error.code if result.error is not None else "RUN_FAILED")
+                            str(result.error["code"] if result.error is not None else "RUN_FAILED")
                             if status == "failed"
                             else None
                         ),
                         error_message=(
-                            str(result.error.message if result.error is not None else "")
+                            str(result.error["message"] if result.error is not None else "")
                             if status == "failed"
                             else None
                         ),

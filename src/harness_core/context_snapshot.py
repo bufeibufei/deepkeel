@@ -4,6 +4,8 @@ import hashlib
 import json
 from typing import Any
 
+from harness_core.type_narrowing import as_dict
+
 
 CONTEXT_SNAPSHOT_VERSION = "harness-context-v2"
 FACTS_VERSION = "harness-facts-v2"
@@ -19,7 +21,7 @@ def normalize_agent_context_snapshot(value: dict[str, Any] | None) -> dict[str, 
     facts = dict(supplied_facts) if isinstance(supplied_facts, dict) else {}
     facts.setdefault("schema_version", FACTS_VERSION)
     facts.setdefault("subject", subject)
-    provenance = raw.get("provenance") if isinstance(raw.get("provenance"), dict) else {}
+    provenance = as_dict(raw.get("provenance"))
     provenance = {
         **provenance,
         "source": str(provenance.get("source") or raw.get("source") or "runtime"),

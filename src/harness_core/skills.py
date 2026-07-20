@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from harness_core.type_narrowing import as_dict
+
 
 @dataclass(frozen=True, slots=True)
 class DelegationPolicy:
@@ -148,8 +150,8 @@ class SkillPolicy:
 
 
 def _required_artifacts(raw: dict[str, Any]) -> frozenset[str]:
-    completion = raw.get("completion_policy") if isinstance(raw.get("completion_policy"), dict) else {}
-    output = raw.get("output_contract") if isinstance(raw.get("output_contract"), dict) else {}
+    completion = as_dict(raw.get("completion_policy"))
+    output = as_dict(raw.get("output_contract"))
     values = [
         raw.get("required_artifacts"),
         completion.get("required_artifact"),
@@ -167,7 +169,7 @@ def _required_artifacts(raw: dict[str, Any]) -> frozenset[str]:
 def _required_tool_groups(raw: dict[str, Any]) -> tuple[frozenset[str], ...]:
     groups = raw.get("required_tool_groups")
     if not isinstance(groups, (list, tuple)):
-        completion = raw.get("completion_policy") if isinstance(raw.get("completion_policy"), dict) else {}
+        completion = as_dict(raw.get("completion_policy"))
         required_any = completion.get("required_transition_any")
         groups = [required_any] if isinstance(required_any, (list, tuple, set, frozenset)) else []
     normalized: list[frozenset[str]] = []

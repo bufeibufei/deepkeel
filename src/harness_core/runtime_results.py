@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from harness_core.budget import (
@@ -26,11 +26,16 @@ from harness_core.context import build_context_snapshot, build_initial_messages
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.references import DefaultReferenceProjector, ReferenceProjector
 from harness_core.runtime_api import (
+    RuntimeActiveTask,
+    RuntimeErrorPayload,
+    RuntimeReference,
     RuntimeResult,
     RuntimeResultStatus,
     RuntimeStreamEvent,
+    RuntimeUIState,
 )
 from harness_core.tool_registry import ToolRegistry
+from harness_core.type_narrowing import as_dict, as_dict_list, as_list, as_optional_dict
 from harness_core.ui import project_run_ui_state
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
 
@@ -58,11 +63,9 @@ def project_harness_result(
         else None
     )
     skill = dict(skill_activation) if isinstance(skill_activation, dict) else {}
-    state_skill = state.get("skill_activation") if isinstance(state.get("skill_activation"), dict) else {}
+    state_skill = as_dict(state.get("skill_activation"))
     skill.update(state_skill)
-    checkpoint_pending_action = (
-        state.get("pending_action") if isinstance(state.get("pending_action"), dict) else None
-    )
+    checkpoint_pending_action = as_optional_dict(state.get("pending_action"))
     waiting_for_input = (
         graph_status == "waiting_user"
         and str((checkpoint_pending_action or {}).get("action_type") or "") == "clarification"
@@ -84,9 +87,7 @@ def project_harness_result(
     if graph_status == "failed" and isinstance(state_error, dict) and state_error.get("code"):
         stop_reason = str(state_error["code"]).lower()
     typed_tool_results = [item for item in state.get("tool_results", []) if isinstance(item, dict)]
-    checkpoint_pending_async = (
-        state.get("pending_async") if isinstance(state.get("pending_async"), dict) else None
-    )
+    checkpoint_pending_async = as_optional_dict(state.get("pending_async"))
     pending_action = _project_pending_action(checkpoint_pending_action, typed_tool_results)
     final_answer = _project_final_answer(
         state,
@@ -126,7 +127,7 @@ def project_harness_result(
         or context_bundle.get("turn_id")
         or "unbound-turn"
     )
-    checkpoint = {
+    checkpoint: dict[str, Any] = {
         "schema_version": "harness-checkpoint-v2",
         "run_id": run_id,
         "graph_thread_id": graph_thread_id,
@@ -185,17 +186,20 @@ def project_harness_result(
         previous_diagnostics=previous_diagnostics,
         capability_manifest=capability_manifest,
     )
-    active_task = _active_task(typed_tool_results, task_kinds or {})
+    active_task = cast(
+        RuntimeActiveTask | None,
+        _active_task(typed_tool_results, task_kinds or {}),
+    )
     if active_task:
         runtime["active_task"] = active_task
     runtime["ui_state"] = project_run_ui_state(
         runtime_status,
         pending_action=pending_action,
-        active_task=active_task or None,
+        active_task=dict(active_task) if active_task else None,
     )
     if answer_delta_streamed:
         final_answer["answer_delta_streamed"] = True
-    error = None
+    error: RuntimeErrorPayload | None = None
     if isinstance(state_error, dict):
         error = {
             "type": str(state_error.get("type") or "RuntimeFailure"),
@@ -209,9 +213,7 @@ def project_harness_result(
         }
     answer_fields = set(FinalAnswer.model_fields)
     answer_metadata = (
-        dict(final_answer.get("metadata"))
-        if isinstance(final_answer.get("metadata"), dict)
-        else {}
+        as_dict(final_answer.get("metadata"))
     )
     answer_metadata.update(
         {
@@ -265,11 +267,7 @@ def project_harness_result(
             Artifact.model_validate(item) for item in checkpoint["artifacts"]
         ],
         skill_activation=skill,
-        model_policy=(
-            dict(state.get("model_policy"))
-            if isinstance(state.get("model_policy"), dict)
-            else {}
-        ),
+        model_policy=as_dict(state.get("model_policy")),
         budget_state=dict(checkpoint["budget_state"]),
         metadata=dict(checkpoint["metadata"]),
         step_count=int(checkpoint["step_count"]),
@@ -303,9 +301,9 @@ def project_harness_result(
         context_snapshot=context_snapshot,
         skill_activation=skill,
         active_task=active_task or None,
-        ui_state=dict(runtime.get("ui_state") or {}),
-        references=references,
-        evidence=evidence,
+        ui_state=cast(RuntimeUIState, as_dict(runtime.get("ui_state"))),
+        references=cast(list[RuntimeReference], references),
+        evidence=cast(list[RuntimeReference], evidence),
         needs_user_input=runtime_status in {"waiting_user_action", "waiting_user_input"},
         answer_delta_streamed=answer_delta_streamed,
         error=error,
@@ -373,7 +371,7 @@ def _failed_runtime_state(
                 },
             },
             "metadata": {
-                **(state.get("metadata") if isinstance(state.get("metadata"), dict) else {}),
+                **as_dict(state.get("metadata")),
                 "runtime_error": {
                     "type": failure.exception_type,
                     "code": failure.code,
@@ -434,7 +432,7 @@ def _skill_precondition_tool_calls(
     tool_registry: ToolRegistry,
 ) -> list[ToolCall]:
     """Translate declarative missing Skill preconditions into one safe handoff call."""
-    preconditions = skill.get("preconditions") if isinstance(skill.get("preconditions"), list) else []
+    preconditions = as_dict_list(skill.get("preconditions"))
     for item in preconditions:
         if not isinstance(item, dict):
             continue
@@ -449,7 +447,7 @@ def _skill_precondition_tool_calls(
         except KeyError:
             continue
         precondition_id = str(item.get("id") or tool_name).strip()
-        arguments = item.get("tool_arguments") if isinstance(item.get("tool_arguments"), dict) else {}
+        arguments = as_dict(item.get("tool_arguments"))
         return [
             ToolCall(
                 id=f"precondition-{precondition_id}-{uuid4().hex[:10]}",
@@ -506,7 +504,7 @@ def _project_observation(
 ) -> dict[str, Any]:
     projected = dict(value)
     source = str(projected.get("source") or projected.get("tool_name") or "")
-    data = projected.get("data") if isinstance(projected.get("data"), dict) else {}
+    data = as_dict(projected.get("data"))
     kind = str(
         observation_kinds.get(source)
         or data.get("kind")
@@ -556,10 +554,10 @@ def _active_task(
         if str(item.get("status") or "") != "waiting_async":
             continue
         tool_name = str(item.get("name") or "")
-        data = item.get("data") if isinstance(item.get("data"), dict) else {}
-        artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), list) else []
+        data = as_dict(item.get("data"))
+        artifacts = as_dict_list(item.get("artifacts"))
         artifact = next((value for value in artifacts if isinstance(value, dict)), {})
-        artifact_data = artifact.get("data") if isinstance(artifact.get("data"), dict) else {}
+        artifact_data = as_dict(artifact.get("data"))
         artifact_type = str(
             artifact.get("artifact_type")
             or artifact_data.get("artifact_type")
@@ -590,7 +588,7 @@ def _trace_from_events(
     for index, event in enumerate(events):
         if event.get("event_type") == "answer.delta":
             continue
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        payload = as_dict(event.get("payload"))
         action = str(event.get("event_type") or "")
         item = {
             "index": int(event.get("sequence") or index + 1),
@@ -639,17 +637,13 @@ def _trace_from_events(
                 }
             )
         if (action.startswith("tool.call.") and action != "tool.call.started") or action == "run.waiting_async":
-            tool_result = payload.get("tool_result") if isinstance(payload.get("tool_result"), dict) else {}
-            metadata = tool_result.get("metadata") if isinstance(tool_result.get("metadata"), dict) else {}
-            metrics = (
-                tool_result.get("runtime_metrics")
-                if isinstance(tool_result.get("runtime_metrics"), dict)
-                else metadata.get("runtime_metrics")
-                if isinstance(metadata.get("runtime_metrics"), dict)
-                else {}
+            tool_result = as_dict(payload.get("tool_result"))
+            metadata = as_dict(tool_result.get("metadata"))
+            metrics = as_dict(
+                tool_result.get("runtime_metrics") or metadata.get("runtime_metrics")
             )
-            governance = metadata.get("governance") if isinstance(metadata.get("governance"), dict) else {}
-            tool_call = payload.get("tool_call") if isinstance(payload.get("tool_call"), dict) else {}
+            governance = as_dict(metadata.get("governance"))
+            tool_call = as_dict(payload.get("tool_call"))
             item.update(
                 {
                     "latency_ms": int(metrics.get("latency_ms") or payload.get("latency_ms") or 0),
@@ -696,13 +690,13 @@ def _runtime_diagnostics(
     previous_diagnostics: dict[str, Any] | None = None,
     capability_manifest: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    previous = previous_diagnostics if isinstance(previous_diagnostics, dict) else {}
-    previous_counts = previous.get("counts") if isinstance(previous.get("counts"), dict) else {}
-    previous_timings = previous.get("timings") if isinstance(previous.get("timings"), dict) else {}
-    previous_skill = previous.get("skill") if isinstance(previous.get("skill"), dict) else {}
-    previous_recovery = previous.get("recovery") if isinstance(previous.get("recovery"), dict) else {}
-    previous_governance = previous.get("governance") if isinstance(previous.get("governance"), dict) else {}
-    trace = runtime.get("trace") if isinstance(runtime.get("trace"), list) else []
+    previous = as_dict(previous_diagnostics)
+    previous_counts = as_dict(previous.get("counts"))
+    previous_timings = as_dict(previous.get("timings"))
+    previous_skill = as_dict(previous.get("skill"))
+    previous_recovery = as_dict(previous.get("recovery"))
+    previous_governance = as_dict(previous.get("governance"))
+    trace = as_dict_list(runtime.get("trace"))
     model_rows = [item for item in trace if item.get("action") in {"model.completed", "model.failed"}]
     route_rows = [item for item in trace if item.get("action") == "model.route.selected"]
     tool_rows = [
@@ -732,30 +726,22 @@ def _runtime_diagnostics(
         for name in state.get("completed_tools", [])
         if str(name)
     )
-    state_skill = state.get("skill_activation") if isinstance(state.get("skill_activation"), dict) else {}
+    state_skill = as_dict(state.get("skill_activation"))
     completed_tools.update(
         str(name)
         for name in state_skill.get("completed_tools", [])
         if str(name)
     )
-    context_selection = context_snapshot.get("context_selection") if isinstance(context_snapshot.get("context_selection"), dict) else {}
-    state_model_policy = state.get("model_policy") if isinstance(state.get("model_policy"), dict) else {}
-    state_budget_policy = (
-        state_model_policy.get("budget")
-        if isinstance(state_model_policy.get("budget"), dict)
-        else {}
-    )
-    skill = dict(skill_activation) if isinstance(skill_activation, dict) else {}
+    context_selection = as_dict(context_snapshot.get("context_selection"))
+    state_model_policy = as_dict(state.get("model_policy"))
+    state_budget_policy = as_dict(state_model_policy.get("budget"))
+    skill = dict(skill_activation)
     if skill:
         skill["completed_tools"] = sorted(name for name in completed_tools if name)
         skill["completion_outcome"] = str(runtime.get("status") or "")
         skill["policy_violation_count"] = len(skill.get("policy_violations") or [])
         skill["policy_phase"] = str(state.get("policy_phase") or skill.get("policy_phase") or "")
-        missing = (
-            state.get("missing_requirements")
-            if isinstance(state.get("missing_requirements"), dict)
-            else {}
-        )
+        missing = as_dict(state.get("missing_requirements"))
         skill["missing_requirements"] = {
             "tools": list(missing.get("tools") or []),
             "artifacts": list(missing.get("artifacts") or []),
@@ -763,7 +749,7 @@ def _runtime_diagnostics(
         skill["repair_count"] = int(
             state.get("repair_count") or skill.get("repair_count") or 0
         )
-        output_contract = skill.get("output_contract") if isinstance(skill.get("output_contract"), dict) else {}
+        output_contract = as_dict(skill.get("output_contract"))
         skill["required_artifact"] = str(output_contract.get("requires_artifact") or skill.get("required_artifact") or "")
     return {
         "schema_version": "harness-runtime-diagnostics-v1",
@@ -800,15 +786,11 @@ def _runtime_diagnostics(
         },
         "recovery": {
             **previous_recovery,
-            "resume_mode": str((runtime.get("pending_action") or {}).get("resume_mode") or ""),
+            "resume_mode": str(as_dict(runtime.get("pending_action")).get("resume_mode") or ""),
             "pending_action": runtime.get("pending_action") or {},
         },
         "governance": {
-            "model_routes": (
-                previous_governance.get("model_routes")
-                if isinstance(previous_governance.get("model_routes"), list)
-                else []
-            )
+            "model_routes": as_list(previous_governance.get("model_routes"))
             + [
                 {
                     "step": item.get("index"),
@@ -831,11 +813,7 @@ def _runtime_diagnostics(
             "budget": state.get("budget_state")
             if isinstance(state.get("budget_state"), dict)
             else {},
-            "tool_policies": (
-                previous_governance.get("tool_policies")
-                if isinstance(previous_governance.get("tool_policies"), list)
-                else []
-            )
+            "tool_policies": as_list(previous_governance.get("tool_policies"))
             + [
                 {
                     "step": item.get("index"),
@@ -848,11 +826,7 @@ def _runtime_diagnostics(
                 for item in tool_rows
                 if item.get("policy") or item.get("budget")
             ],
-            "confirmations": (
-                previous_governance.get("confirmations")
-                if isinstance(previous_governance.get("confirmations"), list)
-                else []
-            )
+            "confirmations": as_list(previous_governance.get("confirmations"))
             + [
                 {
                     "step": item.get("index"),
@@ -865,11 +839,7 @@ def _runtime_diagnostics(
         "skill": skill,
         "replay": {"prompt_hashes": [], "model_output_hashes": []},
         "timings": {
-            "model_calls": (
-                previous_timings.get("model_calls")
-                if isinstance(previous_timings.get("model_calls"), list)
-                else []
-            )
+            "model_calls": as_list(previous_timings.get("model_calls"))
             + [
                 {
                     "step": item.get("index"),
@@ -882,11 +852,7 @@ def _runtime_diagnostics(
                 }
                 for item in model_rows
             ],
-            "tool_calls": (
-                previous_timings.get("tool_calls")
-                if isinstance(previous_timings.get("tool_calls"), list)
-                else []
-            )
+            "tool_calls": as_list(previous_timings.get("tool_calls"))
             + [
                 {
                     "tool_name": str((item.get("tool_calls") or [{}])[0].get("tool_name") or ""),

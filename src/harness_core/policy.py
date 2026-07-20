@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal, Protocol
 
+from harness_core.type_narrowing import as_dict, as_list
+
 
 PolicyEffect = Literal["allow", "deny", "confirm"]
 
@@ -59,11 +61,7 @@ class DefaultPolicyEngine:
     policy_id = "harness-default-v1"
 
     def evaluate(self, request: PolicyRequest) -> PolicyDecision:
-        usage_policy = (
-            request.context.get("usage_policy")
-            if isinstance(request.context.get("usage_policy"), dict)
-            else {}
-        )
+        usage_policy = as_dict(request.context.get("usage_policy"))
         if usage_policy.get("enabled") is False:
             return PolicyDecision(
                 allowed=False,
@@ -72,12 +70,8 @@ class DefaultPolicyEngine:
                 metadata={"rule": "resource_disabled"},
             )
 
-        skill = (
-            request.context.get("skill_activation")
-            if isinstance(request.context.get("skill_activation"), dict)
-            else {}
-        )
-        allowed_tools = skill.get("allowed_tools") if isinstance(skill.get("allowed_tools"), list) else []
+        skill = as_dict(request.context.get("skill_activation"))
+        allowed_tools = as_list(skill.get("allowed_tools"))
         if (
             request.action == "tool.invoke"
             and skill.get("skill_id")
@@ -94,11 +88,7 @@ class DefaultPolicyEngine:
                 },
             )
 
-        runtime_policy = (
-            request.context.get("runtime_policy")
-            if isinstance(request.context.get("runtime_policy"), dict)
-            else {}
-        )
+        runtime_policy = as_dict(request.context.get("runtime_policy"))
         allowed_tenants = {
             str(value)
             for value in runtime_policy.get("allowed_tenants") or []
@@ -111,11 +101,7 @@ class DefaultPolicyEngine:
                 policy_id=self.policy_id,
                 metadata={"rule": "tenant_allowlist"},
             )
-        governance_scope = (
-            request.context.get("governance_scope")
-            if isinstance(request.context.get("governance_scope"), dict)
-            else {}
-        )
+        governance_scope = as_dict(request.context.get("governance_scope"))
         granted_scopes = {
             str(value)
             for value in governance_scope.get("scopes") or []
@@ -141,11 +127,7 @@ class DefaultPolicyEngine:
             and runtime_policy.get("confirmation_required") is True
             and runtime_policy.get("confirmation_authority") != "handler"
         ):
-            grant = (
-                request.context.get("confirmation_grant")
-                if isinstance(request.context.get("confirmation_grant"), dict)
-                else {}
-            )
+            grant = as_dict(request.context.get("confirmation_grant"))
             if not _confirmation_grant_matches(request, grant):
                 return PolicyDecision(
                     allowed=False,

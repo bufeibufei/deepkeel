@@ -6,6 +6,7 @@ from uuid import uuid4
 from pydantic import BaseModel, Field, ValidationError
 
 from harness_core.contracts import Observation, PendingAction, ToolCall, ToolResult
+from harness_core.type_narrowing import as_dict
 
 
 class ClarificationRequest(BaseModel):
@@ -38,9 +39,9 @@ def clarification_for_missing_arguments(call: ToolCall, spec: Any) -> Clarificat
         return None
 
     contract = spec.argument_contract if isinstance(spec.argument_contract, dict) else {}
-    clarification = contract.get("clarification") if isinstance(contract.get("clarification"), dict) else {}
-    labels = clarification.get("field_labels") if isinstance(clarification.get("field_labels"), dict) else {}
-    formats = clarification.get("accepted_formats") if isinstance(clarification.get("accepted_formats"), dict) else {}
+    clarification = as_dict(contract.get("clarification"))
+    labels = as_dict(clarification.get("field_labels"))
+    formats = as_dict(clarification.get("accepted_formats"))
     display_fields = [str(labels.get(name) or name) for name in missing]
     display_fields.extend(" / ".join(str(labels.get(name) or name) for name in group) for group in missing_groups)
     prompt = str(clarification.get("prompt") or "").strip()

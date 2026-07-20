@@ -12,6 +12,7 @@ from harness_core.subagents.execution_types import (
     EventSink, SubAgentEmptyResponseError, _DelegationQuota,
 )
 from harness_core.tools import ToolExecutionContext
+from harness_core.type_narrowing import as_dict
 
 def _resolve_role(task_role: str, spec_role: str, providers: dict[str, Any]) -> str:
     for role in (task_role, spec_role, "reasoning", "fast"):
@@ -326,7 +327,7 @@ def _invoke_provider(
             [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
             **kwargs,
         )
-        message = response.get("message") if isinstance(response, dict) else {}
+        message = as_dict(response.get("message")) if isinstance(response, dict) else {}
         parsed = message.get("parsed") if isinstance(message, dict) else None
         if isinstance(parsed, (dict, list)):
             return json.dumps(parsed, ensure_ascii=False)

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
+from langchain_core.runnables import RunnableConfig
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command
 
@@ -102,10 +103,23 @@ def create_harness_graph(
         control=control,
     )
     graph = StateGraph(HarnessGraphState)
-    graph.add_node("model", nodes.model_node)
-    graph.add_node("tools", nodes.tool_node)
-    graph.add_node("await_user", nodes.await_user_node)
-    graph.add_node("await_async", nodes.await_async_node)
+
+    def model_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
+        return cast(HarnessGraphState, nodes.model_node(dict(state), config))
+
+    def tool_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
+        return cast(HarnessGraphState, nodes.tool_node(dict(state), config))
+
+    def await_user_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
+        return cast(HarnessGraphState, nodes.await_user_node(dict(state), config))
+
+    def await_async_node(state: HarnessGraphState, config: RunnableConfig) -> HarnessGraphState:
+        return cast(HarnessGraphState, nodes.await_async_node(dict(state), config))
+
+    graph.add_node("model", model_node)
+    graph.add_node("tools", tool_node)
+    graph.add_node("await_user", await_user_node)
+    graph.add_node("await_async", await_async_node)
     graph.add_conditional_edges(
         START,
         _route_from_start,

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Any
+from typing import Any, Literal
 
 from harness_core.budget import MODEL_CALLS
 from harness_core.contracts import AgentMessage, ToolCall
@@ -239,7 +239,7 @@ class SubAgentExecutor:
             and self.registry.get(result.agent_id).failure_policy == "fail_batch"
             for result in ordered
         )
-        status = (
+        status: Literal["completed", "partial", "failed", "canceled"] = (
             "canceled"
             if canceled == len(ordered)
             else "failed"
@@ -332,7 +332,7 @@ class SubAgentExecutor:
             quota=quota,
         )
         self._raise_if_canceled(child_run_id, parent_run_id, context=context)
-        output_outcome = "completed"
+        output_outcome: Literal["completed", "degraded"] = "completed"
         output_diagnostics: dict[str, Any] = {}
         try:
             parsed = _validated_json(raw, schema)
@@ -475,9 +475,10 @@ class SubAgentExecutor:
         quota: _DelegationQuota | None,
     ) -> tuple[str, list[dict[str, Any]], int]:
         allowed = set(spec.tool_allowlist)
+        tool_executor = self.tool_executor
         native_tools = bool(
             allowed
-            and self.tool_executor is not None
+            and tool_executor is not None
             and (
                 callable(getattr(provider, "complete_chat", None))
                 or callable(getattr(provider, "stream_chat", None))
@@ -577,7 +578,10 @@ class SubAgentExecutor:
             )
             return raw, [], model_calls
 
-        tools = model_tools_from_registry(self.tool_executor.registry, allowed)
+        if tool_executor is None:
+            raise RuntimeError("subagent tool executor is unavailable")
+
+        tools = model_tools_from_registry(tool_executor.registry, allowed)
         messages = _restored_messages(restored) or [
             AgentMessage(id=f"{child_run_id}:input", role="user", content=prompt)
         ]
@@ -714,7 +718,7 @@ class SubAgentExecutor:
                 for call in pending_calls:
                     if call.name not in allowed:
                         raise RuntimeError(f"subagent requested tool outside allowlist: {call.name}")
-                    tool_spec = self.tool_executor.registry.get(call.name)
+                    tool_spec = tool_executor.registry.get(call.name)
                     if not tool_spec.read_only:
                         raise RuntimeError(f"subagent requested non-read-only tool: {call.name}")
                     accepted.append(call)
@@ -725,7 +729,7 @@ class SubAgentExecutor:
                 tool_calls += len(accepted)
                 self._raise_if_canceled(child_run_id, parent_run_id, context=context)
                 _emit_subagent_tools(event_sink, child_run_id, task, accepted, status="started")
-                results = self.tool_executor.execute_many(accepted, child_context)
+                results = tool_executor.execute_many(accepted, child_context)
                 for result in results:
                     trace = {
                         "tool_call_id": result.tool_call_id,

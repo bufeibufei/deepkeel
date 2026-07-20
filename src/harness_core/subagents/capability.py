@@ -5,7 +5,14 @@ from typing import Any, Protocol
 
 from pydantic import ValidationError
 
-from harness_core.contracts import Observation, ToolCall, ToolResult
+from harness_core.contracts import (
+    Observation,
+    ObservationStatus,
+    ResultOutcome,
+    ToolCall,
+    ToolResult,
+    ToolResultStatus,
+)
 from harness_core.skills import DelegationPolicy
 from harness_core.subagents.contracts import DelegationRequest
 from harness_core.subagents.executor import SubAgentExecutor
@@ -185,24 +192,28 @@ def _result(
     call: ToolCall,
     context: ToolExecutionContext,
     *,
-    status: str,
+    status: ToolResultStatus,
     summary: str,
-    outcome: str | None = None,
+    outcome: ResultOutcome | None = None,
     data: dict[str, Any] | None = None,
     error: str = "",
     retryable: bool = False,
     metadata: dict[str, Any] | None = None,
 ) -> ToolResult:
+    if status == "succeeded":
+        observation_status: ObservationStatus = "succeeded"
+    elif status == "failed":
+        observation_status = "failed"
+    elif status == "waiting_async":
+        observation_status = "pending"
+    else:
+        observation_status = "requires_user_action"
     observation = Observation(
         id=f"{call.id}:observation",
         run_id=context.run_id,
         tool_call_id=call.id,
         source=call.name,
-        status={
-            "succeeded": "succeeded",
-            "failed": "failed",
-            "waiting_async": "pending",
-        }[status],
+        status=observation_status,
         outcome=outcome,
         summary=summary,
         data=dict(data or {}),

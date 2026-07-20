@@ -351,6 +351,8 @@ _CATALOG_FIELDS = (
 
 def _close_resource(resource: object) -> None:
     try:
-        resource.close()
+        close = getattr(resource, "close", None)
+        if callable(close):
+            close()
     except Exception:
         pass

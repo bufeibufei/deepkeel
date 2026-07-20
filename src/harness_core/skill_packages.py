@@ -7,6 +7,8 @@ from typing import Any, Iterable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
+from harness_core.type_narrowing import as_dict
+
 
 _WORKFLOW_WAITING_STATUSES = {"waiting_user_input", "waiting_user_action"}
 _WORKFLOW_RUNNING_STATUSES = {"reasoning", "executing_tools", "task_running"}
@@ -160,7 +162,7 @@ class SkillPackageManifest(BaseModel):
                 raise ValueError(
                     "required_transition_any must match a required_tool_group"
                 )
-        output = self.skill_spec.get("output_contract") if isinstance(self.skill_spec.get("output_contract"), dict) else {}
+        output = as_dict(self.skill_spec.get("output_contract"))
         required_artifact = str(output.get("requires_artifact") or "")
         if self.artifact_types and required_artifact not in self.artifact_types:
             raise ValueError("skill_spec artifact contract is not declared by package")
@@ -171,21 +173,21 @@ class SkillPackageManifest(BaseModel):
             DelegationPolicySpec.model_validate(delegation)
         return self
 
-    @computed_field
-    @property
-    def skill_id(self) -> str:
+    def _skill_id(self) -> str:
         return str(self.skill_spec.get("id") or "").strip()
 
-    @computed_field
-    @property
-    def version(self) -> str:
+    skill_id = computed_field(return_type=str)(property(_skill_id))
+
+    def _version(self) -> str:
         return str(self.skill_spec.get("version") or "").strip()
 
-    @computed_field
-    @property
-    def digest(self) -> str:
+    version = computed_field(return_type=str)(property(_version))
+
+    def _digest(self) -> str:
         canonical = json.dumps(self.skill_spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    digest = computed_field(return_type=str)(property(_digest))
 
     def runtime_spec(self) -> dict[str, Any]:
         return {

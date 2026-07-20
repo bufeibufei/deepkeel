@@ -12,6 +12,7 @@ from harness_core.budget import (
     TOOL_CONCURRENCY,
 )
 from harness_core.model import ModelProviderAdapter
+from harness_core.type_narrowing import as_dict
 
 def _resolved_model_policy(
     value: dict[str, Any] | None,
@@ -29,7 +30,7 @@ def _resolved_model_policy(
         primary = "reasoning" if "reasoning" in catalog else next(iter(catalog), "reasoning")
     policy["primary_role"] = primary
     policy["available_roles"] = list(catalog)
-    budget = policy.get("budget") if isinstance(policy.get("budget"), dict) else {}
+    budget = as_dict(policy.get("budget"))
     policy["budget"] = {
         "max_model_calls": _positive_limit(budget.get("max_model_calls"), max_steps),
         "max_tool_calls": _positive_limit(budget.get("max_tool_calls"), 0),
@@ -71,11 +72,7 @@ def _resolved_model_policy(
         ),
         "roles": {
             str(role): dict(limits)
-            for role, limits in (
-                budget.get("roles")
-                if isinstance(budget.get("roles"), dict)
-                else {}
-            ).items()
+            for role, limits in as_dict(budget.get("roles")).items()
             if isinstance(limits, dict)
         },
     }
@@ -108,7 +105,7 @@ def _model_providers(
 
 
 def _budget_limits(model_policy: dict[str, Any]) -> dict[str, float]:
-    budget = model_policy.get("budget") if isinstance(model_policy.get("budget"), dict) else {}
+    budget = as_dict(model_policy.get("budget"))
     return {
         MODEL_CALLS: float(budget.get("max_model_calls") or 0),
         TOOL_CALLS: float(budget.get("max_tool_calls") or 0),
@@ -137,7 +134,7 @@ def _positive_number(value: Any, default: float) -> float:
 
 
 def _max_elapsed_seconds(model_policy: dict[str, Any]) -> float:
-    budget = model_policy.get("budget") if isinstance(model_policy.get("budget"), dict) else {}
+    budget = as_dict(model_policy.get("budget"))
     return _positive_number(budget.get("max_elapsed_seconds"), 900.0)
 
 
@@ -145,16 +142,8 @@ def _prior_budget_state(
     durable_state: dict[str, Any],
     short_context: dict[str, Any],
 ) -> dict[str, Any]:
-    durable_runtime = (
-        durable_state.get("runtime")
-        if isinstance(durable_state.get("runtime"), dict)
-        else {}
-    )
-    previous_runtime = (
-        short_context.get("previous_runtime")
-        if isinstance(short_context.get("previous_runtime"), dict)
-        else {}
-    )
+    durable_runtime = as_dict(durable_state.get("runtime"))
+    previous_runtime = as_dict(short_context.get("previous_runtime"))
     sources = (
         durable_state,
         durable_runtime.get("checkpoint"),
@@ -175,16 +164,8 @@ def _merge_skill_activation(
     session_projection: dict[str, Any],
     explicit: dict[str, Any] | None,
 ) -> dict[str, Any]:
-    durable_context = (
-        durable_state.get("context_snapshot")
-        if isinstance(durable_state.get("context_snapshot"), dict)
-        else {}
-    )
-    projected_context = (
-        session_projection.get("context_snapshot")
-        if isinstance(session_projection.get("context_snapshot"), dict)
-        else {}
-    )
+    durable_context = as_dict(durable_state.get("context_snapshot"))
+    projected_context = as_dict(session_projection.get("context_snapshot"))
     sources = (
         durable_context.get("skill_activation"),
         durable_state.get("skill_activation"),
@@ -203,18 +184,10 @@ def _prior_diagnostics(
     durable_state: dict[str, Any],
     short_context: dict[str, Any],
 ) -> dict[str, Any]:
-    durable_runtime = (
-        durable_state.get("runtime")
-        if isinstance(durable_state.get("runtime"), dict)
-        else {}
-    )
-    previous_runtime = (
-        short_context.get("previous_runtime")
-        if isinstance(short_context.get("previous_runtime"), dict)
-        else {}
-    )
+    durable_runtime = as_dict(durable_state.get("runtime"))
+    previous_runtime = as_dict(short_context.get("previous_runtime"))
     for runtime in (durable_runtime, previous_runtime):
-        diagnostics = runtime.get("diagnostics") if isinstance(runtime.get("diagnostics"), dict) else {}
+        diagnostics = as_dict(runtime.get("diagnostics"))
         if diagnostics:
             return diagnostics
     return {}

@@ -11,6 +11,8 @@ from harness_core.contracts import AgentMessage, Artifact, Observation, RunConte
 if TYPE_CHECKING:
     from harness_core.runtime_api import RuntimeResult
 
+from harness_core.type_narrowing import as_dict
+
 
 CHECKPOINT_SCHEMA_VERSION = "harness-checkpoint-v2"
 DURABLE_CHECKPOINT_SCHEMA_VERSION = "harness-durable-checkpoint-v2"
@@ -160,7 +162,7 @@ def checkpoint_from_runtime(previous_runtime: dict[str, Any] | None) -> dict[str
         supported={RUNTIME_SCHEMA_VERSION},
         contract_name="runtime",
     )
-    checkpoint = runtime.get("checkpoint") if isinstance(runtime.get("checkpoint"), dict) else {}
+    checkpoint = as_dict(runtime.get("checkpoint"))
     _require_supported_version(
         checkpoint,
         supported={CHECKPOINT_SCHEMA_VERSION},
@@ -178,7 +180,7 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
     )
     if str(state.get("schema_version") or "") == CHECKPOINT_SCHEMA_VERSION:
         return state
-    direct = state.get("checkpoint") if isinstance(state.get("checkpoint"), dict) else {}
+    direct = as_dict(state.get("checkpoint"))
     if direct:
         _require_supported_version(
             direct,
@@ -186,7 +188,7 @@ def checkpoint_from_durable_state(value: dict[str, Any] | None) -> dict[str, Any
             contract_name="checkpoint",
         )
         return direct
-    runtime = state.get("runtime") if isinstance(state.get("runtime"), dict) else {}
+    runtime = as_dict(state.get("runtime"))
     return checkpoint_from_runtime(runtime)
 
 
@@ -251,7 +253,7 @@ def resume_payload_from_context(short_context: dict[str, Any] | None) -> dict[st
         return observation
     observations = short.get("resume_observations")
     if isinstance(observations, list) and observations and isinstance(observations[-1], dict):
-        return observations[-1]
+        return as_dict(observations[-1])
     return {"status": "succeeded", "summary": "The external action is complete."}
 
 
@@ -279,23 +281,15 @@ def restore_run_context(
     messages = [AgentMessage.model_validate(item) for item in checkpoint.get("messages", []) if isinstance(item, dict)]
     observations = [Observation.model_validate(item) for item in checkpoint.get("observations", []) if isinstance(item, dict)]
     artifacts = [Artifact.model_validate(item) for item in checkpoint.get("artifacts", []) if isinstance(item, dict)]
-    pending_action = (
-        checkpoint.get("pending_action")
-        if isinstance(checkpoint.get("pending_action"), dict)
-        else {}
-    )
-    pending_async = (
-        checkpoint.get("pending_async")
-        if isinstance(checkpoint.get("pending_async"), dict)
-        else {}
-    )
+    pending_action = as_dict(checkpoint.get("pending_action"))
+    pending_async = as_dict(checkpoint.get("pending_async"))
     pending = pending_action or pending_async
     if _confirmed_policy_tool_call(pending_action, resume_payload):
-        payload = pending_action.get("payload") if isinstance(pending_action.get("payload"), dict) else {}
-        deferred = payload.get("deferred_tool_call") if isinstance(payload.get("deferred_tool_call"), dict) else {}
+        payload = as_dict(pending_action.get("payload"))
+        deferred = as_dict(payload.get("deferred_tool_call"))
         call = ToolCall.model_validate(deferred)
-        metadata = checkpoint.get("metadata") if isinstance(checkpoint.get("metadata"), dict) else {}
-        grants = metadata.get("confirmation_grants") if isinstance(metadata.get("confirmation_grants"), dict) else {}
+        metadata = as_dict(checkpoint.get("metadata"))
+        grants = as_dict(metadata.get("confirmation_grants"))
         metadata = {
             **metadata,
             "recovered_from_durable_checkpoint": True,
@@ -306,7 +300,7 @@ def restore_run_context(
                     "run_id": run_id,
                     "tool_call_id": call.id,
                     "tool_name": call.name,
-                    "policy_id": str((payload.get("policy_decision") or {}).get("policy_id") or ""),
+                    "policy_id": str(as_dict(payload.get("policy_decision")).get("policy_id") or ""),
                 },
             },
         }
@@ -322,9 +316,7 @@ def restore_run_context(
             artifacts=artifacts,
             skill_activation=skill_activation or {},
             model_policy=model_policy or {},
-            budget_state=checkpoint.get("budget_state")
-            if isinstance(checkpoint.get("budget_state"), dict)
-            else {},
+            budget_state=as_dict(checkpoint.get("budget_state")),
             metadata=metadata,
             step_count=int(checkpoint.get("step_count") or 0),
         )
@@ -337,7 +329,11 @@ def restore_run_context(
         or "resume"
     )
     summary = str(resume_payload.get("summary") or "The external action is complete.")
-    data = resume_payload.get("data") if isinstance(resume_payload.get("data"), dict) else resume_payload
+    data = (
+        as_dict(resume_payload.get("data"))
+        if isinstance(resume_payload.get("data"), dict)
+        else dict(resume_payload)
+    )
     observation = Observation(
         id=f"resume-{uuid4()}",
         run_id=run_id,
@@ -414,15 +410,9 @@ def restore_run_context(
         artifacts=artifacts,
         skill_activation=restored_skill,
         model_policy=model_policy or {},
-        budget_state=checkpoint.get("budget_state")
-        if isinstance(checkpoint.get("budget_state"), dict)
-        else {},
+        budget_state=as_dict(checkpoint.get("budget_state")),
         metadata={
-            **(
-                checkpoint.get("metadata")
-                if isinstance(checkpoint.get("metadata"), dict)
-                else {}
-            ),
+            **as_dict(checkpoint.get("metadata")),
             "recovered_from_durable_checkpoint": True,
         },
         step_count=int(checkpoint.get("step_count") or 0),
@@ -433,8 +423,8 @@ def _confirmed_policy_tool_call(
     pending_action: dict[str, Any],
     resume_payload: dict[str, Any],
 ) -> bool:
-    payload = pending_action.get("payload") if isinstance(pending_action.get("payload"), dict) else {}
-    data = resume_payload.get("data") if isinstance(resume_payload.get("data"), dict) else {}
+    payload = as_dict(pending_action.get("payload"))
+    data = as_dict(resume_payload.get("data"))
     status = str(resume_payload.get("status") or "").lower()
     confirmed = data.get("confirmed") is True or resume_payload.get("confirmed") is True or status in {
         "confirmed",

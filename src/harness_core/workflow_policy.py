@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from harness_core.skills import SkillPolicy
+from harness_core.type_narrowing import as_dict
 
 
 SKILL_CONTRACT_VIOLATION = "SKILL_CONTRACT_VIOLATION"
@@ -129,7 +130,7 @@ def _mapping_items(value: Any) -> list[Mapping[str, Any]]:
 
 
 def _artifact_is_complete(artifact: Mapping[str, Any]) -> bool:
-    data = artifact.get("data") if isinstance(artifact.get("data"), Mapping) else {}
+    data = as_dict(artifact.get("data"))
     status = str(
         artifact.get("status") or data.get("status") or data.get("report_status") or ""
     ).strip().lower()

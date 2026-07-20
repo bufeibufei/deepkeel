@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +18,7 @@ from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.type_narrowing import as_dict
 from harness_core.workflow_policy import evaluate_workflow_completion
 from harness_core.graph_state import (
     _allowed_tool_names, _apply_policy_confirmation_resume, _apply_resume_payload,
@@ -47,7 +49,7 @@ class GraphNodes:
         self.deadline_monotonic = deadline_monotonic
         self.control = control
 
-    def ensure_active(self, state: dict[str, Any], *, force: bool = False) -> None:
+    def ensure_active(self, state: Mapping[str, Any], *, force: bool = False) -> None:
         self.control.raise_if_cancelled(str(state.get("run_id") or ""), force=force)
         ensure_time_remaining(self.deadline_monotonic)
 
@@ -62,8 +64,8 @@ class GraphNodes:
         return migrate_legacy_graph_state(normalized, thread_id=thread_id or str(normalized.get("run_id") or "checkpoint"))
 
     def model_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-        state = self.normalize_state(state, config)
-        if not state["messages"]:
+        normalized_state = self.normalize_state(state, config)
+        if not normalized_state["messages"]:
             raise ValueError("graph checkpoint cannot resume model execution without messages")
         model = self.model
         tool_registry = self.tool_registry
@@ -71,8 +73,8 @@ class GraphNodes:
         max_steps = self.max_steps
         ledger = self.ledger
         deadline_monotonic = self.deadline_monotonic
-        self.ensure_active(state, force=True)
-        current = _copy_state(state)
+        self.ensure_active(normalized_state, force=True)
+        current = _copy_state(normalized_state)
         if int(current.get("step_count") or 0) >= max_steps:
             skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
             completion = evaluate_workflow_completion(skill_policy, current)
@@ -221,7 +223,7 @@ class GraphNodes:
             raise
         current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
         model_latency_ms = int((time.perf_counter() - model_started_at) * 1000)
-        model_metrics = {
+        model_metrics: dict[str, Any] = {
             "model_id": turn.model_id,
             "model_role": turn.model_role,
             "finish_reason": turn.finish_reason,
@@ -249,7 +251,7 @@ class GraphNodes:
             config,
             "budget.usage.recorded",
             "Model usage recorded",
-            str(model_metrics["usage"].get("source") or ""),
+            str(as_dict(model_metrics["usage"]).get("source") or ""),
             {
                 "role": turn.model_role,
                 "model_id": turn.model_id,
@@ -340,12 +342,12 @@ class GraphNodes:
         return current
 
     def tool_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-        state = self.normalize_state(state, config)
+        normalized_state = self.normalize_state(state, config)
         tool_registry = self.tool_registry
         tool_executor = self.tool_executor
         ledger = self.ledger
-        self.ensure_active(state, force=True)
-        current = _copy_state(state)
+        self.ensure_active(normalized_state, force=True)
+        current = _copy_state(normalized_state)
         calls = [_hydrate_call(item, tool_registry, current["run_id"]) for item in current.get("pending_tool_calls", [])]
         context = _config_value(config, "tool_context")
         if not isinstance(context, ToolExecutionContext):
@@ -403,17 +405,17 @@ class GraphNodes:
         return current
 
     def await_user_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-        state = self.normalize_state(state, config)
-        self.ensure_active(state, force=True)
-        current = _copy_state(state)
+        normalized_state = self.normalize_state(state, config)
+        self.ensure_active(normalized_state, force=True)
+        current = _copy_state(normalized_state)
         resume_payload = interrupt(current.get("pending_action") or {})
         if _is_policy_confirmation(current.get("pending_action")):
             return _apply_policy_confirmation_resume(current, resume_payload, config)
         return _apply_resume_payload(current, resume_payload, config, source="user_action")
 
     def await_async_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
-        state = self.normalize_state(state, config)
-        self.ensure_active(state, force=True)
-        current = _copy_state(state)
+        normalized_state = self.normalize_state(state, config)
+        self.ensure_active(normalized_state, force=True)
+        current = _copy_state(normalized_state)
         resume_payload = interrupt(current.get("pending_async") or {})
         return _apply_resume_payload(current, resume_payload, config, source="async_observation")

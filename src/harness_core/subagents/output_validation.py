@@ -5,6 +5,7 @@ import json
 from typing import Any
 
 from harness_core.subagents.contracts import SubAgentSpec
+from harness_core.type_narrowing import as_dict
 
 def _json_object(value: str) -> dict[str, Any]:
     text = str(value or "").strip()
@@ -161,7 +162,7 @@ def _validate_output(value: dict[str, Any], schema: dict[str, Any]) -> None:
     missing = [str(key) for key in schema.get("required") or [] if key not in value]
     if missing:
         raise RuntimeError(f"subagent output is missing required fields: {', '.join(missing)}")
-    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    properties = as_dict(schema.get("properties"))
     for key, rule in properties.items():
         if key not in value or not isinstance(rule, dict) or not rule.get("type"):
             continue

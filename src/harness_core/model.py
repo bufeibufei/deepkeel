@@ -40,6 +40,7 @@ from harness_core.policy import (
     PolicyRequest,
 )
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.type_narrowing import as_dict, as_list
 
 
 ModelRouteSink = Callable[[dict[str, Any]], None]
@@ -828,7 +829,7 @@ def _tool_choice(step_context: ModelStepContext | None) -> str | dict[str, Any]:
 
 
 def _model_call_limit(model_policy: dict[str, Any]) -> float | None:
-    budget = model_policy.get("budget") if isinstance(model_policy.get("budget"), dict) else {}
+    budget = as_dict(model_policy.get("budget"))
     value = budget.get("max_model_calls")
     try:
         return float(value) if value is not None else None
@@ -873,9 +874,9 @@ def _remaining_output_tokens(
 def _provider_usage(raw: dict[str, Any] | None) -> dict[str, Any]:
     value = raw if isinstance(raw, dict) else {}
     if isinstance(value.get("usage"), dict):
-        return value["usage"]
-    nested = value.get("raw") if isinstance(value.get("raw"), dict) else {}
-    return nested.get("usage") if isinstance(nested.get("usage"), dict) else {}
+        return as_dict(value["usage"])
+    nested = as_dict(value.get("raw"))
+    return as_dict(nested.get("usage"))
 
 
 def provider_messages_from_agent(
@@ -959,19 +960,19 @@ def _assemble_streamed_turn(
             continue
         choice = choices[0]
         finish_reason = str(choice.get("finish_reason") or finish_reason)
-        delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
+        delta = as_dict(choice.get("delta"))
         text = _content_text(delta.get("content"))
         if text:
             content_parts.append(text)
             if on_text_delta is not None:
                 on_text_delta(text)
-        for raw_call in delta.get("tool_calls", []) if isinstance(delta.get("tool_calls"), list) else []:
+        for raw_call in as_list(delta.get("tool_calls")):
             if not isinstance(raw_call, dict):
                 continue
             index = int(raw_call.get("index") or 0)
             target = calls.setdefault(index, {"id": "", "name": "", "arguments": ""})
             target["id"] = str(raw_call.get("id") or target["id"])
-            function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+            function = as_dict(raw_call.get("function"))
             target["name"] += str(function.get("name") or "")
             target["arguments"] += str(function.get("arguments") or "")
     tool_calls = [_tool_call_from_stream(index, value) for index, value in sorted(calls.items())]
@@ -991,15 +992,15 @@ def _turn_from_completion(
     *,
     on_text_delta: Callable[[str], None] | None,
 ) -> ModelTurn:
-    message = response.get("message") if isinstance(response.get("message"), dict) else {}
+    message = as_dict(response.get("message"))
     content = _content_text(message.get("content"))
     if content and on_text_delta is not None:
         on_text_delta(content)
     calls = []
-    for index, raw_call in enumerate(message.get("tool_calls", []) if isinstance(message.get("tool_calls"), list) else []):
+    for index, raw_call in enumerate(as_list(message.get("tool_calls"))):
         if not isinstance(raw_call, dict):
             continue
-        function = raw_call.get("function") if isinstance(raw_call.get("function"), dict) else {}
+        function = as_dict(raw_call.get("function"))
         calls.append(
             ToolCall(
                 id=str(raw_call.get("id") or f"model-call-{index}-{uuid4()}"),

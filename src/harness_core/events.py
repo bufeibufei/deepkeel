@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_core.type_narrowing import as_dict
+
 
 class AgentEventPersistenceError(RuntimeError):
     """Raised when a runtime event cannot be durably recorded before publication."""
@@ -20,7 +22,7 @@ EVENT_PROJECTION = {
 
 def project_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
     source_type = str(event.get("event_type") or "")
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    payload = as_dict(event.get("payload"))
     return {
         **event,
         "event_type": EVENT_PROJECTION.get(source_type, source_type),
@@ -35,7 +37,7 @@ def is_answer_delta(event: dict[str, Any]) -> bool:
 
 def event_runtime_status(event: dict[str, Any]) -> str | None:
     event_type = str(event.get("event_type") or "")
-    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+    payload = as_dict(event.get("payload"))
     if event_type in {"run.created", "user.message"}:
         return "preparing"
     if event_type in {"agent.reasoning"}:

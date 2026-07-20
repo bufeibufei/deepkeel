@@ -6,8 +6,10 @@ from typing import Any
 
 from harness_core.deliberation.contracts import (
     DeliberationArgument,
+    DeliberationPhase,
     DeliberationResult,
     DeliberationSpec,
+    DeliberationStatus,
 )
 from harness_core.subagents import DelegationRequest, DelegationTask, SubAgentExecutor
 from harness_core.tools import ToolExecutionContext
@@ -154,7 +156,7 @@ class DeliberationCoordinator:
         self,
         spec: DeliberationSpec,
         *,
-        phase: str,
+        phase: DeliberationPhase,
         round_index: int,
         context: ToolExecutionContext,
         providers: dict[str, Any],
@@ -340,7 +342,13 @@ class DeliberationCoordinator:
         arguments = state["arguments"]
         synthesis = state.get("synthesis") or {}
         completed = sum(item.status == "completed" for item in arguments)
-        status = "completed" if completed == len(arguments) and synthesis.get("status") == "completed" else "partial" if completed else "failed"
+        status: DeliberationStatus = (
+            "completed"
+            if completed == len(arguments) and synthesis.get("status") == "completed"
+            else "partial"
+            if completed
+            else "failed"
+        )
         result = DeliberationResult(
             deliberation_id=spec.deliberation_id,
             status=status,

@@ -186,7 +186,7 @@ Run the package-owned contract suite with:
 ```powershell
 uv sync --extra test
 uv run ruff check src tests verification
-uv run mypy src/harness_core/runtime_api.py src/harness_core/runtime_sdk.py src/harness_core/extension_sdk.py src/harness_core/adapter_sdk.py src/harness_core/public_api.py src/harness_core/adapter_conformance.py
+uv run mypy src/harness_core
 uv run pytest -q --cov=harness_core --cov-fail-under=60
 ```
 

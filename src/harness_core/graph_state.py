@@ -3,7 +3,8 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from typing import Any, TypedDict
+from collections.abc import Mapping
+from typing import Any, TypedDict, cast
 from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
@@ -12,6 +13,7 @@ from harness_core.contracts import AgentMessage, Observation, RunContext, ToolCa
 from harness_core.model import ModelGateway
 from harness_core.skills import DelegationPolicy, SkillPolicy
 from harness_core.tool_registry import ToolRegistry
+from harness_core.type_narrowing import as_dict, as_list
 from harness_core.workflow_policy import evaluate_workflow_completion
 from harness_core.graph_workflow import (
     _emit,
@@ -71,7 +73,7 @@ def validate_graph_state(state: dict[str, Any]) -> HarnessGraphState:
     missing = state.get("missing_requirements")
     if not isinstance(missing, dict) or not isinstance(missing.get("tools"), list) or not isinstance(missing.get("artifacts"), list):
         raise TypeError("graph state missing_requirements must contain tools and artifacts lists")
-    return state  # type: ignore[return-value]
+    return cast(HarnessGraphState, state)
 
 
 def migrate_legacy_graph_state(
@@ -82,7 +84,7 @@ def migrate_legacy_graph_state(
     """Normalize durable v2 checkpoints before applying current invariants."""
 
     migrated = dict(state)
-    metadata = dict(migrated.get("metadata") or {})
+    metadata = as_dict(migrated.get("metadata"))
     run_id = str(migrated.get("run_id") or metadata.get("run_id") or thread_id)
     migrated.update(
         {
@@ -100,8 +102,7 @@ def migrate_legacy_graph_state(
         migrated[field_name] = list(migrated.get(field_name) or [])
     for field_name in ("skill_activation", "model_policy", "budget_state"):
         migrated[field_name] = dict(migrated.get(field_name) or {})
-    missing = migrated.get("missing_requirements")
-    missing = missing if isinstance(missing, dict) else {}
+    missing = as_dict(migrated.get("missing_requirements"))
     migrated["missing_requirements"] = {
         "tools": list(missing.get("tools") or []),
         "artifacts": list(missing.get("artifacts") or []),
@@ -116,11 +117,7 @@ def migrate_legacy_graph_state(
 
 def _state_from_context(context: RunContext) -> HarnessGraphState:
     skill = dict(context.skill_activation)
-    missing = (
-        skill.get("missing_requirements")
-        if isinstance(skill.get("missing_requirements"), dict)
-        else {}
-    )
+    missing = as_dict(skill.get("missing_requirements"))
     return validate_graph_state({
         "run_id": context.run_id,
         "thread_id": context.thread_id,
@@ -153,18 +150,14 @@ def _state_from_context(context: RunContext) -> HarnessGraphState:
     })
 
 
-def _copy_state(state: dict[str, Any]) -> dict[str, Any]:
+def _copy_state(state: Mapping[str, Any]) -> dict[str, Any]:
     current = dict(state)
     for name in ("messages", "observations", "artifacts", "events", "pending_tool_calls", "tool_results"):
         current[name] = list(state.get(name) or [])
     current["skill_activation"] = dict(state.get("skill_activation") or {})
     current["metadata"] = dict(state.get("metadata") or {})
     current["budget_state"] = dict(state.get("budget_state") or {})
-    missing = (
-        state.get("missing_requirements")
-        if isinstance(state.get("missing_requirements"), dict)
-        else {}
-    )
+    missing = as_dict(state.get("missing_requirements"))
     current["missing_requirements"] = {
         "tools": list(missing.get("tools") or []),
         "artifacts": list(missing.get("artifacts") or []),
@@ -189,8 +182,8 @@ def _allowed_tool_names(
     state: dict[str, Any],
     registry: ToolRegistry,
 ) -> set[str] | None:
-    skill = state.get("skill_activation") if isinstance(state.get("skill_activation"), dict) else {}
-    allowed = skill.get("allowed_tools") if isinstance(skill.get("allowed_tools"), list) else []
+    skill = as_dict(state.get("skill_activation"))
+    allowed = as_list(skill.get("allowed_tools"))
     if allowed:
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
@@ -211,7 +204,7 @@ def _forced_workflow_tool_name(
     tools: list[dict[str, Any]],
 ) -> str:
     phase = str(state.get("policy_phase") or "")
-    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    metadata = as_dict(state.get("metadata"))
     resumed_after_clarification = (
         phase == "waiting_user_input"
         and int(metadata.get("workflow_clarification_resume_count") or 0) > 0
@@ -222,7 +215,7 @@ def _forced_workflow_tool_name(
     decision = evaluate_workflow_completion(skill, state)
     missing_tools = decision.missing_tools
     available = {
-        str((item.get("function") or {}).get("name") or "")
+        str(as_dict(item.get("function")).get("name") or "")
         for item in tools
         if isinstance(item, dict) and isinstance(item.get("function"), dict)
     }
@@ -240,7 +233,7 @@ def _skill_tool_parameter_overrides(
     state: dict[str, Any],
     registry: ToolRegistry,
 ) -> dict[str, dict[str, Any]]:
-    skill = state.get("skill_activation") if isinstance(state.get("skill_activation"), dict) else {}
+    skill = as_dict(state.get("skill_activation"))
     policy = DelegationPolicy.from_snapshot(skill)
     if not policy.enabled:
         return {}
@@ -257,7 +250,7 @@ def _skill_tool_parameter_overrides(
     ):
         return {}
     schema = deepcopy(schema)
-    properties = schema.get("properties") if isinstance(schema.get("properties"), dict) else {}
+    properties = as_dict(schema.get("properties"))
     concurrency = properties.get("max_concurrency")
     if isinstance(concurrency, dict):
         concurrency["maximum"] = policy.max_concurrency
@@ -268,10 +261,8 @@ def _skill_tool_parameter_overrides(
     tasks = properties.get("tasks")
     if isinstance(tasks, dict):
         tasks["maxItems"] = policy.max_tasks
-        items = tasks.get("items") if isinstance(tasks.get("items"), dict) else {}
-        task_properties = (
-            items.get("properties") if isinstance(items.get("properties"), dict) else {}
-        )
+        items = as_dict(tasks.get("items"))
+        task_properties = as_dict(items.get("properties"))
         agent_id = task_properties.get("agent_id")
         if isinstance(agent_id, dict) and policy.allowed_agents:
             agent_id["enum"] = sorted(policy.allowed_agents)
@@ -358,7 +349,11 @@ def _parallel_suspension_rejected(call: ToolCall, run_id: str) -> ToolResult:
     )
 
 
-def _apply_tool_result(current: dict[str, Any], result: ToolResult, config: dict[str, Any]) -> None:
+def _apply_tool_result(
+    current: dict[str, Any],
+    result: ToolResult,
+    config: Mapping[str, Any],
+) -> None:
     if result.observation is not None:
         current.setdefault("observations", []).append(result.observation.model_dump(mode="json"))
     for artifact in result.artifacts:
@@ -414,7 +409,7 @@ def _apply_tool_result(current: dict[str, Any], result: ToolResult, config: dict
 def _apply_resume_payload(
     current: dict[str, Any],
     resume_payload: Any,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     *,
     source: str,
 ) -> dict[str, Any]:
@@ -438,7 +433,7 @@ def _apply_resume_payload(
         source=tool_name,
         status="failed" if status == "failed" else "succeeded",
         summary=summary,
-        data=data,
+        data=as_dict(data),
         error=str(payload.get("error") or "") if status == "failed" else "",
         metadata={"resume_source": source},
     )
@@ -505,25 +500,25 @@ def _apply_resume_payload(
 def _is_policy_confirmation(pending: Any) -> bool:
     if not isinstance(pending, dict):
         return False
-    payload = pending.get("payload") if isinstance(pending.get("payload"), dict) else {}
+    payload = as_dict(pending.get("payload"))
     return pending.get("action_type") == "policy_confirmation" or payload.get("policy_confirmation") is True
 
 
 def _apply_policy_confirmation_resume(
     current: dict[str, Any],
     resume_payload: Any,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> dict[str, Any]:
     resolution = resume_payload if isinstance(resume_payload, dict) else {"value": resume_payload}
-    data = resolution.get("data") if isinstance(resolution.get("data"), dict) else {}
+    data = as_dict(resolution.get("data"))
     status = str(resolution.get("status") or "").lower()
     confirmed = data.get("confirmed") is True or resolution.get("confirmed") is True or status in {
         "confirmed",
         "approved",
     }
-    pending = current.get("pending_action") if isinstance(current.get("pending_action"), dict) else {}
-    payload = pending.get("payload") if isinstance(pending.get("payload"), dict) else {}
-    deferred = payload.get("deferred_tool_call") if isinstance(payload.get("deferred_tool_call"), dict) else {}
+    pending = as_dict(current.get("pending_action"))
+    payload = as_dict(pending.get("payload"))
+    deferred = as_dict(payload.get("deferred_tool_call"))
     tool_call_id = str(pending.get("tool_call_id") or deferred.get("id") or "")
     tool_name = str(deferred.get("name") or payload.get("tool_name") or "policy_confirmation")
     current["pending_action"] = None
@@ -532,7 +527,7 @@ def _apply_policy_confirmation_resume(
         current["pending_tool_calls"] = [deferred]
         current["status"] = "executing_tools"
         metadata = current.setdefault("metadata", {})
-        grants = metadata.get("confirmation_grants") if isinstance(metadata.get("confirmation_grants"), dict) else {}
+        grants = as_dict(metadata.get("confirmation_grants"))
         metadata["confirmation_grants"] = {
             **grants,
             tool_call_id: {
@@ -540,7 +535,7 @@ def _apply_policy_confirmation_resume(
                 "run_id": current["run_id"],
                 "tool_call_id": tool_call_id,
                 "tool_name": tool_name,
-                "policy_id": str((payload.get("policy_decision") or {}).get("policy_id") or ""),
+                "policy_id": str(as_dict(payload.get("policy_decision")).get("policy_id") or ""),
             },
         }
         _emit(

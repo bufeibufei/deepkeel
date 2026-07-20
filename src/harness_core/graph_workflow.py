@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from collections.abc import Mapping
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -9,6 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction, ToolResult, utc_now
 from harness_core.skills import SkillPolicy
 from harness_core.tools import ToolExecutionContext
+from harness_core.type_narrowing import as_dict
 from harness_core.workflow_policy import (
     SKILL_CONTRACT_VIOLATION,
     WorkflowCompletionDecision,
@@ -43,7 +45,7 @@ def _route_after_model(state: dict[str, Any]) -> str:
         return "await_user"
     if state.get("status") == "reasoning" and state.get("policy_phase") == "repair":
         return "model"
-    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    metadata = as_dict(state.get("metadata"))
     if state.get("status") == "reasoning" and metadata.get("empty_model_retry_pending"):
         return "model"
     return "end"
@@ -51,7 +53,7 @@ def _route_after_model(state: dict[str, Any]) -> str:
 
 def _retry_or_fail_empty_model_response(
     current: dict[str, Any],
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     *,
     can_retry: bool,
 ) -> dict[str, Any]:
@@ -133,7 +135,7 @@ def _workflow_can_wait_for_user_input(
         # Contract-driven workflows must attempt the required tool. Missing fields
         # then come from ToolSpec.required_args instead of arbitrary model prose.
         return False
-    metadata = state.get("metadata") if isinstance(state.get("metadata"), dict) else {}
+    metadata = as_dict(state.get("metadata"))
     if int(metadata.get("workflow_clarification_resume_count") or 0) > 0:
         # Once the user has answered the workflow clarification, a model-only final
         # response must go through policy repair instead of becoming another prompt.
@@ -157,7 +159,7 @@ def _wait_for_workflow_input(
     skill: SkillPolicy,
     decision: WorkflowCompletionDecision,
     prompt: str,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> dict[str, Any]:
     question = str(prompt or "").strip()
     pending = PendingAction(
@@ -197,7 +199,7 @@ def _repair_or_fail_workflow(
     current: dict[str, Any],
     skill: SkillPolicy,
     decision: WorkflowCompletionDecision,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> dict[str, Any]:
     repair_count = int(current.get("repair_count") or 0)
     if repair_count < skill.policy_repair_limit:
@@ -237,7 +239,7 @@ def _repair_or_fail_workflow(
 def _finish_skill_contract_violation(
     current: dict[str, Any],
     decision: WorkflowCompletionDecision,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
 ) -> dict[str, Any]:
     message = workflow_violation_message(decision)
     _set_policy_state(current, phase="failed", decision=decision)
@@ -357,7 +359,7 @@ def _record_resume_artifact(current: dict[str, Any], payload: dict[str, Any]) ->
 def _finish_failed(
     current: dict[str, Any],
     message: str,
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     *,
     error_code: str = "",
 ) -> dict[str, Any]:
@@ -377,7 +379,7 @@ def _finish_failed(
 
 def _emit(
     state: dict[str, Any],
-    config: dict[str, Any],
+    config: Mapping[str, Any],
     event_type: str,
     title: str,
     summary: str,
@@ -407,8 +409,8 @@ def _latency_ms(started_at: float, completed_at: float | None) -> int | None:
     return max(0, int((completed_at - started_at) * 1000))
 
 
-def _config_value(config: dict[str, Any], key: str) -> Any:
-    configurable = config.get("configurable") if isinstance(config.get("configurable"), dict) else {}
+def _config_value(config: Mapping[str, Any], key: str) -> Any:
+    configurable = as_dict(config.get("configurable"))
     return configurable.get(key)
 
 
@@ -416,7 +418,7 @@ def _graph_config(
     thread_id: str,
     tool_context: ToolExecutionContext,
     event_sink: EventSink | None,
-) -> dict[str, Any]:
+) -> RunnableConfig:
     return {
         "configurable": {
             "thread_id": thread_id,

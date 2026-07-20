@@ -19,6 +19,7 @@ from harness_core.mcp.protocol import (
     structured_content_from_text,
     validate_session_id,
 )
+from harness_core.type_narrowing import as_dict, as_list
 
 
 class _McpSessionExpired(McpTransportError):
@@ -87,11 +88,7 @@ class StreamableHttpMcpClient:
             self._session_id = validate_session_id(
                 str(headers.get("mcp-session-id") or "")
             )
-            self._server_info = (
-                dict(result.get("serverInfo"))
-                if isinstance(result.get("serverInfo"), dict)
-                else {}
-            )
+            self._server_info = as_dict(result.get("serverInfo"))
             self._generation += 1
             try:
                 self._post_notification(
@@ -120,19 +117,14 @@ class StreamableHttpMcpClient:
                 params,
                 timeout_seconds=_remaining(deadline),
             )
-            items = result.get("tools") if isinstance(result.get("tools"), list) else []
-            for item in items:
+            for item in as_list(result.get("tools")):
                 if not isinstance(item, dict) or not str(item.get("name") or "").strip():
                     continue
                 tools.append(
                     McpRemoteTool(
                         name=str(item["name"]),
                         description=str(item.get("description") or ""),
-                        input_schema=(
-                            dict(item.get("inputSchema"))
-                            if isinstance(item.get("inputSchema"), dict)
-                            else {}
-                        ),
+                        input_schema=as_dict(item.get("inputSchema")),
                     )
                 )
             cursor = str(result.get("nextCursor") or "")
@@ -159,11 +151,11 @@ class StreamableHttpMcpClient:
         )
         content = [
             self._redact_value(item)
-            for item in result.get("content", [])
+            for item in as_list(result.get("content"))
             if isinstance(item, dict)
         ]
         structured = (
-            self._redact_value(dict(result.get("structuredContent")))
+            self._redact_value(as_dict(result.get("structuredContent")))
             if isinstance(result.get("structuredContent"), dict)
             else structured_content_from_text(content)
         )
@@ -307,15 +299,15 @@ class StreamableHttpMcpClient:
             )
         except httpx.TimeoutException as exc:
             self._timeout_count += 1
-            error = McpTimeoutError(f"MCP request timed out: {self.server_id}")
-            self._last_transport_error = str(error)
-            raise error from exc
+            timeout_error = McpTimeoutError(f"MCP request timed out: {self.server_id}")
+            self._last_transport_error = str(timeout_error)
+            raise timeout_error from exc
         except httpx.HTTPError as exc:
-            error = McpTransportError(
+            transport_error = McpTransportError(
                 self._redact(f"MCP HTTP transport failed: {self.server_id}: {exc}")
             )
-            self._last_transport_error = str(error)
-            raise error from exc
+            self._last_transport_error = str(transport_error)
+            raise transport_error from exc
         finally:
             with self._state_lock:
                 self._in_flight = max(0, self._in_flight - 1)

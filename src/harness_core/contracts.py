@@ -7,6 +7,11 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
+ObservationStatus = Literal["pending", "succeeded", "failed", "requires_user_action"]
+ResultOutcome = Literal["completed", "partial", "degraded", "skipped", "canceled"]
+ToolResultStatus = Literal["succeeded", "failed", "requires_user_action", "waiting_async"]
+
+
 def utc_now() -> datetime:
     return datetime.now(UTC)
 
@@ -82,8 +87,8 @@ class Observation(ContractModel):
     run_id: str = Field(min_length=1)
     tool_call_id: str = ""
     source: str = Field(min_length=1)
-    status: Literal["pending", "succeeded", "failed", "requires_user_action"]
-    outcome: Literal["completed", "partial", "degraded", "skipped", "canceled"] | None = None
+    status: ObservationStatus
+    outcome: ResultOutcome | None = None
     summary: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
@@ -95,8 +100,8 @@ class Observation(ContractModel):
 class ToolResult(ContractModel):
     tool_call_id: str = ""
     name: str = ""
-    status: Literal["succeeded", "failed", "requires_user_action", "waiting_async"]
-    outcome: Literal["completed", "partial", "degraded", "skipped", "canceled"] | None = None
+    status: ToolResultStatus
+    outcome: ResultOutcome | None = None
     summary: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
@@ -195,11 +200,11 @@ class RunContext(ContractModel):
 
     @model_validator(mode="after")
     def validate_correlations(self) -> RunContext:
-        for item in self.observations:
-            if item.run_id != self.run_id:
+        for observation in self.observations:
+            if observation.run_id != self.run_id:
                 raise ValueError("observation.run_id must match run_id")
-        for item in self.artifacts:
-            if item.run_id != self.run_id:
+        for artifact in self.artifacts:
+            if artifact.run_id != self.run_id:
                 raise ValueError("artifact.run_id must match run_id")
         if self.pending_action is not None and self.pending_action.run_id != self.run_id:
             raise ValueError("pending_action.run_id must match run_id")

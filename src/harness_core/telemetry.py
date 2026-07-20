@@ -6,6 +6,8 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from harness_core.type_narrowing import as_dict
+
 
 class TelemetryRecord(BaseModel):
     """Stable runtime telemetry envelope independent from product persistence."""
@@ -31,7 +33,7 @@ class TelemetryRecord(BaseModel):
         thread_id: str,
         turn_id: str,
     ) -> "TelemetryRecord":
-        payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
+        payload = as_dict(event.get("payload"))
         raw_step = payload.get("step_index", event.get("step_index"))
         try:
             step_index = int(raw_step) if raw_step is not None else None

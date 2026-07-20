@@ -5,6 +5,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 
+DeliberationPhase = Literal["opening", "rebuttal", "synthesis"]
+DeliberationStatus = Literal["completed", "partial", "failed"]
+
+
 class DeliberationParticipant(BaseModel):
     agent_id: str = Field(min_length=1, max_length=80)
     participant_instance_id: str = Field(min_length=1, max_length=128)
@@ -37,7 +41,7 @@ class DeliberationSpec(BaseModel):
 class DeliberationArgument(BaseModel):
     argument_id: str
     round_index: int
-    phase: Literal["opening", "rebuttal", "synthesis"]
+    phase: DeliberationPhase
     participant_instance_id: str
     agent_id: str
     display_name: str
@@ -59,7 +63,7 @@ class DeliberationArgument(BaseModel):
 class DeliberationResult(BaseModel):
     schema_version: str = "harness-deliberation-v2"
     deliberation_id: str
-    status: Literal["completed", "partial", "failed"]
+    status: DeliberationStatus
     stop_reason: str
     question: str
     participants: list[DeliberationParticipant]

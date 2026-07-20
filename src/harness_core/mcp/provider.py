@@ -4,7 +4,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Literal
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
 from harness_core.deadlines import deadline_with_timeout
@@ -213,7 +213,9 @@ class McpToolProvider:
                 normalized = binding.normalize_result(raw, call.arguments)
                 if raw.is_error and not normalized.error:
                     normalized.error = normalized.summary or "MCP tool returned an error"
-                status = "failed" if normalized.error else "succeeded"
+                status: Literal["failed", "succeeded"] = (
+                    "failed" if normalized.error else "succeeded"
+                )
                 summary = normalized.summary or normalized.error
                 metadata = {
                     "mcp": {

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
-from typing import Mapping, Self
+from typing import Mapping, Self, TypedDict, Unpack
 
 from harness_core.budget import BudgetLedger
 from harness_core.capabilities import (
@@ -25,8 +25,47 @@ from harness_core.references import ReferenceProjector
 from harness_core.runtime import HarnessRuntime, SystemPromptFactory
 from harness_core.state_store import RuntimeStateStore
 from harness_core.telemetry import TelemetryPort
-from harness_core.tool_registry import ToolRegistry
-from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolPreflight
+from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolHandler, ToolPreflight
+
+
+class RuntimePortChanges(TypedDict, total=False):
+    checkpointer: GraphCheckpointer | None
+    checkpoint_store: DurableCheckpointStore | None
+    system_prompt_factory: SystemPromptFactory | None
+    session_factory: SessionFactory | None
+    model_router: ModelRouter | None
+    model_invocation_recorder: ModelInvocationRecorder | None
+    policy_engine: PolicyEngine | None
+    budget_ledger: BudgetLedger | None
+    run_control: RunControl | None
+    tool_execution_store: ToolExecutionStore | None
+    tool_preflight: ToolPreflight | None
+    secret_provider: SecretProvider | None
+    telemetry: TelemetryPort | None
+    context_builder: ContextBuilder | None
+    context_window_manager: ContextWindowManager | None
+    runtime_state_store: RuntimeStateStore | None
+    reference_projector: ReferenceProjector | None
+    capability_services: Mapping[str, object]
+
+
+class GovernedRuntimePortChanges(TypedDict, total=False):
+    checkpointer: GraphCheckpointer | None
+    checkpoint_store: DurableCheckpointStore | None
+    system_prompt_factory: SystemPromptFactory | None
+    session_factory: SessionFactory | None
+    model_router: ModelRouter | None
+    model_invocation_recorder: ModelInvocationRecorder | None
+    run_control: RunControl | None
+    tool_execution_store: ToolExecutionStore | None
+    tool_preflight: ToolPreflight | None
+    telemetry: TelemetryPort | None
+    context_builder: ContextBuilder | None
+    context_window_manager: ContextWindowManager | None
+    runtime_state_store: RuntimeStateStore | None
+    reference_projector: ReferenceProjector | None
+    capability_services: Mapping[str, object]
 
 
 @dataclass(frozen=True, slots=True)
@@ -53,7 +92,11 @@ class RuntimePorts:
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
-    def governed(cls, governance: GovernanceBundle, **ports: object) -> "RuntimePorts":
+    def governed(
+        cls,
+        governance: GovernanceBundle,
+        **ports: Unpack[GovernedRuntimePortChanges],
+    ) -> "RuntimePorts":
         _validate_port_changes(ports)
         return cls(
             policy_engine=governance.policy_engine,
@@ -93,7 +136,7 @@ class HarnessRuntimeBuilder:
         self._ports = ports
         return self
 
-    def configure_ports(self, **changes: object) -> Self:
+    def configure_ports(self, **changes: Unpack[RuntimePortChanges]) -> Self:
         self._ensure_mutable()
         _validate_port_changes(changes)
         self._ports = replace(self._ports, **changes)
@@ -274,8 +317,8 @@ class HarnessRuntimeBuilder:
         self,
         executor: ToolExecutor,
         *,
-        tools_before: dict[str, object],
-        handlers_before: dict[str, object],
+        tools_before: dict[str, ToolSpec],
+        handlers_before: dict[str, ToolHandler],
         catalog_before: dict[str, dict[str, object]],
     ) -> None:
         executor.restore_handlers(handlers_before)
@@ -287,9 +330,7 @@ class HarnessRuntimeBuilder:
             raise RuntimeError("HarnessRuntimeBuilder cannot be reused after build")
 
 
-def _validate_port_changes(changes: object) -> None:
-    if not isinstance(changes, dict):
-        raise TypeError("runtime port changes must be a mapping")
+def _validate_port_changes(changes: Mapping[str, object]) -> None:
     supported = {field.name for field in fields(RuntimePorts)}
     unknown = sorted(set(changes) - supported)
     if unknown:
