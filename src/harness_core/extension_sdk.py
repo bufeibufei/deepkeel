@@ -30,6 +30,7 @@ from harness_core.references import (
     ReferenceProjector,
 )
 from harness_core.skill_packages import (
+    CompiledSkillSpec,
     SkillPackageManifest,
     load_skill_packages,
     validate_skill_packages,
@@ -54,6 +55,7 @@ EXTENSION_SDK_API = (
     "CapabilityPackConformanceReport",
     "CapabilityPackSpec",
     "ClarificationRequest",
+    "CompiledSkillSpec",
     "DefaultReferenceProjector",
     "HandoffRegistry",
     "HandoffSpec",

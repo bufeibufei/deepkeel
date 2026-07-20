@@ -396,9 +396,11 @@ def verify_skill_artifact_and_reference_contracts() -> None:
         artifact_types=["inventory_record"],
         skill_spec={
             "id": "inventory-review",
-            "version": "1.0.0",
-            "label": "Inventory review",
-            "kind": "prompt",
+                "version": "1.0.0",
+                "label": "Inventory review",
+                "description": "Review inventory facts and produce a record.",
+                "icon_key": "inventory",
+                "kind": "prompt",
             "prompt_instructions": "Review inventory facts.",
             "allowed_tools": ["inventory.lookup"],
             "required_tools": ["inventory.lookup"],
@@ -554,7 +556,7 @@ def verify_installation_isolation() -> None:
     package_path = Path(harness_core.__file__).resolve()
     assert "packages/harness_core/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert harness_core.HARNESS_CORE_VERSION == "3.0.2"
+    assert harness_core.HARNESS_CORE_VERSION == "3.1.0"
     assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",

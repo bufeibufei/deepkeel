@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.1.0
+
+- Added a public, typed `CompiledSkillSpec` contract and manifest compiler so Hosts no
+  longer duplicate Skill schema fields.
+- Added tag-to-package release verification and an automated GitHub release workflow.
+- Expanded post-extraction fault and boundary gates for standalone consumers.
+
 ## 3.0.2
 
 - Make the stdio MCP process launch flags portable across Windows and POSIX type checks.

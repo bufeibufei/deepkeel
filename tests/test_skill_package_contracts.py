@@ -4,7 +4,11 @@ import json
 
 import pytest
 
-from harness_core.extension_sdk import SkillPackageManifest, load_skill_packages
+from harness_core.extension_sdk import (
+    CompiledSkillSpec,
+    SkillPackageManifest,
+    load_skill_packages,
+)
 
 
 def _manifest_payload() -> dict:
@@ -18,6 +22,9 @@ def _manifest_payload() -> dict:
             "id": "report-skill",
             "version": "1.0.0",
             "kind": "workflow",
+            "label": "Report",
+            "description": "Build a report artifact.",
+            "icon_key": "report",
             "allowed_tools": ["report.build"],
             "required_tools": ["report.build"],
             "output_contract": {"requires_artifact": "report"},
@@ -38,12 +45,24 @@ def _manifest_payload() -> dict:
 
 def test_skill_package_normalizes_runtime_contract_and_digest() -> None:
     manifest = SkillPackageManifest.model_validate(_manifest_payload())
+    compiled = manifest.compile()
     runtime = manifest.runtime_spec()
 
+    assert isinstance(compiled, CompiledSkillSpec)
+    assert compiled.id == "report-skill"
+    assert compiled.package["digest"] == manifest.digest
     assert manifest.entry_tools == ["report.build"]
     assert manifest.resume_compatible_versions == ["1.0.0"]
     assert runtime["package"]["digest"] == manifest.digest
     assert runtime["package"]["entry_tools"] == ["report.build"]
+
+
+def test_skill_package_rejects_unknown_runtime_fields() -> None:
+    payload = _manifest_payload()
+    payload["skill_spec"]["host_internal_flag"] = True
+
+    with pytest.raises(ValueError, match="host_internal_flag"):
+        SkillPackageManifest.model_validate(payload)
 
 
 @pytest.mark.parametrize(

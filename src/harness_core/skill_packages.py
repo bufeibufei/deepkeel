@@ -15,6 +15,10 @@ _WORKFLOW_RUNNING_STATUSES = {"reasoning", "executing_tools", "task_running"}
 _WORKFLOW_TERMINAL_STATUSES = {"completed", "failed", "canceled", "cancelled"}
 
 
+def _default_invocation_modes() -> list[Literal["composer", "model"]]:
+    return ["model"]
+
+
 class WorkflowCompletionPolicySpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +97,62 @@ class DelegationPolicySpec(BaseModel):
         return self
 
 
+class CompiledSkillSpec(BaseModel):
+    """Product-neutral, validated Skill contract produced from a package manifest."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str = Field(min_length=1)
+    version: str = Field(default="1.0", min_length=1)
+    kind: Literal["prompt", "workflow"] = "prompt"
+    label: str = Field(min_length=1)
+    description: str = Field(min_length=1)
+    icon_key: str = Field(min_length=1)
+    invocation_modes: list[Literal["composer", "model"]] = Field(
+        default_factory=_default_invocation_modes
+    )
+    visible_in_composer: bool = False
+    allowed_tools: list[str] = Field(default_factory=list)
+    required_tools: list[str] = Field(default_factory=list)
+    required_tool_groups: list[list[str]] = Field(default_factory=list)
+    allowed_actions: list[str] = Field(default_factory=lambda: ["tool_calls", "ask_user"])
+    completion_policy: dict[str, Any] = Field(default_factory=dict)
+    prompt_instructions: str = ""
+    context_hint: str = ""
+    preconditions: list[dict[str, Any]] = Field(default_factory=list)
+    input_contract: dict[str, Any] = Field(default_factory=dict)
+    context_contract: dict[str, Any] = Field(default_factory=dict)
+    output_contract: dict[str, Any] = Field(default_factory=dict)
+    retry_policy: dict[str, Any] = Field(default_factory=dict)
+    delegation_policy: dict[str, Any] = Field(default_factory=dict)
+    ui_handoff: dict[str, Any] = Field(default_factory=dict)
+    package: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator(
+        "invocation_modes",
+        "allowed_tools",
+        "required_tools",
+        "allowed_actions",
+    )
+    @classmethod
+    def unique_non_blank_values(cls, values: list[str]) -> list[str]:
+        normalized = [str(value or "").strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("skill contract list values must not be blank")
+        return list(dict.fromkeys(normalized))
+
+    @field_validator("required_tool_groups")
+    @classmethod
+    def normalize_required_tool_groups(cls, groups: list[list[str]]) -> list[list[str]]:
+        normalized_groups: list[list[str]] = []
+        for group in groups:
+            normalized = [str(value or "").strip() for value in group]
+            if not normalized or any(not value for value in normalized):
+                raise ValueError("required_tool_groups must contain non-empty tool groups")
+            normalized_groups.append(list(dict.fromkeys(normalized)))
+        return normalized_groups
+
+
 class SkillPackageManifest(BaseModel):
     schema_version: str = "harness-skill-package-v2"
     package_id: str = Field(min_length=1)
@@ -123,12 +183,11 @@ class SkillPackageManifest(BaseModel):
 
     @model_validator(mode="after")
     def validate_skill_contract(self) -> "SkillPackageManifest":
-        if not self.skill_id or not self.version:
-            raise ValueError("skill_spec must include id and version")
+        compiled = CompiledSkillSpec.model_validate(self.skill_spec)
         if self.entry_tool not in self.entry_tools:
             self.entry_tools.insert(0, self.entry_tool)
-        allowed_tools = set(self.skill_spec.get("allowed_tools") or [])
-        declared_required = set(self.skill_spec.get("required_tools") or [])
+        allowed_tools = set(compiled.allowed_tools)
+        declared_required = set(compiled.required_tools)
         disallowed_required = declared_required - allowed_tools
         if disallowed_required:
             raise ValueError("required_tools must also be allowed by skill_spec")
@@ -137,9 +196,9 @@ class SkillPackageManifest(BaseModel):
             raise ValueError("entry_tools must be allowed by skill_spec")
         if not set(self.required_tools).issubset(declared_required):
             raise ValueError("package required_tools must be required by skill_spec")
-        if str(self.skill_spec.get("kind") or "prompt") == "workflow":
+        if compiled.kind == "workflow":
             completion = WorkflowCompletionPolicySpec.model_validate(
-                self.skill_spec.get("completion_policy") or {}
+                compiled.completion_policy
             )
             transition_tools = completion.transition_tools()
             disallowed_transitions = transition_tools - allowed_tools
@@ -149,7 +208,7 @@ class SkillPackageManifest(BaseModel):
                 )
             required_groups = {
                 frozenset(str(name).strip() for name in group if str(name or "").strip())
-                for group in self.skill_spec.get("required_tool_groups") or []
+                for group in compiled.required_tool_groups
                 if isinstance(group, (list, tuple, set, frozenset))
             }
             if completion.required_transition and completion.required_transition not in declared_required:
@@ -162,15 +221,14 @@ class SkillPackageManifest(BaseModel):
                 raise ValueError(
                     "required_transition_any must match a required_tool_group"
                 )
-        output = as_dict(self.skill_spec.get("output_contract"))
+        output = as_dict(compiled.output_contract)
         required_artifact = str(output.get("requires_artifact") or "")
         if self.artifact_types and required_artifact not in self.artifact_types:
             raise ValueError("skill_spec artifact contract is not declared by package")
         if self.version not in self.resume_compatible_versions:
             self.resume_compatible_versions.append(self.version)
-        delegation = self.skill_spec.get("delegation_policy")
-        if delegation is not None:
-            DelegationPolicySpec.model_validate(delegation)
+        if compiled.delegation_policy:
+            DelegationPolicySpec.model_validate(compiled.delegation_policy)
         return self
 
     def _skill_id(self) -> str:
@@ -189,8 +247,8 @@ class SkillPackageManifest(BaseModel):
 
     digest = computed_field(return_type=str)(property(_digest))
 
-    def runtime_spec(self) -> dict[str, Any]:
-        return {
+    def compile(self) -> CompiledSkillSpec:
+        return CompiledSkillSpec.model_validate({
             **self.skill_spec,
             "package": {
                 "schema_version": self.schema_version,
@@ -201,7 +259,12 @@ class SkillPackageManifest(BaseModel):
                 "resume_compatible_versions": list(self.resume_compatible_versions),
                 "digest": self.digest,
             },
-        }
+        })
+
+    def runtime_spec(self) -> dict[str, Any]:
+        """Compatibility projection for hosts that still consume dictionaries."""
+
+        return self.compile().model_dump(mode="json")
 
 
 def builtin_skill_package_dir() -> Path:
