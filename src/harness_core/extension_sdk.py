@@ -1,4 +1,4 @@
-"""Versioned Extension SDK for tools, Skills, Capability Packs, and SubAgents."""
+"""Versioned Extension SDK for tools, Skills, Capability Packs, and artifacts."""
 
 from harness_core.capabilities import (
     ArtifactTypeSpec,
@@ -18,13 +18,6 @@ from harness_core.conformance import (
     CapabilityPackConformanceReport,
     validate_capability_pack,
 )
-from harness_core.deliberation import (
-    DeliberationArgument,
-    DeliberationCoordinator,
-    DeliberationParticipant,
-    DeliberationResult,
-    DeliberationSpec,
-)
 from harness_core.handoffs import (
     HandoffRegistry,
     HandoffSpec,
@@ -41,19 +34,8 @@ from harness_core.skill_packages import (
     load_skill_packages,
     validate_skill_packages,
 )
-from harness_core.subagents import (
-    DelegationBatchResult,
-    DelegationRequest,
-    DelegationTask,
-    DelegationToolHandler,
-    SubAgentExecutor,
-    SubAgentRegistry,
-    SubAgentResult,
-    SubAgentRunStore,
-    SubAgentSpec,
-    delegation_tool_parameters_schema,
-)
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tool_providers import ToolProvider, ToolProviderSpec, verify_tool_provider
 from harness_core.tools import (
     ToolExecutionClaim,
     ToolExecutionContext,
@@ -73,42 +55,30 @@ EXTENSION_SDK_API = (
     "CapabilityPackSpec",
     "ClarificationRequest",
     "DefaultReferenceProjector",
-    "DelegationBatchResult",
-    "DelegationRequest",
-    "DelegationTask",
-    "DelegationToolHandler",
-    "DeliberationArgument",
-    "DeliberationCoordinator",
-    "DeliberationParticipant",
-    "DeliberationResult",
-    "DeliberationSpec",
     "HandoffRegistry",
     "HandoffSpec",
     "ReferenceProjection",
     "ReferenceProjector",
     "SkillPackageManifest",
-    "SubAgentExecutor",
-    "SubAgentRegistry",
-    "SubAgentResult",
-    "SubAgentRunStore",
-    "SubAgentSpec",
     "ToolExecutionClaim",
     "ToolExecutionContext",
     "ToolExecutionStore",
     "ToolExecutor",
     "ToolHandler",
+    "ToolProvider",
+    "ToolProviderSpec",
     "ToolPreflight",
     "ToolRegistry",
     "ToolSpec",
     "capability_pack_spec",
     "clarification_from_validation_error",
     "clarification_tool_result",
-    "delegation_tool_parameters_schema",
     "harness_system_prompt",
     "load_skill_packages",
     "standardize_pending_action_payload",
     "validate_capability_pack",
     "validate_skill_packages",
+    "verify_tool_provider",
 )
 
 __all__ = list(EXTENSION_SDK_API)

@@ -59,7 +59,7 @@ def _assert_distribution_contents(artifact: Path) -> None:
         ]
     assert f"src/{PACKAGE_IMPORT_ROOT}/__init__.py" in members
     assert f"src/{PACKAGE_IMPORT_ROOT}/py.typed" in members
-    assert "tests/public_api_v2.sha256" in members
+    assert "tests/public_api_v3.sha256" in members
     forbidden = sorted(
         name for name in members if name.split("/", 1)[0] in FORBIDDEN_ROOTS
     )

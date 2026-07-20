@@ -35,6 +35,7 @@ def is_answer_delta(event: dict[str, Any]) -> bool:
 
 def event_runtime_status(event: dict[str, Any]) -> str | None:
     event_type = str(event.get("event_type") or "")
+    payload = event.get("payload") if isinstance(event.get("payload"), dict) else {}
     if event_type in {"run.created", "user.message"}:
         return "preparing"
     if event_type in {"agent.reasoning"}:
@@ -53,4 +54,7 @@ def event_runtime_status(event: dict[str, Any]) -> str | None:
         return "failed"
     if event_type == "run.canceled":
         return "canceled"
+    if event_type == "run.settled":
+        status = str(payload.get("status") or "").strip().lower()
+        return status if status in {"completed", "failed", "canceled"} else None
     return None

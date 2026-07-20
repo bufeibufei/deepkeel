@@ -29,6 +29,7 @@ class RuntimeUIState(TypedDict):
     lifecycle: str
     composer_mode: str
     can_send: bool
+    input_strategy: str
     requires_user_action: bool
     is_resumable: bool
     show_progress: bool

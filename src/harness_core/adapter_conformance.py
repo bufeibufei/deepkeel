@@ -6,6 +6,7 @@ from uuid import uuid4
 from harness_core.contracts import Observation, ToolCall, ToolResult
 from harness_core.persistence import DurableCheckpointStore
 from harness_core.state_store import (
+    RUN_SETTLED_EVENT,
     RuntimeStateConflict,
     RuntimeStateMutation,
     RuntimeStateStore,
@@ -21,6 +22,8 @@ def verify_runtime_state_store_contract(
     session: Any = None,
 ) -> None:
     """Assert atomic mutation, replay, and optimistic-conflict semantics."""
+
+    assert str(getattr(store, "terminal_settlement_owner", "")) in {"runtime", "host"}
 
     first = RuntimeStateMutation(
         mutation_id=f"conformance:{uuid4().hex}",
@@ -39,8 +42,9 @@ def verify_runtime_state_store_contract(
     second = RuntimeStateMutation(
         mutation_id=f"conformance:{uuid4().hex}",
         run_id=run_id,
-        event_type="conformance.completed",
+        event_type=RUN_SETTLED_EVENT,
         target_status="completed",
+        event_payload={"status": "completed"},
         checkpoint_state={"phase": "completed"},
         expected_version=receipt.version,
         expected_sequence=receipt.sequence,
@@ -48,6 +52,9 @@ def verify_runtime_state_store_contract(
     settled = store.commit(second, session=session, user_id=user_id)
     assert settled.version > receipt.version
     assert settled.sequence > receipt.sequence
+    snapshot = store.load_snapshot(run_id, session=session, user_id=user_id)
+    assert snapshot.settled is True
+    assert snapshot.settlement_status == "completed"
 
     stale = RuntimeStateMutation(
         mutation_id=f"conformance:{uuid4().hex}",

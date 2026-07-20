@@ -25,6 +25,7 @@ from harness_core.mcp.stdio import (
 from harness_core.mcp.streamable_http import StreamableHttpMcpClient
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.tool_providers import ToolProviderSpec
 
 
 ArgumentMapper = Callable[[dict[str, Any]], dict[str, Any]]
@@ -146,10 +147,30 @@ class McpClientPool:
 class McpToolProvider:
     """Bridges provider MCP tools into stable Harness Runtime contracts."""
 
-    def __init__(self, clients: McpClientPool):
+    def __init__(self, clients: McpClientPool, *, provider_id: str = "mcp"):
         self.clients = clients
+        self._provider_id = provider_id.strip() or "mcp"
+        self._bindings: list[McpToolBinding] = []
         self._discovered: dict[str, tuple[int, set[str]]] = {}
         self._discovery_lock = threading.Lock()
+
+    @property
+    def spec(self) -> ToolProviderSpec:
+        return ToolProviderSpec(
+            provider_id=self._provider_id,
+            provider_kind="mcp",
+            tool_names=tuple(binding.local_spec.name for binding in self._bindings),
+        )
+
+    def bind(self, binding: McpToolBinding) -> None:
+        if any(existing.local_spec.name == binding.local_spec.name for existing in self._bindings):
+            raise ValueError(f"MCP tool is already bound: {binding.local_spec.name}")
+        self._bindings.append(binding)
+
+    def install(self, *, registry: ToolRegistry, executor: ToolExecutor) -> None:
+        for binding in self._bindings:
+            registry.register(binding.local_spec)
+            executor.register(binding.local_spec.name, self._handler(binding))
 
     def register(
         self,
@@ -158,6 +179,7 @@ class McpToolProvider:
         registry: ToolRegistry,
         executor: ToolExecutor,
     ) -> None:
+        self.bind(binding)
         registry.register(binding.local_spec)
         executor.register(binding.local_spec.name, self._handler(binding))
 

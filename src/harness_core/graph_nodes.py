@@ -23,6 +23,7 @@ from harness_core.graph_state import (
     _apply_tool_result, _copy_state, _forced_workflow_tool_name, _hydrate_call,
     _is_policy_confirmation, _is_suspending_call, _messages, _model_available_roles,
     _parallel_suspension_rejected, _skill_tool_parameter_overrides, _stable_tool_calls,
+    HarnessGraphState, migrate_legacy_graph_state,
 )
 from harness_core.graph_workflow import (
     _answer_summary, _config_value, _emit, _finish_failed, _latency_ms,
@@ -50,7 +51,20 @@ class GraphNodes:
         self.control.raise_if_cancelled(str(state.get("run_id") or ""), force=force)
         ensure_time_remaining(self.deadline_monotonic)
 
+    @staticmethod
+    def normalize_state(state: dict[str, Any], config: RunnableConfig) -> HarnessGraphState:
+        context = _config_value(config, "tool_context")
+        thread_id = str(_config_value(config, "thread_id") or state.get("thread_id") or "")
+        normalized = dict(state)
+        if isinstance(context, ToolExecutionContext):
+            normalized.setdefault("run_id", context.run_id)
+            normalized.setdefault("user_id", context.user_id)
+        return migrate_legacy_graph_state(normalized, thread_id=thread_id or str(normalized.get("run_id") or "checkpoint"))
+
     def model_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        state = self.normalize_state(state, config)
+        if not state["messages"]:
+            raise ValueError("graph checkpoint cannot resume model execution without messages")
         model = self.model
         tool_registry = self.tool_registry
         prompt = self.prompt
@@ -326,6 +340,7 @@ class GraphNodes:
         return current
 
     def tool_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        state = self.normalize_state(state, config)
         tool_registry = self.tool_registry
         tool_executor = self.tool_executor
         ledger = self.ledger
@@ -388,6 +403,7 @@ class GraphNodes:
         return current
 
     def await_user_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        state = self.normalize_state(state, config)
         self.ensure_active(state, force=True)
         current = _copy_state(state)
         resume_payload = interrupt(current.get("pending_action") or {})
@@ -396,6 +412,7 @@ class GraphNodes:
         return _apply_resume_payload(current, resume_payload, config, source="user_action")
 
     def await_async_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
+        state = self.normalize_state(state, config)
         self.ensure_active(state, force=True)
         current = _copy_state(state)
         resume_payload = interrupt(current.get("pending_async") or {})

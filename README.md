@@ -2,14 +2,15 @@
 
 `harness-agent-core` is a product-neutral runtime kernel for tool-using agents.
 It owns the model/tool loop, runtime contracts,
-governance ports, interruption, recovery, MCP gateway primitives, sub-agent
-execution and Capability Pack composition.
+governance ports, interruption, recovery, ToolProvider integration and
+Capability Pack composition. MCP transports and bounded orchestration are
+optional SDK modules rather than required runtime concepts.
 
 The package does not contain host tools, database models, API routes or product
 prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 `RuntimePorts` and a versioned Capability Pack. New packs should expose a
 `CapabilityPackSpec` and implement `install(CapabilityInstallContext)`.
-There is no implicit registration or legacy Pack adapter in the v2 contract.
+There is no implicit registration or legacy Pack adapter in the v3 contract.
 
 ```python
 from harness_core.adapter_sdk import HarnessRuntimeBuilder
@@ -216,7 +217,7 @@ endpoints, and expired HTTP sessions are re-initialized once before surfacing a
 transport failure.
 
 ```python
-from harness_core.adapter_sdk import McpServerSpec
+from harness_core.mcp_sdk import McpServerSpec
 
 remote_search = McpServerSpec(
     id="remote-search",
@@ -227,9 +228,11 @@ remote_search = McpServerSpec(
 )
 ```
 
-The frozen public contract is `harness-core-v2`; the current package version is
-`2.0.0`. Consumers must import from `harness_core.runtime_sdk`,
-`harness_core.extension_sdk`, or `harness_core.adapter_sdk`. The versioned public
+The frozen public contract is `harness-core-v3`; the current package version is
+`3.0.0`. Consumers import from `harness_core.runtime_sdk`,
+`harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
+orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
+`harness_core.mcp_sdk`. The versioned public
 symbol manifest is available from `harness_core.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
 suite stores a frozen API fingerprint, so contract changes require an explicit

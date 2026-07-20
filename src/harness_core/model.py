@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import inspect
+import hashlib
 import json
 from copy import deepcopy
+from datetime import UTC, datetime
+from threading import Lock
 from typing import Any, Callable, Protocol, runtime_checkable
 from uuid import uuid4
 
@@ -72,6 +75,92 @@ class ModelInvocation(BaseModel):
     tool_choice: str | dict[str, Any] = "auto"
     request_timeout: int = 300
     max_output_tokens: int | None = None
+
+
+class ModelInvocationEnvelope(BaseModel):
+    """Exact, access-controlled replay input for one governed model attempt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "model-invocation-envelope-v1"
+    invocation_id: str
+    run_id: str
+    thread_id: str
+    turn_id: str
+    step_index: int = 0
+    attempt_index: int = 1
+    retry_kind: str = "primary"
+    provider_id: str = ""
+    model_id: str = ""
+    model_role: str = ""
+    router_id: str = ""
+    route_reason: str = ""
+    estimated_input_tokens: int = 0
+    request: ModelInvocation
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def request_fingerprint(self) -> str:
+        encoded = json.dumps(
+            self.request.model_dump(mode="json"),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def public_snapshot(self) -> dict[str, Any]:
+        return {
+            "schema_version": self.schema_version,
+            "invocation_id": self.invocation_id,
+            "run_id": self.run_id,
+            "thread_id": self.thread_id,
+            "turn_id": self.turn_id,
+            "step_index": self.step_index,
+            "attempt_index": self.attempt_index,
+            "retry_kind": self.retry_kind,
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "model_role": self.model_role,
+            "router_id": self.router_id,
+            "route_reason": self.route_reason,
+            "estimated_input_tokens": self.estimated_input_tokens,
+            "message_count": len(self.request.messages),
+            "tool_count": len(self.request.tools),
+            "tool_names": [
+                str((tool.get("function") or {}).get("name") or tool.get("name") or "")
+                for tool in self.request.tools
+                if isinstance(tool, dict)
+            ],
+            "request_fingerprint": self.request_fingerprint,
+            "created_at": self.created_at.isoformat(),
+        }
+
+
+class ModelInvocationRecorder(Protocol):
+    def record(self, envelope: ModelInvocationEnvelope) -> None: ...
+
+    def get(self, invocation_id: str) -> ModelInvocationEnvelope | None: ...
+
+
+class InMemoryModelInvocationRecorder:
+    """Reference recorder that keeps exact prompts outside ordinary event payloads."""
+
+    def __init__(self) -> None:
+        self._records: dict[str, ModelInvocationEnvelope] = {}
+        self._lock = Lock()
+
+    def record(self, envelope: ModelInvocationEnvelope) -> None:
+        with self._lock:
+            existing = self._records.get(envelope.invocation_id)
+            if existing is not None and existing.request_fingerprint != envelope.request_fingerprint:
+                raise ValueError("invocation_id cannot be reused with a different request")
+            self._records[envelope.invocation_id] = envelope.model_copy(deep=True)
+
+    def get(self, invocation_id: str) -> ModelInvocationEnvelope | None:
+        with self._lock:
+            envelope = self._records.get(str(invocation_id or ""))
+            return envelope.model_copy(deep=True) if envelope is not None else None
 
 
 @runtime_checkable
@@ -256,6 +345,7 @@ class RoutedModelGateway:
         router: ModelRouter | None,
         policy_engine: PolicyEngine,
         budget_ledger: BudgetLedger,
+        invocation_recorder: ModelInvocationRecorder | None = None,
         request_timeout: int = 300,
     ) -> None:
         self.providers = {
@@ -266,6 +356,7 @@ class RoutedModelGateway:
         self.router = router or AdaptiveStepModelRouter()
         self.policy_engine = policy_engine
         self.budget_ledger = budget_ledger
+        self.invocation_recorder = invocation_recorder
         self.request_timeout = request_timeout
 
     def run_turn(
@@ -500,6 +591,35 @@ class RoutedModelGateway:
                     request_timeout=request_timeout,
                     max_output_tokens=route_payload["max_output_tokens"],
                 )
+                envelope = ModelInvocationEnvelope(
+                    invocation_id=(
+                        f"{step_context.run_id}:model:{step_context.step_index}:"
+                        f"attempt:{attempt_index}"
+                    ),
+                    run_id=step_context.run_id,
+                    thread_id=step_context.thread_id,
+                    turn_id=step_context.turn_id,
+                    step_index=step_context.step_index,
+                    attempt_index=attempt_index,
+                    retry_kind=retry_kind,
+                    provider_id=provider.info.provider_id,
+                    model_id=provider.info.model_id,
+                    model_role=route.role,
+                    router_id=route.router_id,
+                    route_reason=route.reason,
+                    estimated_input_tokens=estimated_input_tokens,
+                    request=invocation,
+                )
+                route_payload["invocation"] = envelope.public_snapshot()
+                if self.invocation_recorder is not None:
+                    try:
+                        self.invocation_recorder.record(envelope)
+                        route_payload["invocation"]["recorded"] = True
+                    except Exception as recorder_error:
+                        route_payload["invocation"]["recorded"] = False
+                        route_payload["invocation"]["recorder_error"] = type(
+                            recorder_error
+                        ).__name__
                 turn = provider.invoke(
                     invocation,
                     on_text_delta=tracked_delta,

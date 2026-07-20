@@ -40,7 +40,11 @@ from harness_core.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     compiler_checkpointer,
 )
-from harness_core.model import ModelProviderAdapter, RoutedModelGateway
+from harness_core.model import (
+    ModelInvocationRecorder,
+    ModelProviderAdapter,
+    RoutedModelGateway,
+)
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.persistence import (
     DurableCheckpointStore,
@@ -135,6 +139,7 @@ class HarnessRuntime:
         session_factory: SessionFactory | None = None,
         max_steps: int = 12,
         model_router: ModelRouter | None = None,
+        model_invocation_recorder: ModelInvocationRecorder | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         run_control: RunControl | None = None,
@@ -154,6 +159,7 @@ class HarnessRuntime:
         self.session_factory = session_factory
         self.max_steps = max(2, int(max_steps))
         self.model_router = model_router or AdaptiveStepModelRouter()
+        self.model_invocation_recorder = model_invocation_recorder
         self.policy_engine = policy_engine or getattr(tool_executor, "policy_engine", None) or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or getattr(tool_executor, "budget_ledger", None) or InMemoryBudgetLedger()
         self.run_control = run_control or NoopRunControl()
@@ -226,6 +232,7 @@ class HarnessRuntime:
                 user_id=user_id,
                 skill_activation=skill_activation,
                 model_policy=model_policy,
+                session=session,
                 event_sink=event_sink,
             )
         run_id = str(bundle.get("agent_session_id") or bundle.get("agent_run_id") or bundle.get("run_id") or uuid4())
@@ -301,6 +308,7 @@ class HarnessRuntime:
             router=self.model_router,
             policy_engine=self.policy_engine,
             budget_ledger=self.budget_ledger,
+            invocation_recorder=self.model_invocation_recorder,
         )
         graph = create_harness_graph(
             model=model_gateway,
@@ -524,26 +532,21 @@ class HarnessRuntime:
                 "error_count": telemetry_error_count,
                 "last_error": telemetry_last_error,
             }
-        if result.status.value in {
-            "completed",
-            "failed",
-            "canceled",
-        }:
+        self._persist_runtime_snapshot(
+            result,
+            run_id=run_id,
+            thread_id=conversation_thread_id,
+            session=session,
+            user_id=str(user_id or "local-device"),
+            context_bundle=bundle,
+        )
+        if result.status.value in {"completed", "failed", "canceled"}:
             self.cleanup_run(
                 result,
                 run_id=run_id,
                 session=session,
                 user_id=str(user_id or "local-device"),
                 graph_thread_ids=[active_graph_thread_id],
-            )
-        else:
-            self._persist_resumable_checkpoint(
-                result,
-                run_id=run_id,
-                thread_id=conversation_thread_id,
-                session=session,
-                user_id=str(user_id or "local-device"),
-                context_bundle=bundle,
             )
         return result
 
@@ -636,6 +639,7 @@ class HarnessRuntime:
         user_id: str,
         skill_activation: dict[str, Any] | None,
         model_policy: dict[str, Any] | None,
+        session: Any,
         event_sink: EventSink | None,
     ) -> dict[str, Any]:
         run_id = str(
@@ -735,6 +739,14 @@ class HarnessRuntime:
             )
         except Exception:
             pass
+        self._persist_runtime_snapshot(
+            result,
+            run_id=run_id,
+            thread_id=thread_id,
+            session=session,
+            user_id=str(user_id or "local-device"),
+            context_bundle=context_bundle,
+        )
         return result
 
     def _capability_manifest(self) -> dict[str, Any]:
@@ -754,7 +766,7 @@ class HarnessRuntime:
                 "skills": len(self.capability_catalog.skills),
                 "artifact_types": len(self.capability_catalog.artifact_types),
                 "handoffs": len(self.capability_catalog.handoffs),
-                "mcp_servers": len(self.capability_catalog.mcp_servers),
+                "tool_providers": len(self.capability_catalog.tool_providers),
                 "subagents": len(self.capability_catalog.subagents),
                 "context_contributors": len(
                     self.capability_catalog.context_contributors
@@ -763,7 +775,7 @@ class HarnessRuntime:
             },
         }
 
-    def _persist_resumable_checkpoint(
+    def _persist_runtime_snapshot(
         self,
         result: RuntimeResult,
         *,
@@ -773,10 +785,14 @@ class HarnessRuntime:
         user_id: str,
         context_bundle: dict[str, Any],
     ) -> None:
-        if result.status.value not in {
+        status = result.status.value
+        if status not in {
             "waiting_user_action",
             "waiting_user_input",
             "task_running",
+            "completed",
+            "failed",
+            "canceled",
         }:
             return
         diagnostics = result.diagnostics
@@ -787,10 +803,20 @@ class HarnessRuntime:
             thread_id=thread_id,
         )
         if self.runtime_state_store is not None:
-            status = result.status.value
             resume_token = str(result.checkpoint.get("resume_token") or "")
+            terminal = status in {"completed", "failed", "canceled"}
+            if terminal and getattr(
+                self.runtime_state_store,
+                "terminal_settlement_owner",
+                "runtime",
+            ) == "host":
+                recovery["atomic_checkpoint"] = "host_settlement_required"
+                diagnostics["recovery"] = recovery
+                return
+            event_type = "run.settled" if terminal else "runtime.checkpoint.committed"
             mutation_payload = {
                 "status": status,
+                "stop_reason": result.stop_reason,
                 "resume_token": resume_token,
                 "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
             }
@@ -804,11 +830,28 @@ class HarnessRuntime:
                     RuntimeStateMutation(
                         mutation_id=mutation_id,
                         run_id=run_id,
-                        event_type="runtime.checkpoint.committed",
+                        event_type=event_type,
                         target_status=status,
                         event_payload=mutation_payload,
+                        event_visibility="public" if terminal else "internal",
+                        checkpoint_type="terminal" if terminal else "runtime",
                         checkpoint_state=durable_state,
                         resume_token=resume_token,
+                        error_code=(
+                            str(result.error.code if result.error is not None else "RUN_FAILED")
+                            if status == "failed"
+                            else None
+                        ),
+                        error_message=(
+                            str(result.error.message if result.error is not None else "")
+                            if status == "failed"
+                            else None
+                        ),
+                        delete_checkpoint_types=(
+                            ("runtime", "suspended", "resume", "settling")
+                            if terminal
+                            else ()
+                        ),
                         expected_version=_optional_int(
                             context_bundle.get("runtime_state_version")
                         ),
@@ -824,7 +867,7 @@ class HarnessRuntime:
                 recovery["checkpoint_error"] = str(exc)
                 diagnostics["recovery"] = recovery
                 raise RuntimeError("atomic runtime checkpoint commit failed") from exc
-            recovery["atomic_checkpoint"] = "persisted"
+            recovery["atomic_checkpoint"] = "settled" if terminal else "persisted"
             recovery["state_receipt"] = receipt.as_dict()
             diagnostics["recovery"] = recovery
             return

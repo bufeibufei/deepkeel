@@ -615,6 +615,11 @@ def _trace_from_events(
                     "router_id": str(payload.get("router_id") or ""),
                     "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else {},
                     "budget": payload.get("budget") if isinstance(payload.get("budget"), dict) else {},
+                    "invocation": (
+                        payload.get("invocation")
+                        if isinstance(payload.get("invocation"), dict)
+                        else {}
+                    ),
                 }
             )
         if action == "model.route.selected":
@@ -626,6 +631,11 @@ def _trace_from_events(
                     "router_id": str(payload.get("router_id") or ""),
                     "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else {},
                     "budget": payload.get("budget") if isinstance(payload.get("budget"), dict) else {},
+                    "invocation": (
+                        payload.get("invocation")
+                        if isinstance(payload.get("invocation"), dict)
+                        else {}
+                    ),
                 }
             )
         if (action.startswith("tool.call.") and action != "tool.call.started") or action == "run.waiting_async":

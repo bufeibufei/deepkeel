@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import harness_core
-from harness_core.adapter_sdk import (
+from harness_core.mcp_sdk import (
     McpCallResult,
     McpClientPool,
     McpNormalizedResult,
@@ -14,24 +14,26 @@ from harness_core.adapter_sdk import (
     McpServerSpec,
     McpToolBinding,
     McpToolProvider,
-    RuntimePorts,
 )
+from harness_core.adapter_sdk import RuntimePorts
 from harness_core.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
     CapabilityPackSpec,
     DefaultReferenceProjector,
-    DelegationRequest,
-    DelegationTask,
     SkillPackageManifest,
-    SubAgentExecutor,
-    SubAgentRegistry,
-    SubAgentSpec,
     ToolExecutionContext,
     ToolExecutor,
     ToolRegistry,
     ToolSpec,
+)
+from harness_core.orchestration_sdk import (
+    DelegationRequest,
+    DelegationTask,
+    SubAgentExecutor,
+    SubAgentRegistry,
+    SubAgentSpec,
 )
 from harness_core.runtime_sdk import (
     Artifact,
@@ -552,13 +554,15 @@ def verify_installation_isolation() -> None:
     package_path = Path(harness_core.__file__).resolve()
     assert "packages/harness_core/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert harness_core.HARNESS_CORE_VERSION == "2.0.0"
-    assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v2"
+    assert harness_core.HARNESS_CORE_VERSION == "3.0.0"
+    assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
         "HARNESS_CORE_VERSION",
         "adapter_sdk",
         "extension_sdk",
+        "mcp_sdk",
+        "orchestration_sdk",
         "runtime_sdk",
     )
 

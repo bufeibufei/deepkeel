@@ -50,6 +50,7 @@ def project_run_ui_state(
         "lifecycle": lifecycle,
         "composer_mode": composer_mode,
         "can_send": can_send,
+        "input_strategy": "follow_up" if can_send else "hard_interrupt",
         "requires_user_action": waiting_action and pending_action is not None,
         "is_resumable": active and (waiting_input or waiting_action or waiting_async),
         "show_progress": active and not (waiting_input or waiting_action),

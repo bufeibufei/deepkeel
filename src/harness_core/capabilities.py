@@ -7,9 +7,9 @@ from typing import Any, Callable, Mapping, Protocol
 from jsonschema import Draft202012Validator
 
 from harness_core.handoffs import HandoffSpec
-from harness_core.mcp.contracts import McpServerSpec
 from harness_core.subagents.contracts import SubAgentSpec
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tool_providers import ToolProvider, ToolProviderSpec, verify_tool_provider
 from harness_core.tools import ToolExecutor, ToolHandler
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION
 
@@ -43,7 +43,7 @@ class CapabilityPackSpec:
     declared_skills: tuple[str, ...] = ()
     declared_artifact_types: tuple[str, ...] = ()
     declared_handoffs: tuple[str, ...] = ()
-    declared_mcp_servers: tuple[str, ...] = ()
+    declared_tool_providers: tuple[str, ...] = ()
     declared_subagents: tuple[str, ...] = ()
     declared_context_contributors: tuple[str, ...] = ()
     declared_resources: tuple[str, ...] = ()
@@ -78,7 +78,7 @@ class CapabilityContribution:
     skills: tuple[str, ...] = ()
     artifact_types: tuple[str, ...] = ()
     handoffs: tuple[str, ...] = ()
-    mcp_servers: tuple[str, ...] = ()
+    tool_providers: tuple[str, ...] = ()
     subagents: tuple[str, ...] = ()
     context_contributors: tuple[str, ...] = ()
     resources: tuple[str, ...] = ()
@@ -105,7 +105,7 @@ class CapabilityCatalog:
         self.skills: dict[str, object] = {}
         self.artifact_types: dict[str, ArtifactTypeSpec] = {}
         self.handoffs: dict[str, HandoffSpec] = {}
-        self.mcp_servers: dict[str, McpServerSpec] = {}
+        self.tool_providers: dict[str, ToolProvider] = {}
         self.subagents: dict[str, SubAgentSpec] = {}
         self.context_contributors: dict[str, ContextContributor] = {}
         self.resources: dict[str, object] = {}
@@ -119,8 +119,10 @@ class CapabilityCatalog:
     def register_handoff(self, tool_name: str, spec: HandoffSpec) -> None:
         self._register(self.handoffs, tool_name, spec, "handoff")
 
-    def register_mcp_server(self, spec: McpServerSpec) -> None:
-        self._register(self.mcp_servers, spec.id, spec, "MCP server")
+    def register_tool_provider(self, provider: ToolProvider) -> ToolProviderSpec:
+        spec = verify_tool_provider(provider)
+        self._register(self.tool_providers, spec.provider_id, provider, "tool provider")
+        return spec
 
     def register_subagent(self, spec: SubAgentSpec) -> None:
         self._register(self.subagents, spec.id, spec, "subagent")
@@ -195,8 +197,34 @@ class CapabilityInstallContext:
     def register_handoff(self, tool_name: str, spec: HandoffSpec) -> None:
         self.catalog.register_handoff(tool_name, spec)
 
-    def register_mcp_server(self, spec: McpServerSpec) -> None:
-        self.catalog.register_mcp_server(spec)
+    def register_tool_provider(self, provider: ToolProvider) -> ToolProviderSpec:
+        spec = verify_tool_provider(provider)
+        tools_before = self.registry.snapshot()
+        handlers_before = self.executor.snapshot_handlers()
+        try:
+            provider.install(registry=self.registry, executor=self.executor)
+            installed = {
+                tool.name for tool in self.registry.list_tools()
+            } - set(tools_before)
+            missing = sorted(set(spec.tool_names) - installed)
+            if missing:
+                raise ValueError(
+                    f"tool provider {spec.provider_id} did not install declared tools: "
+                    + ", ".join(missing)
+                )
+            self.catalog.register_tool_provider(provider)
+            self.catalog.register_resource(f"tool-provider:{spec.provider_id}", provider)
+            return spec
+        except Exception:
+            self.executor.restore_handlers(handlers_before)
+            self.registry.restore(tools_before)
+            try:
+                close = getattr(provider, "close", None)
+                if callable(close):
+                    close()
+            except Exception:
+                pass
+            raise
 
     def register_subagent(self, spec: SubAgentSpec) -> None:
         self.catalog.register_subagent(spec)
@@ -243,7 +271,7 @@ def assert_capability_contribution(
         "skills": set(spec.declared_skills),
         "artifact_types": set(spec.declared_artifact_types),
         "handoffs": set(spec.declared_handoffs),
-        "mcp_servers": set(spec.declared_mcp_servers),
+        "tool_providers": set(spec.declared_tool_providers),
         "subagents": set(spec.declared_subagents),
         "context_contributors": set(spec.declared_context_contributors),
         "resources": set(spec.declared_resources),
@@ -294,7 +322,7 @@ _DECLARATION_FIELDS = (
     "declared_skills",
     "declared_artifact_types",
     "declared_handoffs",
-    "declared_mcp_servers",
+    "declared_tool_providers",
     "declared_subagents",
     "declared_context_contributors",
     "declared_resources",
@@ -305,7 +333,7 @@ _CONTRIBUTION_FIELDS = (
     "skills",
     "artifact_types",
     "handoffs",
-    "mcp_servers",
+    "tool_providers",
     "subagents",
     "context_contributors",
     "resources",
@@ -314,7 +342,7 @@ _CATALOG_FIELDS = (
     "skills",
     "artifact_types",
     "handoffs",
-    "mcp_servers",
+    "tool_providers",
     "subagents",
     "context_contributors",
     "resources",

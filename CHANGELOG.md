@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.0.0
+
+- Added canonical `RunJournal`, `RunAggregate`, and `RunStateSnapshot` state with one `run.settled` terminal event.
+- Added `hard_interrupt` and `follow_up` input strategies; live steering remains intentionally unsupported.
+- Added durable `ModelInvocationEnvelope` recording with exact owner-only debug export and redacted public snapshots.
+- Replaced MCP-specific Capability declarations with the protocol-neutral `ToolProvider` port; MCP now lives in the optional `mcp_sdk`.
+- Moved bounded SubAgent and deliberation APIs into the optional `orchestration_sdk`.
+- Added typed LangGraph state, state invariants, and explicit migration for durable v2 graph checkpoints.
+- Split Kuitianjiandi into foundation, bazi, liuyao, knowledge, planning, and orchestration Capability Packs.
+
 ## 2.0.0
 
 - Made `HarnessRuntime.run(RuntimeRequest) -> RuntimeResult` the sole Runtime

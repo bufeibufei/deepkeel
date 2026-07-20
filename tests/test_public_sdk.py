@@ -9,6 +9,8 @@ import pytest
 import harness_core
 import harness_core.adapter_sdk as adapter_sdk
 import harness_core.extension_sdk as extension_sdk
+import harness_core.mcp_sdk as mcp_sdk
+import harness_core.orchestration_sdk as orchestration_sdk
 import harness_core.runtime_sdk as runtime_sdk
 
 from harness_core.runtime_sdk import (
@@ -29,6 +31,7 @@ from harness_core.extension_sdk import (
     ToolExecutionContext,
     ToolExecutor,
     ToolRegistry,
+    ToolProviderSpec,
     ToolSpec,
     validate_capability_pack,
 )
@@ -42,6 +45,7 @@ from harness_core.adapter_sdk import (
     InMemoryBudgetLedger,
     InMemoryContextSummaryCache,
     InMemoryTelemetry,
+    InMemoryModelInvocationRecorder,
     ModelInvocation,
     ModelProviderInfo,
     ModelTurn,
@@ -50,18 +54,19 @@ from harness_core.adapter_sdk import (
     UsageReport,
 )
 from harness_core.handoffs import HandoffSpec
-from harness_core.mcp import McpServerSpec
 from harness_core.subagents import SubAgentSpec
 from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "2.0.0"
+    assert PUBLIC_API_VERSION == "3.0.0"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
         "HARNESS_CORE_VERSION",
         "adapter_sdk",
         "extension_sdk",
+        "mcp_sdk",
+        "orchestration_sdk",
         "runtime_sdk",
     )
     root_runtime_symbols = {
@@ -71,7 +76,7 @@ def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
     assert (set(harness_core.__all__) & PUBLIC_API_SYMBOLS) == root_runtime_symbols
 
 
-def test_public_api_matches_the_frozen_v2_snapshot() -> None:
+def test_public_api_matches_the_frozen_v3_snapshot() -> None:
     serialized = json.dumps(
         PUBLIC_API_BY_LAYER,
         sort_keys=True,
@@ -79,11 +84,11 @@ def test_public_api_matches_the_frozen_v2_snapshot() -> None:
     ).encode("utf-8")
     actual = hashlib.sha256(serialized).hexdigest()
     expected = (
-        Path(__file__).with_name("public_api_v2.sha256").read_text(encoding="ascii").strip()
+        Path(__file__).with_name("public_api_v3.sha256").read_text(encoding="ascii").strip()
     )
 
     assert actual == expected, (
-        "public API changed; review compatibility and update the v2 snapshot only "
+        "public API changed; review compatibility and update the v3 snapshot only "
         "for an intentional contract release"
     )
 
@@ -93,6 +98,8 @@ def test_public_api_matches_the_frozen_v2_snapshot() -> None:
     [
         (runtime_sdk, "runtime"),
         (extension_sdk, "extension"),
+        (orchestration_sdk, "orchestration"),
+        (mcp_sdk, "mcp"),
         (adapter_sdk, "adapter"),
     ],
 )
@@ -321,7 +328,8 @@ def test_capability_pack_installs_every_extension_kind_from_real_registrations()
             declared_skills=("complete-skill",),
             declared_artifact_types=("complete_record",),
             declared_handoffs=("complete.read",),
-            declared_mcp_servers=("complete-mcp",),
+            declared_tool_providers=("complete-provider",),
+            declared_resources=("tool-provider:complete-provider",),
             declared_subagents=("complete-specialist",),
             declared_context_contributors=("complete-context",),
         )
@@ -353,13 +361,19 @@ def test_capability_pack_installs_every_extension_kind_from_real_registrations()
                     completion_artifact_type="complete_record",
                 ),
             )
-            context.register_mcp_server(
-                McpServerSpec(
-                    id="complete-mcp",
-                    transport="streamable_http",
-                    url="https://mcp.example.test/service",
-                )
-            )
+            class CompleteProvider:
+                spec = ToolProviderSpec(provider_id="complete-provider")
+
+                def install(self, *, registry, executor) -> None:
+                    return None
+
+                def diagnostics(self) -> list[dict[str, object]]:
+                    return []
+
+                def close(self) -> None:
+                    return None
+
+            context.register_tool_provider(CompleteProvider())
             context.register_subagent(
                 SubAgentSpec(
                     id="complete-specialist",
@@ -386,7 +400,7 @@ def test_capability_pack_installs_every_extension_kind_from_real_registrations()
     assert contribution.skills == ("complete-skill",)
     assert contribution.artifact_types == ("complete_record",)
     assert contribution.handoffs == ("complete.read",)
-    assert contribution.mcp_servers == ("complete-mcp",)
+    assert contribution.tool_providers == ("complete-provider",)
     assert contribution.subagents == ("complete-specialist",)
     assert contribution.context_contributors == ("complete-context",)
     assert contribution.metadata == {"source": "contract-test"}
@@ -789,8 +803,9 @@ def test_runtime_state_store_has_no_partial_write_at_each_crash_point(
     mutation = RuntimeStateMutation(
         mutation_id=f"mutation-{crash_point}",
         run_id=f"run-{crash_point}",
-        event_type="run.completed",
+        event_type="run.settled",
         target_status="completed",
+        event_payload={"status": "completed"},
         checkpoint_type="terminal",
         checkpoint_state={"status": "completed"},
         delete_checkpoint_types=("runtime",),
@@ -828,8 +843,9 @@ def test_terminal_state_mutation_replaces_resumable_checkpoint_atomically() -> N
     terminal = RuntimeStateMutation(
         mutation_id="terminal-completed",
         run_id="run-terminal",
-        event_type="run.completed",
+        event_type="run.settled",
         target_status="completed",
+        event_payload={"status": "completed"},
         event_visibility="public",
         checkpoint_type="terminal",
         checkpoint_state={"status": "completed"},
@@ -855,6 +871,83 @@ def test_terminal_state_mutation_replaces_resumable_checkpoint_atomically() -> N
     assert [item["checkpoint_type"] for item in completed["checkpoints"]] == [
         "terminal"
     ]
+
+
+def test_runtime_persists_one_canonical_settlement_before_cleanup() -> None:
+    registry = ToolRegistry()
+    store = InMemoryRuntimeStateStore()
+    runtime = HarnessRuntimeBuilder(registry, ToolExecutor(registry)).with_ports(
+        RuntimePorts(runtime_state_store=store)
+    ).build()
+
+    result = run_runtime(
+        runtime,
+        "hello",
+        provider=EchoModelAdapter(),
+        context_bundle={"agent_session_id": "run-settled"},
+    )
+    snapshot = store.load_snapshot("run-settled")
+    journal = store.snapshot("run-settled")
+
+    assert result.status.value == "completed"
+    assert snapshot.settled is True
+    assert snapshot.settlement_status == "completed"
+    assert snapshot.last_event_type == "run.settled"
+    assert snapshot.can_accept_input is True
+    assert [event["event_type"] for event in journal["events"]] == ["run.settled"]
+    assert journal["events"][0]["payload"]["status"] == "completed"
+
+
+def test_model_invocation_envelope_is_replayable_without_leaking_prompt_to_events() -> None:
+    registry = ToolRegistry()
+    recorder = InMemoryModelInvocationRecorder()
+    runtime = HarnessRuntimeBuilder(registry, ToolExecutor(registry)).with_ports(
+        RuntimePorts(model_invocation_recorder=recorder)
+    ).build()
+
+    result = run_runtime(
+        runtime,
+        "private question",
+        provider=EchoModelAdapter(),
+        context_bundle={"agent_session_id": "run-envelope"},
+    )
+    route = next(item for item in result.trace if item["action"] == "model.route.selected")
+    public = route["invocation"]
+    envelope = recorder.get(public["invocation_id"])
+
+    assert public["recorded"] is True
+    assert public["message_count"] >= 2
+    assert "messages" not in public
+    assert "private question" not in json.dumps(public, ensure_ascii=False)
+    assert envelope is not None
+    assert envelope.request.messages[-1]["content"] == "private question"
+    assert envelope.request_fingerprint == public["request_fingerprint"]
+
+
+def test_settled_run_rejects_non_idempotent_follow_up_mutation() -> None:
+    store = InMemoryRuntimeStateStore()
+    settled = RuntimeStateMutation(
+        mutation_id="settled-once",
+        run_id="run-immutable",
+        event_type="run.settled",
+        target_status="failed",
+        event_payload={"status": "failed"},
+        checkpoint_type="terminal",
+    )
+    store.commit(settled)
+
+    assert store.commit(settled).replayed is True
+    with pytest.raises(RuntimeStateConflict, match="settled run"):
+        store.commit(
+            RuntimeStateMutation(
+                mutation_id="settled-twice",
+                run_id="run-immutable",
+                event_type="run.settled",
+                target_status="completed",
+                event_payload={"status": "completed"},
+                checkpoint_type="terminal",
+            )
+        )
 
 
 def test_runtime_waiting_action_is_committed_through_atomic_state_store() -> None:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from copy import deepcopy
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
@@ -19,14 +19,109 @@ from harness_core.graph_workflow import (
     _record_resume_artifact,
 )
 
-def _state_from_context(context: RunContext) -> dict[str, Any]:
+
+class MissingRequirementsState(TypedDict):
+    tools: list[str]
+    artifacts: list[str]
+
+
+class HarnessGraphState(TypedDict):
+    run_id: str
+    thread_id: str
+    turn_id: str
+    user_id: str
+    status: str
+    messages: list[dict[str, Any]]
+    observations: list[dict[str, Any]]
+    pending_tool_calls: list[dict[str, Any]]
+    pending_action: dict[str, Any] | None
+    pending_async: dict[str, Any] | None
+    artifacts: list[dict[str, Any]]
+    skill_activation: dict[str, Any]
+    policy_phase: str
+    missing_requirements: MissingRequirementsState
+    repair_count: int
+    model_policy: dict[str, Any]
+    budget_state: dict[str, Any]
+    metadata: dict[str, Any]
+    step_count: int
+    events: list[dict[str, Any]]
+    tool_results: list[dict[str, Any]]
+    final_answer: dict[str, Any] | None
+
+
+def validate_graph_state(state: dict[str, Any]) -> HarnessGraphState:
+    """Fail fast when a graph node produces a structurally impossible state."""
+
+    for field_name in ("run_id", "thread_id", "turn_id", "user_id", "status"):
+        if not isinstance(state.get(field_name), str) or not state[field_name]:
+            raise ValueError(f"graph state requires non-empty {field_name}")
+    for field_name in (
+        "messages", "observations", "pending_tool_calls", "artifacts", "events", "tool_results"
+    ):
+        if not isinstance(state.get(field_name), list):
+            raise TypeError(f"graph state {field_name} must be a list")
+    for field_name in ("skill_activation", "model_policy", "budget_state", "metadata"):
+        if not isinstance(state.get(field_name), dict):
+            raise TypeError(f"graph state {field_name} must be an object")
+    if state.get("pending_action") is not None and state.get("pending_async") is not None:
+        raise ValueError("graph state cannot wait for user action and async work simultaneously")
+    if int(state.get("step_count") or 0) < 0 or int(state.get("repair_count") or 0) < 0:
+        raise ValueError("graph counters must be non-negative")
+    missing = state.get("missing_requirements")
+    if not isinstance(missing, dict) or not isinstance(missing.get("tools"), list) or not isinstance(missing.get("artifacts"), list):
+        raise TypeError("graph state missing_requirements must contain tools and artifacts lists")
+    return state  # type: ignore[return-value]
+
+
+def migrate_legacy_graph_state(
+    state: dict[str, Any],
+    *,
+    thread_id: str,
+) -> HarnessGraphState:
+    """Normalize durable v2 checkpoints before applying current invariants."""
+
+    migrated = dict(state)
+    metadata = dict(migrated.get("metadata") or {})
+    run_id = str(migrated.get("run_id") or metadata.get("run_id") or thread_id)
+    migrated.update(
+        {
+            "run_id": run_id,
+            "thread_id": str(migrated.get("thread_id") or thread_id),
+            "turn_id": str(migrated.get("turn_id") or metadata.get("turn_id") or run_id),
+            "user_id": str(migrated.get("user_id") or metadata.get("user_id") or "checkpoint-user"),
+            "status": str(migrated.get("status") or "reasoning"),
+            "metadata": metadata,
+        }
+    )
+    for field_name in (
+        "messages", "observations", "pending_tool_calls", "artifacts", "events", "tool_results"
+    ):
+        migrated[field_name] = list(migrated.get(field_name) or [])
+    for field_name in ("skill_activation", "model_policy", "budget_state"):
+        migrated[field_name] = dict(migrated.get(field_name) or {})
+    missing = migrated.get("missing_requirements")
+    missing = missing if isinstance(missing, dict) else {}
+    migrated["missing_requirements"] = {
+        "tools": list(missing.get("tools") or []),
+        "artifacts": list(missing.get("artifacts") or []),
+    }
+    migrated["policy_phase"] = str(migrated.get("policy_phase") or "")
+    migrated["repair_count"] = int(migrated.get("repair_count") or 0)
+    migrated["step_count"] = int(migrated.get("step_count") or 0)
+    migrated.setdefault("pending_action", None)
+    migrated.setdefault("pending_async", None)
+    migrated.setdefault("final_answer", None)
+    return validate_graph_state(migrated)
+
+def _state_from_context(context: RunContext) -> HarnessGraphState:
     skill = dict(context.skill_activation)
     missing = (
         skill.get("missing_requirements")
         if isinstance(skill.get("missing_requirements"), dict)
         else {}
     )
-    return {
+    return validate_graph_state({
         "run_id": context.run_id,
         "thread_id": context.thread_id,
         "turn_id": context.turn_id,
@@ -55,7 +150,7 @@ def _state_from_context(context: RunContext) -> dict[str, Any]:
         "events": [],
         "tool_results": [],
         "final_answer": None,
-    }
+    })
 
 
 def _copy_state(state: dict[str, Any]) -> dict[str, Any]:

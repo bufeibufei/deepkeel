@@ -10,7 +10,12 @@ from harness_core.budget import BudgetLedger
 from harness_core.contracts import RunContext
 from harness_core.control import NoopRunControl, RunControl
 from harness_core.graph_nodes import GraphNodes
-from harness_core.graph_state import _state_from_context
+from harness_core.graph_state import (
+    HarnessGraphState,
+    _state_from_context,
+    migrate_legacy_graph_state,
+    validate_graph_state,
+)
 from harness_core.graph_workflow import (
     _graph_config,
     _route_after_model,
@@ -37,11 +42,11 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
-    ) -> dict[str, Any]:
-        return self.compiled_graph.invoke(
+    ) -> HarnessGraphState:
+        return validate_graph_state(self.compiled_graph.invoke(
             _state_from_context(context),
             config=_graph_config(context.thread_id, tool_context, event_sink),
-        )
+        ))
 
     def resume(
         self,
@@ -50,11 +55,11 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
-    ) -> dict[str, Any]:
-        return self.compiled_graph.invoke(
+    ) -> HarnessGraphState:
+        return migrate_legacy_graph_state(self.compiled_graph.invoke(
             Command(resume=resume_payload),
             config=_graph_config(thread_id, tool_context, event_sink),
-        )
+        ), thread_id=thread_id)
 
     def recover(
         self,
@@ -62,12 +67,12 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
-    ) -> dict[str, Any]:
+    ) -> HarnessGraphState:
         """Continue an interrupted super-step from its durable checkpoint."""
-        return self.compiled_graph.invoke(
+        return migrate_legacy_graph_state(self.compiled_graph.invoke(
             None,
             config=_graph_config(thread_id, tool_context, event_sink),
-        )
+        ), thread_id=thread_id)
 
 
 def create_harness_graph(
@@ -96,7 +101,7 @@ def create_harness_graph(
         deadline_monotonic=deadline_monotonic,
         control=control,
     )
-    graph = StateGraph(dict)
+    graph = StateGraph(HarnessGraphState)
     graph.add_node("model", nodes.model_node)
     graph.add_node("tools", nodes.tool_node)
     graph.add_node("await_user", nodes.await_user_node)

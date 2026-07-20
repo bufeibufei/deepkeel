@@ -33,10 +33,15 @@ from harness_core.runtime_api import (
 )
 from harness_core.state_store import (
     InMemoryRuntimeStateStore,
+    RUN_SETTLED_EVENT,
+    RunAggregate,
+    RunStateSnapshot,
     RuntimeStateConflict,
     RuntimeStateMutation,
     RuntimeStateReceipt,
     RuntimeStateStore,
+    TERMINAL_RUN_STATUSES,
+    normalize_runtime_status,
 )
 from harness_core.ui import TERMINAL_RUNTIME_STATUSES, project_run_ui_state
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
@@ -58,9 +63,12 @@ RUNTIME_SDK_API = (
     "Observation",
     "PendingAction",
     "RunCanceledError",
+    "RUN_SETTLED_EVENT",
+    "RunAggregate",
     "RunContext",
     "RunControl",
     "RunStatus",
+    "RunStateSnapshot",
     "RuntimeEvent",
     "RuntimeActiveTask",
     "RuntimeErrorPayload",
@@ -75,12 +83,14 @@ RUNTIME_SDK_API = (
     "RuntimeStreamEvent",
     "RuntimeUIState",
     "TERMINAL_RUNTIME_STATUSES",
+    "TERMINAL_RUN_STATUSES",
     "TERMINAL_WORKFLOW_STATES",
     "ToolCall",
     "ToolResult",
     "context_snapshot_subject",
     "failure_from_code",
     "normalize_agent_context_snapshot",
+    "normalize_runtime_status",
     "project_run_ui_state",
     "workflow_projection",
 )

@@ -77,6 +77,7 @@ def _runtime_result(
             "lifecycle": "completed",
             "composer_mode": "ready",
             "can_send": True,
+            "input_strategy": "follow_up",
             "requires_user_action": False,
             "is_resumable": False,
             "show_progress": False,

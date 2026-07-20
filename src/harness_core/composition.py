@@ -17,6 +17,7 @@ from harness_core.control import RunControl
 from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
 from harness_core.model_routing import ModelRouter
+from harness_core.model import ModelInvocationRecorder
 from harness_core.persistence import DurableCheckpointStore
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.policy import PolicyEngine
@@ -37,6 +38,7 @@ class RuntimePorts:
     system_prompt_factory: SystemPromptFactory | None = None
     session_factory: SessionFactory | None = None
     model_router: ModelRouter | None = None
+    model_invocation_recorder: ModelInvocationRecorder | None = None
     policy_engine: PolicyEngine | None = None
     budget_ledger: BudgetLedger | None = None
     run_control: RunControl | None = None
@@ -170,6 +172,7 @@ class HarnessRuntimeBuilder:
             session_factory=self._ports.session_factory,
             max_steps=self._max_steps,
             model_router=self._ports.model_router,
+            model_invocation_recorder=self._ports.model_invocation_recorder,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
             run_control=self._ports.run_control,
@@ -238,7 +241,9 @@ class HarnessRuntimeBuilder:
                 catalog_before, catalog_after, "artifact_types"
             ),
             handoffs=_catalog_delta(catalog_before, catalog_after, "handoffs"),
-            mcp_servers=_catalog_delta(catalog_before, catalog_after, "mcp_servers"),
+            tool_providers=_catalog_delta(
+                catalog_before, catalog_after, "tool_providers"
+            ),
             subagents=_catalog_delta(catalog_before, catalog_after, "subagents"),
             context_contributors=_catalog_delta(
                 catalog_before, catalog_after, "context_contributors"
