@@ -1,1 +1,6 @@
+include CHANGELOG.md
+include CONTRIBUTING.md
+include SECURITY.md
 include tests/public_api_v3.sha256
+recursive-include tests/fixtures *.py
+recursive-include verification *.py

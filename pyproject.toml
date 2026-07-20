@@ -1,6 +1,6 @@
 [project]
 name = "harness-agent-core"
-version = "3.0.0"
+version = "3.0.1"
 description = "Product-neutral Harness Agent runtime core."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -17,6 +17,7 @@ classifiers = [
   "Typing :: Typed",
 ]
 dependencies = [
+  "httpx>=0.28.0,<1.0.0",
   "jsonschema>=4.23.0,<5.0.0",
   "langchain-core>=1.2.0,<2.0.0",
   "langgraph>=1.2.0,<2.0.0",
@@ -28,9 +29,7 @@ Repository = "https://github.com/bufeibufei/kuitianjiandi"
 Issues = "https://github.com/bufeibufei/kuitianjiandi/issues"
 
 [project.optional-dependencies]
-mcp = ["httpx>=0.28.0,<1.0.0"]
 test = [
-  "httpx>=0.28.0,<1.0.0",
   "mypy>=1.15.0,<2.0.0",
   "pytest>=8.3.0",
   "pytest-cov>=6.0.0,<8.0.0",
@@ -51,7 +50,7 @@ harness_core = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 addopts = "-p no:cacheprovider"
 
 [tool.ruff]

@@ -1,7 +1,20 @@
 """Failure-classification tests owned by the standalone runtime package."""
 
+from types import SimpleNamespace
+from urllib.error import URLError
+
 from harness_core.budget import BudgetDecision, BudgetExceededError
-from harness_core.failures import RunDeadlineExceededError, classify_runtime_failure
+from harness_core.failures import (
+    RunCanceledError,
+    RunDeadlineExceededError,
+    classify_runtime_failure,
+    failure_from_code,
+)
+from harness_core.model_failures import (
+    ModelToolContractError,
+    classify_model_failure,
+    provider_fingerprint,
+)
 from harness_core.persistence import CheckpointCompatibilityError
 from harness_core.policy import PolicyDecision, PolicyDeniedError
 
@@ -62,4 +75,73 @@ def test_runtime_failure_contract_classifies_incompatible_checkpoint_as_contract
         "CHECKPOINT_INCOMPATIBLE",
         "contract",
         False,
+    )
+
+
+def test_runtime_failure_contract_classifies_model_contract_cancel_and_internal_errors():
+    model_contract = classify_runtime_failure(
+        ModelToolContractError("report.build", [])
+    )
+    canceled = classify_runtime_failure(RunCanceledError())
+    internal = classify_runtime_failure(RuntimeError("unexpected"))
+
+    assert model_contract.category == "model_contract"
+    assert model_contract.retryable is True
+    assert canceled.category == "canceled"
+    assert canceled.retryable is False
+    assert internal.code == "RUNTIME_INTERNAL_ERROR"
+    assert internal.category == "internal"
+
+
+def test_persisted_failure_codes_reconstruct_safe_categories() -> None:
+    expected = {
+        "POLICY_DENIED": ("policy", False),
+        "BUDGET_EXCEEDED": ("budget", False),
+        "MODEL_TIMEOUT": ("timeout", True),
+        "UPSTREAM_UNAVAILABLE": ("upstream", True),
+        "OUTPUT_SCHEMA_INVALID": ("contract", False),
+        "RUN_CANCELLED": ("canceled", False),
+        "PROFILE_MISSING": ("internal", False),
+        "UNKNOWN_FAILURE": ("internal", True),
+    }
+
+    for code, contract in expected.items():
+        failure = failure_from_code(code, "technical detail")
+        assert (failure.category, failure.retryable) == contract
+        assert failure.detail == "technical detail"
+        assert failure.as_dict()["code"] == code
+
+
+def test_model_failure_classifier_covers_provider_failure_categories() -> None:
+    rate_limited = RuntimeError("too many requests")
+    rate_limited.status_code = 429
+    rate_limited.headers = {"Retry-After": "1.5"}
+    invalid = RuntimeError("bad request")
+    invalid.response = SimpleNamespace(status_code=422, headers={})
+
+    assert classify_model_failure(rate_limited).retry_after_seconds == 1.5
+    assert classify_model_failure(TimeoutError()).category == "timeout"
+    assert classify_model_failure(invalid).category == "invalid_request"
+    assert classify_model_failure(URLError("offline")).category == "provider_unavailable"
+    assert classify_model_failure(RuntimeError("unknown")).category == "provider_error"
+
+
+def test_model_failure_helpers_tolerate_malformed_metadata() -> None:
+    malformed = RuntimeError("rate limit")
+    malformed.code = object()
+    malformed.headers = {"retry-after": "not-a-number"}
+    failure = classify_model_failure(malformed)
+
+    class Provider:
+        base_url = "https://models.example.test"
+        model = "reasoning-model"
+
+    assert failure.category == "rate_limited"
+    assert failure.status_code == 429
+    assert failure.retry_after_seconds == 0.0
+    assert provider_fingerprint(None) == ("", "", "")
+    assert provider_fingerprint(Provider()) == (
+        "test_model_failure_helpers_tolerate_malformed_metadata.<locals>.Provider",
+        "https://models.example.test",
+        "reasoning-model",
     )

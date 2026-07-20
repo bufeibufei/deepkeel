@@ -22,21 +22,14 @@ jobs:
         run: uv sync --extra test
       - name: Verify formatting and imports
         run: uv run ruff check src tests verification
-      - name: Verify public type contracts
-        run: >-
-          uv run mypy
-          src/harness_core/runtime_api.py
-          src/harness_core/runtime_sdk.py
-          src/harness_core/extension_sdk.py
-          src/harness_core/adapter_sdk.py
-          src/harness_core/public_api.py
-          src/harness_core/adapter_conformance.py
+      - name: Verify Core type contracts
+        run: uv run mypy src/harness_core
       - name: Run package-owned tests with coverage
         run: >-
           uv run pytest -q
           --cov=harness_core
           --cov-report=term-missing
-          --cov-fail-under=60
+          --cov-fail-under=80
       - name: Build wheel and source distribution
         run: uv build
       - name: Verify wheel and sdist in clean environments

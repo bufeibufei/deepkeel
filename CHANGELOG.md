@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.0.1
+
+- Aligned the standalone package and Host dependency versions before repository extraction.
+- Made the HTTP transport dependency explicit because the public MCP SDK is imported from the package root.
+- Added package-owned extraction conformance coverage and tightened distribution metadata.
+- Enforced contract-driven tool calls and rejected invalid delegation batches before child execution.
+
 ## 3.0.0
 
 - Added canonical `RunJournal`, `RunAggregate`, and `RunStateSnapshot` state with one `run.settled` terminal event.

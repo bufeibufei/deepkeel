@@ -187,7 +187,7 @@ Run the package-owned contract suite with:
 uv sync --extra test
 uv run ruff check src tests verification
 uv run mypy src/harness_core
-uv run pytest -q --cov=harness_core --cov-fail-under=60
+uv run pytest -q --cov=harness_core --cov-fail-under=80
 ```
 
 Build and verify both distributions from the repository root with:

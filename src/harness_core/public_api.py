@@ -1,4 +1,4 @@
-"""Machine-readable manifest for the frozen Harness Core v2 public surface."""
+"""Machine-readable manifest for the frozen Harness Core v3 public surface."""
 
 from harness_core.adapter_sdk import ADAPTER_SDK_API
 from harness_core.extension_sdk import EXTENSION_SDK_API
