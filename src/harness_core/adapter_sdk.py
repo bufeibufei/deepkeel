@@ -48,6 +48,7 @@ from harness_core.governance import (
     SecretRequest,
 )
 from harness_core.leases import (
+    ExecutionFence,
     InMemoryRunLeaseStore,
     RunLease,
     RunLeaseConflict,
@@ -59,6 +60,7 @@ from harness_core.migrations import (
     StateMigration,
     StateMigrationError,
     StateMigrationRegistry,
+    default_state_migrations,
 )
 from harness_core.langgraph_adapter import LangGraphCheckpointerAdapter
 from harness_core.model import (
@@ -117,6 +119,7 @@ ADAPTER_SDK_API = (
     "DeterministicContextWindowManager",
     "ELAPSED_SECONDS",
     "EnvironmentSecretProvider",
+    "ExecutionFence",
     "GovernanceBundle",
     "GovernanceScope",
     "GraphCheckpointer",
@@ -167,6 +170,7 @@ ADAPTER_SDK_API = (
     "UsageReport",
     "classify_model_failure",
     "context_fingerprint",
+    "default_state_migrations",
     "preview_budget",
     "provider_fingerprint",
     "verify_durable_checkpoint_store_contract",

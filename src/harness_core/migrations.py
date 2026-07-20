@@ -101,6 +101,51 @@ class StateMigrationRegistry:
         return tuple(path)
 
 
+def default_state_migrations() -> StateMigrationRegistry:
+    """Migration history shipped by Core for its persisted public contracts."""
+
+    registry = StateMigrationRegistry()
+    registry.register(
+        "checkpoint",
+        "harness-checkpoint-v1",
+        "harness-checkpoint-v2",
+        _upgrade_checkpoint_v1,
+    )
+    registry.register(
+        "durable_checkpoint",
+        "harness-durable-checkpoint-v1",
+        "harness-durable-checkpoint-v2",
+        _upgrade_durable_checkpoint_v1,
+    )
+    registry.register(
+        "runtime",
+        "harness-runtime-v1",
+        "harness-runtime-v2",
+        _upgrade_runtime_v1,
+    )
+    return registry
+
+
+def _upgrade_checkpoint_v1(state: dict[str, Any]) -> dict[str, Any]:
+    return {
+        **state,
+        "schema_version": "harness-checkpoint-v2",
+        "messages": list(state.get("messages") or []),
+        "observations": list(state.get("observations") or []),
+        "artifacts": list(state.get("artifacts") or []),
+        "metadata": dict(state.get("metadata") or {}),
+        "budget_state": dict(state.get("budget_state") or {}),
+    }
+
+
+def _upgrade_durable_checkpoint_v1(state: dict[str, Any]) -> dict[str, Any]:
+    return {**state, "schema_version": "harness-durable-checkpoint-v2"}
+
+
+def _upgrade_runtime_v1(state: dict[str, Any]) -> dict[str, Any]:
+    return {**state, "schema_version": "harness-runtime-v2"}
+
+
 def _required(value: str, field_name: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:

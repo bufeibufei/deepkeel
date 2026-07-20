@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from threading import Lock
 from typing import Protocol
 
 from harness_core.failures import RunCanceledError
@@ -14,6 +15,9 @@ class RunControl(Protocol):
 
 
 class NoopRunControl:
+    def cancel(self, run_id: str) -> None:
+        del run_id
+
     def raise_if_cancelled(self, run_id: str, *, force: bool = False) -> None:
         del run_id, force
 
@@ -26,14 +30,19 @@ class InMemoryRunControl:
 
     def __init__(self) -> None:
         self._canceled: set[str] = set()
+        self._lock = Lock()
 
     def cancel(self, run_id: str) -> None:
-        self._canceled.add(str(run_id))
+        with self._lock:
+            self._canceled.add(str(run_id))
 
     def raise_if_cancelled(self, run_id: str, *, force: bool = False) -> None:
         del force
-        if str(run_id) in self._canceled:
+        with self._lock:
+            canceled = str(run_id) in self._canceled
+        if canceled:
             raise RunCanceledError()
 
     def release(self, run_id: str) -> None:
-        self._canceled.discard(str(run_id))
+        with self._lock:
+            self._canceled.discard(str(run_id))

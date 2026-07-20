@@ -24,6 +24,7 @@ from harness_core.contracts import Observation, PendingAction, ToolCall, ToolRes
 from harness_core.control import NoopRunControl, RunControl
 from harness_core.deadlines import ensure_time_remaining
 from harness_core.failures import RunCanceledError, RunDeadlineExceededError
+from harness_core.leases import ExecutionFence
 from harness_core.policy import (
     DefaultPolicyEngine,
     PolicyDecision,
@@ -52,6 +53,19 @@ class ToolExecutionContext:
     budget_limits: dict[str, float] = field(default_factory=dict)
     deadline_monotonic: float | None = None
     run_control: RunControl = field(default_factory=NoopRunControl)
+    execution_fence: ExecutionFence | None = None
+
+    @property
+    def fence_token(self) -> str:
+        return self.execution_fence.token if self.execution_fence is not None else ""
+
+    @property
+    def fence_generation(self) -> int:
+        return self.execution_fence.generation if self.execution_fence is not None else 0
+
+    def raise_if_fence_lost(self) -> None:
+        if self.execution_fence is not None:
+            self.execution_fence.raise_if_lost()
 
     def fork(self, *, session: RuntimeSession | None = None) -> "ToolExecutionContext":
         return ToolExecutionContext(
@@ -66,6 +80,7 @@ class ToolExecutionContext:
             budget_limits=dict(self.budget_limits),
             deadline_monotonic=self.deadline_monotonic,
             run_control=self.run_control,
+            execution_fence=self.execution_fence,
         )
 
 
@@ -282,6 +297,7 @@ class ToolExecutor:
         return frozenset(self._handlers)
 
     def execute(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        context.raise_if_fence_lost()
         context.run_control.raise_if_cancelled(context.run_id)
         ensure_time_remaining(context.deadline_monotonic)
         started_at = time.perf_counter()
@@ -372,7 +388,7 @@ class ToolExecutor:
             )
 
         if not normalized.idempotency_key:
-            return self._invoke(
+            result = self._invoke(
                 handler,
                 normalized,
                 context,
@@ -380,6 +396,8 @@ class ToolExecutor:
                 policy=policy,
                 started_at=started_at,
             )
+            context.raise_if_fence_lost()
+            return result
 
         lease_seconds = _positive_number(
             spec.runtime_policy.get("idempotency_lease_seconds"),
@@ -483,6 +501,7 @@ class ToolExecutor:
             policy=policy,
             started_at=started_at,
         )
+        context.raise_if_fence_lost()
         settlement_error = None
         for settlement_attempt in range(3):
             try:
@@ -627,6 +646,7 @@ class ToolExecutor:
             return _with_runtime_metrics(result, started_at, phase="budget", executed=False)
         try:
             raw = handler(call, context)
+            context.raise_if_fence_lost()
             context.run_control.raise_if_cancelled(context.run_id, force=True)
             ensure_time_remaining(context.deadline_monotonic)
             if not isinstance(raw, ToolResult):

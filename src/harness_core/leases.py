@@ -45,6 +45,18 @@ class RunLeaseStore(Protocol):
     def inspect(self, run_id: str) -> RunLease | None: ...
 
 
+class ExecutionFence(Protocol):
+    """Active execution ownership exposed to tools and persistence adapters."""
+
+    @property
+    def token(self) -> str: ...
+
+    @property
+    def generation(self) -> int: ...
+
+    def raise_if_lost(self) -> None: ...
+
+
 class InMemoryRunLeaseStore:
     """Reference lease adapter with takeover and fencing-token semantics."""
 
@@ -183,14 +195,29 @@ class RunLeaseGuard:
         if lost is not None:
             raise RunLeaseLost(f"run lease was lost for {self.run_id}") from lost
 
+    @property
+    def token(self) -> str:
+        with self._lock:
+            lease = self.lease
+        return lease.token if lease is not None else ""
+
+    @property
+    def generation(self) -> int:
+        with self._lock:
+            lease = self.lease
+        return lease.generation if lease is not None else 0
+
     def _heartbeat(self) -> None:
         interval = max(0.1, self.ttl_seconds / 3)
         while not self._stop.wait(interval):
             try:
-                lease = self.lease
+                with self._lock:
+                    lease = self.lease
                 if lease is None:
                     return
-                self.lease = self.store.renew(lease, ttl_seconds=self.ttl_seconds)
+                renewed = self.store.renew(lease, ttl_seconds=self.ttl_seconds)
+                with self._lock:
+                    self.lease = renewed
             except BaseException as exc:
                 with self._lock:
                     self._lost = exc

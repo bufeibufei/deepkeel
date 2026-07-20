@@ -29,6 +29,8 @@ class RunStateSnapshot:
     checkpoint_type: str = ""
     checkpoint_state: dict[str, Any] = field(default_factory=dict)
     resume_token: str = ""
+    fence_token: str = ""
+    fence_generation: int = 0
 
     def __post_init__(self) -> None:
         normalized = normalize_runtime_status(self.status)
@@ -65,6 +67,8 @@ class RunStateSnapshot:
             "checkpoint_type": self.checkpoint_type,
             "checkpoint_state": copy.deepcopy(self.checkpoint_state),
             "resume_token": self.resume_token,
+            "fence_token": self.fence_token,
+            "fence_generation": self.fence_generation,
             "can_accept_input": self.can_accept_input,
             "input_strategy": self.input_strategy,
         }
@@ -84,6 +88,8 @@ class RunAggregate:
     checkpoint_type: str = ""
     checkpoint_state: dict[str, Any] = field(default_factory=dict)
     resume_token: str = ""
+    fence_token: str = ""
+    fence_generation: int = 0
 
     def apply(self, mutation: RuntimeStateMutation, *, sequence: int) -> None:
         if mutation.run_id != self.run_id:
@@ -127,6 +133,8 @@ class RunAggregate:
             checkpoint_type=self.checkpoint_type,
             checkpoint_state=copy.deepcopy(self.checkpoint_state),
             resume_token=self.resume_token,
+            fence_token=self.fence_token,
+            fence_generation=self.fence_generation,
         )
 
 
@@ -154,6 +162,8 @@ class RuntimeStateMutation:
     delete_checkpoint_types: tuple[str, ...] = ()
     expected_version: int | None = None
     expected_sequence: int | None = None
+    fence_token: str = ""
+    fence_generation: int = 0
 
 
 @dataclass(frozen=True, slots=True)
@@ -204,6 +214,8 @@ class _MemoryRuntimeState:
     events: list[dict[str, Any]] = field(default_factory=list)
     checkpoints: list[dict[str, Any]] = field(default_factory=list)
     receipts: dict[str, RuntimeStateReceipt] = field(default_factory=dict)
+    fence_token: str = ""
+    fence_generation: int = 0
 
     def aggregate(self, run_id: str) -> RunAggregate:
         latest = self.checkpoints[-1] if self.checkpoints else {}
@@ -219,6 +231,8 @@ class _MemoryRuntimeState:
             checkpoint_type=str(latest.get("checkpoint_type") or ""),
             checkpoint_state=copy.deepcopy(latest.get("state") or {}),
             resume_token=str(latest.get("resume_token") or ""),
+            fence_token=self.fence_token,
+            fence_generation=self.fence_generation,
         )
 
 
@@ -246,6 +260,7 @@ class InMemoryRuntimeStateStore:
             if replay is not None:
                 return RuntimeStateReceipt(**{**replay.as_dict(), "replayed": True})
             aggregate = current.aggregate(mutation.run_id)
+            _assert_fence_is_current(current, mutation)
             if (
                 mutation.expected_version is not None
                 and mutation.expected_version != current.version
@@ -296,6 +311,9 @@ class InMemoryRuntimeStateStore:
                 self._fail_at("after_checkpoint_cleanup")
                 current.version = aggregate.version
                 current.status = aggregate.status
+                if mutation.fence_generation:
+                    current.fence_generation = mutation.fence_generation
+                    current.fence_token = mutation.fence_token
                 receipt = RuntimeStateReceipt(
                     mutation_id=mutation.mutation_id,
                     run_id=mutation.run_id,
@@ -313,13 +331,17 @@ class InMemoryRuntimeStateStore:
     def snapshot(self, run_id: str) -> dict[str, Any]:
         with self._lock:
             state = copy.deepcopy(self._states.get(run_id) or _MemoryRuntimeState())
-        return {
+        snapshot = {
             "version": state.version,
             "sequence": state.sequence,
             "status": state.status,
             "events": state.events,
             "checkpoints": state.checkpoints,
         }
+        if state.fence_generation:
+            snapshot["fence_token"] = state.fence_token
+            snapshot["fence_generation"] = state.fence_generation
+        return snapshot
 
     def load_snapshot(
         self,
@@ -336,3 +358,25 @@ class InMemoryRuntimeStateStore:
     def _fail_at(self, stage: str) -> None:
         if self._failure_injector is not None:
             self._failure_injector(stage)
+
+
+def _assert_fence_is_current(
+    current: _MemoryRuntimeState,
+    mutation: RuntimeStateMutation,
+) -> None:
+    generation = int(mutation.fence_generation or 0)
+    token = str(mutation.fence_token or "")
+    if generation < 0:
+        raise ValueError("fence_generation must be non-negative")
+    if generation and not token:
+        raise ValueError("fence_token is required when fence_generation is set")
+    if current.fence_generation and not generation:
+        raise RuntimeStateConflict("fenced run requires an execution fence")
+    if generation < current.fence_generation:
+        raise RuntimeStateConflict(
+            f"stale execution fence: expected generation {current.fence_generation}, "
+            f"found {generation}"
+        )
+    if generation == current.fence_generation and generation:
+        if token != current.fence_token:
+            raise RuntimeStateConflict("execution fence token does not match current owner")

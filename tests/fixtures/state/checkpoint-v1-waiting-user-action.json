@@ -1,0 +1,25 @@
+{
+  "schema_version": "harness-checkpoint-v1",
+  "run_id": "fixture-waiting-run",
+  "messages": [
+    {
+      "id": "message-user-1",
+      "role": "user",
+      "content": "Start the governed workflow"
+    }
+  ],
+  "observations": [],
+  "artifacts": [],
+  "pending_action": {
+    "id": "pending-confirm-1",
+    "run_id": "fixture-waiting-run",
+    "tool_call_id": "call-confirm-1",
+    "action_type": "confirm",
+    "title": "Confirm operation",
+    "prompt": "Continue?"
+  },
+  "step_count": 2,
+  "metadata": {
+    "source_version": "3.1.0"
+  }
+}

@@ -191,10 +191,18 @@ metadata and atomic removal of obsolete resumable checkpoints.
 Distributed Hosts may additionally provide a `RunLeaseStore`. Each turn claims
 exclusive ownership with a fencing token, renews it in the background and
 releases it when the turn settles or suspends. Expired leases can be taken over,
-while stale workers cannot renew or release a newer generation. Persisted state
-upgrades are explicit through `StateMigrationRegistry`; migration handlers are
-chained by state kind and schema version and never run implicitly without Host
-registration.
+while stale workers cannot renew or release a newer generation. The active
+execution fence is propagated to every `ToolExecutionContext` and atomic
+`RuntimeStateMutation`; durable adapters reject obsolete generations and write
+tools can forward the same token to downstream storage. Persisted state upgrades
+are explicit through `StateMigrationRegistry`; Core ships its own historical
+v1-to-v2 migration chain and Hosts may register additional domain migrations.
+
+`astream()` uses a bounded queue so a slow Host applies backpressure instead of
+allowing unbounded event growth. Closing a stream requests cooperative run
+cancellation and waits for a configurable acknowledgement timeout. Providers
+and tools still use the canonical synchronous state machine, preserving one
+execution implementation across sync and async Hosts.
 
 The runtime also projects a stable `ui_state` contract. Completed, failed and
 canceled runs release the composer; explicit user-input interruptions remain
@@ -250,7 +258,7 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v3`; the current package version is
-`3.2.0`. Consumers import from `harness_core.runtime_sdk`,
+`3.3.0`. Consumers import from `harness_core.runtime_sdk`,
 `harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
 orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
 `harness_core.mcp_sdk`. The versioned public

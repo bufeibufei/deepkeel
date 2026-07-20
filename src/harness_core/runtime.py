@@ -1,9 +1,11 @@
 from __future__ import annotations
 import asyncio
+from concurrent.futures import TimeoutError as FutureTimeoutError
 import hashlib
 import json
 import time
 from collections.abc import AsyncIterator
+from threading import Event as ThreadEvent
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -48,8 +50,8 @@ from harness_core.model import (
     RoutedModelGateway,
 )
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
-from harness_core.leases import RunLeaseGuard, RunLeaseStore
-from harness_core.migrations import StateMigrationRegistry
+from harness_core.leases import ExecutionFence, RunLeaseGuard, RunLeaseStore
+from harness_core.migrations import StateMigrationRegistry, default_state_migrations
 from harness_core.persistence import (
     DurableCheckpointStore,
     checkpoint_from_durable_state,
@@ -159,6 +161,8 @@ class HarnessRuntime:
         run_lease_owner_id: str = "",
         run_lease_ttl_seconds: float = 60.0,
         state_migrations: StateMigrationRegistry | None = None,
+        async_stream_buffer_size: int = 128,
+        async_cancel_timeout_seconds: float = 5.0,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
@@ -184,7 +188,9 @@ class HarnessRuntime:
         self.run_lease_store = run_lease_store
         self.run_lease_owner_id = str(run_lease_owner_id or f"runtime-{uuid4().hex}")
         self.run_lease_ttl_seconds = float(run_lease_ttl_seconds)
-        self.state_migrations = state_migrations
+        self.state_migrations = state_migrations or default_state_migrations()
+        self.async_stream_buffer_size = max(1, int(async_stream_buffer_size))
+        self.async_cancel_timeout_seconds = max(0.1, float(async_cancel_timeout_seconds))
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
 
@@ -233,6 +239,7 @@ class HarnessRuntime:
                 providers=providers,
                 session=session,
                 event_sink=guarded_sink,
+                execution_fence=lease_guard,
             )
             lease_guard.raise_if_lost()
             return result
@@ -268,10 +275,25 @@ class HarnessRuntime:
         """Stream runtime events with cooperative cancellation for async hosts."""
         prepared = self._ensure_request_identity(request)
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(
+            maxsize=self.async_stream_buffer_size
+        )
+        closed = ThreadEvent()
 
         def sink(event: dict[str, Any]) -> None:
-            loop.call_soon_threadsafe(queue.put_nowait, ("event", event))
+            if closed.is_set():
+                self.run_control.raise_if_cancelled(prepared.run_id, force=True)
+                return
+            future = asyncio.run_coroutine_threadsafe(queue.put(("event", event)), loop)
+            while True:
+                try:
+                    future.result(timeout=0.1)
+                    return
+                except FutureTimeoutError:
+                    if closed.is_set():
+                        future.cancel()
+                        self.run_control.raise_if_cancelled(prepared.run_id, force=True)
+                        return
 
         async def execute() -> None:
             try:
@@ -282,9 +304,11 @@ class HarnessRuntime:
                     session=session,
                     event_sink=sink,
                 )
-                await queue.put(("result", result))
+                if not closed.is_set():
+                    await queue.put(("result", result))
             except BaseException as exc:
-                await queue.put(("error", exc))
+                if not closed.is_set():
+                    await queue.put(("error", exc))
 
         task = asyncio.create_task(execute())
         completed = False
@@ -306,11 +330,18 @@ class HarnessRuntime:
                 completed = True
                 return
         finally:
+            closed.set()
             if not completed and not task.done():
                 cancel = getattr(self.run_control, "cancel", None)
                 if callable(cancel):
                     cancel(prepared.run_id)
-                task.cancel()
+                try:
+                    await asyncio.wait_for(
+                        asyncio.shield(task),
+                        timeout=self.async_cancel_timeout_seconds,
+                    )
+                except (TimeoutError, asyncio.CancelledError):
+                    task.cancel()
 
     def _ensure_request_identity(self, request: RuntimeRequest) -> RuntimeRequest:
         bundle = dict(request.context_bundle)
@@ -348,6 +379,7 @@ class HarnessRuntime:
         providers: dict[str, Any] | None = None,
         session: Any = None,
         event_sink: EventSink | None = None,
+        execution_fence: ExecutionFence | None = None,
     ) -> RuntimeResult:
         """Execute one turn through the typed, product-neutral public API."""
         question = request.question
@@ -390,6 +422,7 @@ class HarnessRuntime:
                 model_policy=model_policy,
                 session=session,
                 event_sink=event_sink,
+                execution_fence=execution_fence,
             )
         run_id = str(
             request.run_id
@@ -445,6 +478,8 @@ class HarnessRuntime:
 
         def emit(event: dict[str, Any]) -> None:
             nonlocal answer_delta_streamed, telemetry_error_count, telemetry_last_error
+            if execution_fence is not None:
+                execution_fence.raise_if_lost()
             self.run_control.raise_if_cancelled(run_id)
             projected = project_runtime_event(event)
             payload = as_dict(projected.get("payload"))
@@ -514,6 +549,7 @@ class HarnessRuntime:
             budget_limits=budget_limits,
             deadline_monotonic=deadline_monotonic,
             run_control=self.run_control,
+            execution_fence=execution_fence,
         )
 
         recovery_source = ""
@@ -731,6 +767,7 @@ class HarnessRuntime:
             session=session,
             user_id=str(user_id or "local-device"),
             context_bundle=bundle,
+            execution_fence=execution_fence,
         )
         if result.status.value in {"completed", "failed", "canceled"}:
             self.cleanup_run(
@@ -833,6 +870,7 @@ class HarnessRuntime:
         model_policy: dict[str, Any] | None,
         session: Any,
         event_sink: EventSink | None,
+        execution_fence: ExecutionFence | None,
     ) -> RuntimeResult:
         run_id = str(
             context_bundle.get("agent_session_id")
@@ -938,6 +976,7 @@ class HarnessRuntime:
             session=session,
             user_id=str(user_id or "local-device"),
             context_bundle=context_bundle,
+            execution_fence=execution_fence,
         )
         return result
 
@@ -976,6 +1015,7 @@ class HarnessRuntime:
         session: Any,
         user_id: str,
         context_bundle: dict[str, Any],
+        execution_fence: ExecutionFence | None = None,
     ) -> None:
         status = result.status.value
         if status not in {
@@ -995,6 +1035,8 @@ class HarnessRuntime:
             thread_id=thread_id,
         )
         if self.runtime_state_store is not None:
+            if execution_fence is not None:
+                execution_fence.raise_if_lost()
             resume_token = str(result.checkpoint.get("resume_token") or "")
             terminal = status in {"completed", "failed", "canceled"}
             if terminal and getattr(
@@ -1049,6 +1091,12 @@ class HarnessRuntime:
                         ),
                         expected_sequence=_optional_int(
                             context_bundle.get("runtime_state_sequence")
+                        ),
+                        fence_token=(
+                            execution_fence.token if execution_fence is not None else ""
+                        ),
+                        fence_generation=(
+                            execution_fence.generation if execution_fence is not None else 0
                         ),
                     ),
                     session=session,

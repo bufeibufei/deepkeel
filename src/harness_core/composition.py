@@ -53,6 +53,8 @@ class RuntimePortChanges(TypedDict, total=False):
     run_lease_owner_id: str
     run_lease_ttl_seconds: float
     state_migrations: StateMigrationRegistry | None
+    async_stream_buffer_size: int
+    async_cancel_timeout_seconds: float
     capability_services: Mapping[str, object]
 
 
@@ -75,6 +77,8 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     run_lease_owner_id: str
     run_lease_ttl_seconds: float
     state_migrations: StateMigrationRegistry | None
+    async_stream_buffer_size: int
+    async_cancel_timeout_seconds: float
     capability_services: Mapping[str, object]
 
 
@@ -103,6 +107,8 @@ class RuntimePorts:
     run_lease_owner_id: str = ""
     run_lease_ttl_seconds: float = 60.0
     state_migrations: StateMigrationRegistry | None = None
+    async_stream_buffer_size: int = 128
+    async_cancel_timeout_seconds: float = 5.0
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -244,6 +250,8 @@ class HarnessRuntimeBuilder:
             run_lease_owner_id=self._ports.run_lease_owner_id,
             run_lease_ttl_seconds=self._ports.run_lease_ttl_seconds,
             state_migrations=self._ports.state_migrations,
+            async_stream_buffer_size=self._ports.async_stream_buffer_size,
+            async_cancel_timeout_seconds=self._ports.async_cancel_timeout_seconds,
         )
 
     def _install_pack(

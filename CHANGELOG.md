@@ -1,5 +1,15 @@
 # Changelog
 
+## 3.3.0
+
+- Extended run leases into an end-to-end execution fence available to tool
+  handlers and atomic runtime-state mutations; stale generations are rejected.
+- Added bounded async stream queues, producer backpressure, cooperative
+  disconnect cancellation and configurable cancellation acknowledgement timeouts.
+- Added built-in v1-to-v2 persisted-state migrations and real compatibility
+  fixtures for suspended and asynchronous runs.
+- Expanded fencing, disconnect and crash-recovery conformance coverage.
+
 ## 3.2.0
 
 - Added distributed run leases with fencing tokens, heartbeat renewal, expiry

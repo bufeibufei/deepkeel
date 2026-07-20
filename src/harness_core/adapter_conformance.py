@@ -57,6 +57,8 @@ def verify_runtime_state_store_contract(
         event_type="conformance.started",
         target_status="waiting_user_input",
         checkpoint_state={"phase": "waiting"},
+        fence_token="worker-a-token",
+        fence_generation=1,
     )
     receipt = store.commit(first, session=session, user_id=user_id)
     replay = store.commit(first, session=session, user_id=user_id)
@@ -74,6 +76,8 @@ def verify_runtime_state_store_contract(
         checkpoint_state={"phase": "completed"},
         expected_version=receipt.version,
         expected_sequence=receipt.sequence,
+        fence_token="worker-a-token",
+        fence_generation=1,
     )
     settled = store.commit(second, session=session, user_id=user_id)
     assert settled.version > receipt.version
@@ -81,6 +85,8 @@ def verify_runtime_state_store_contract(
     snapshot = store.load_snapshot(run_id, session=session, user_id=user_id)
     assert snapshot.settled is True
     assert snapshot.settlement_status == "completed"
+    assert snapshot.fence_generation == 1
+    assert snapshot.fence_token == "worker-a-token"
 
     stale = RuntimeStateMutation(
         mutation_id=f"conformance:{uuid4().hex}",
@@ -92,8 +98,33 @@ def verify_runtime_state_store_contract(
     try:
         store.commit(stale, session=session, user_id=user_id)
     except RuntimeStateConflict:
+        pass
+    else:
+        raise AssertionError("runtime state store accepted a stale mutation")
+
+    fence_run_id = f"{run_id}:fence"
+    current_owner = RuntimeStateMutation(
+        mutation_id=f"conformance:{uuid4().hex}",
+        run_id=fence_run_id,
+        event_type="conformance.claimed",
+        target_status="task_running",
+        fence_token="worker-b-token",
+        fence_generation=2,
+    )
+    store.commit(current_owner, session=session, user_id=user_id)
+    stale_owner = RuntimeStateMutation(
+        mutation_id=f"conformance:{uuid4().hex}",
+        run_id=fence_run_id,
+        event_type="conformance.stale-owner",
+        target_status="task_running",
+        fence_token="worker-a-token",
+        fence_generation=1,
+    )
+    try:
+        store.commit(stale_owner, session=session, user_id=user_id)
+    except RuntimeStateConflict:
         return
-    raise AssertionError("runtime state store accepted a stale mutation")
+    raise AssertionError("runtime state store accepted an obsolete fencing generation")
 
 
 def verify_tool_execution_store_contract(

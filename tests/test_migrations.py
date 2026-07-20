@@ -1,8 +1,15 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
-from harness_core.adapter_sdk import StateMigrationError, StateMigrationRegistry
+from harness_core.adapter_sdk import (
+    StateMigrationError,
+    StateMigrationRegistry,
+    default_state_migrations,
+)
 from harness_core.persistence import (
     CHECKPOINT_SCHEMA_VERSION,
     checkpoint_from_durable_state,
@@ -89,3 +96,37 @@ def test_checkpoint_recovery_uses_registered_outer_and_inner_migrations() -> Non
 
     assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION
     assert context.observations[-1].summary == "confirmed"
+
+
+def test_shipped_checkpoint_fixture_migrates_and_resumes() -> None:
+    fixture = _state_fixture("checkpoint-v1-waiting-user-action.json")
+    context = restore_run_context(
+        checkpoint=fixture,
+        resume_payload={"status": "succeeded", "summary": "confirmed"},
+        run_id="fixture-waiting-run",
+        thread_id="fixture-thread",
+        turn_id="fixture-turn",
+        user_id="fixture-user",
+        migrations=default_state_migrations(),
+    )
+
+    assert context.step_count == 2
+    assert context.observations[-1].summary == "confirmed"
+    assert context.metadata["source_version"] == "3.1.0"
+
+
+def test_shipped_durable_fixture_migrates_outer_and_inner_contracts() -> None:
+    durable = _state_fixture("durable-v1-task-running.json")
+    checkpoint = checkpoint_from_durable_state(
+        durable,
+        migrations=default_state_migrations(),
+    )
+
+    assert checkpoint["schema_version"] == CHECKPOINT_SCHEMA_VERSION
+    assert checkpoint["pending_async"]["tool_call_id"] == "call-async-1"
+    assert checkpoint["metadata"]["source_version"] == "3.1.0"
+
+
+def _state_fixture(name: str) -> dict:
+    path = Path(__file__).parent / "fixtures" / "state" / name
+    return json.loads(path.read_text(encoding="utf-8"))

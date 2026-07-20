@@ -1,0 +1,21 @@
+{
+  "schema_version": "harness-durable-checkpoint-v1",
+  "run_id": "fixture-task-run",
+  "thread_id": "fixture-thread",
+  "checkpoint": {
+    "schema_version": "harness-checkpoint-v1",
+    "run_id": "fixture-task-run",
+    "messages": [],
+    "observations": [],
+    "artifacts": [],
+    "pending_async": {
+      "tool_call_id": "call-async-1",
+      "tool_name": "fixture.generate",
+      "status": "pending"
+    },
+    "step_count": 3,
+    "metadata": {
+      "source_version": "3.1.0"
+    }
+  }
+}
