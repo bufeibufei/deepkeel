@@ -24,6 +24,20 @@ class SubAgentCanceledError(RuntimeError):
     pass
 
 
+class DelegationPreflightError(ValueError):
+    """A delegation batch is invalid and no child run has been started."""
+
+    code = "DELEGATION_INPUT_CONTRACT_VIOLATION"
+
+    def __init__(self, issues: list[dict[str, str]]) -> None:
+        self.issues = tuple(dict(item) for item in issues)
+        details = "; ".join(
+            f"{item.get('task_id') or 'unknown'}: {item.get('detail') or 'invalid task'}"
+            for item in issues
+        )
+        super().__init__(f"delegation preflight failed: {details}")
+
+
 @dataclass(slots=True)
 class _DelegationQuota:
     max_model_calls: int | None = None

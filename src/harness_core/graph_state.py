@@ -209,10 +209,26 @@ def _forced_workflow_tool_name(
         phase == "waiting_user_input"
         and int(metadata.get("workflow_clarification_resume_count") or 0) > 0
     )
-    if phase != "repair" and not resumed_after_clarification:
-        return ""
     skill = SkillPolicy.from_snapshot(state.get("skill_activation"))
     decision = evaluate_workflow_completion(skill, state)
+    completion_policy = skill.completion_policy
+    contract_driven = (
+        str(completion_policy.get("clarification_strategy") or "") == "tool_contract"
+        or completion_policy.get("allow_model_clarification") is False
+    )
+    initial_contract_transition = (
+        skill.active
+        and skill.durable
+        and phase in {"", "pending"}
+        and contract_driven
+        and bool(decision.missing_tools)
+    )
+    if (
+        phase != "repair"
+        and not resumed_after_clarification
+        and not initial_contract_transition
+    ):
+        return ""
     missing_tools = decision.missing_tools
     available = {
         str(as_dict(item.get("function")).get("name") or "")

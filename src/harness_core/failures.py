@@ -15,6 +15,7 @@ FailureCategory = Literal[
     "timeout",
     "upstream",
     "contract",
+    "model_contract",
     "canceled",
     "internal",
 ]
@@ -88,6 +89,18 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             category="budget",
             retryable=False,
             user_message="The run exhausted its budget. Narrow the request and try again.",
+            detail=detail,
+            exception_type=exception_type,
+        )
+    if explicit_code == "MODEL_TOOL_CONTRACT_VIOLATION":
+        return RuntimeFailure(
+            code=explicit_code,
+            category="model_contract",
+            retryable=True,
+            user_message=(
+                "The model did not honor the required tool call. "
+                "The run ended safely and may be retried."
+            ),
             detail=detail,
             exception_type=exception_type,
         )

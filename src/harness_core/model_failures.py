@@ -14,10 +14,32 @@ class ModelFailureInfo:
     public_message: str
 
 
+class ModelToolContractError(RuntimeError):
+    """The provider accepted a forced tool request but did not honor it."""
+
+    code = "MODEL_TOOL_CONTRACT_VIOLATION"
+
+    def __init__(self, expected_tool: str, actual_tools: list[str]) -> None:
+        actual = ", ".join(actual_tools) if actual_tools else "none"
+        super().__init__(
+            f"forced tool contract expected {expected_tool!r}, provider returned {actual}"
+        )
+        self.expected_tool = expected_tool
+        self.actual_tools = tuple(actual_tools)
+
+
 def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
     status_code = _status_code(exc)
     message = str(exc or "").lower()
     retry_after = _retry_after_seconds(exc)
+    if isinstance(exc, ModelToolContractError):
+        return ModelFailureInfo(
+            "tool_contract_violation",
+            True,
+            status_code,
+            0.0,
+            "The model did not honor the required tool call; a fallback was attempted.",
+        )
     if status_code == 429 or "too many requests" in message or "rate limit" in message:
         return ModelFailureInfo(
             "rate_limited",

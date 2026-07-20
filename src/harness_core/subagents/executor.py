@@ -17,7 +17,7 @@ from harness_core.subagents.contracts import (
     SubAgentResult, SubAgentSpec,
 )
 from harness_core.subagents.execution_types import (
-    EventSink, SubAgentCanceledError, SubAgentEmptyResponseError,
+    DelegationPreflightError, EventSink, SubAgentCanceledError, SubAgentEmptyResponseError,
     SubAgentOutputError, _DelegationQuota,
 )
 from harness_core.subagents.execution_support import (
@@ -70,6 +70,22 @@ class SubAgentExecutor:
             raise ValueError(f"subagent depth exceeds limit: {self.max_depth}")
         if len(request.tasks) > self.max_parallel:
             raise ValueError(f"subagent task count exceeds limit: {self.max_parallel}")
+        try:
+            self._preflight_request(request)
+        except DelegationPreflightError as exc:
+            self._emit(
+                event_sink,
+                "subagent.batch.rejected",
+                "Delegation rejected",
+                "The specialist task contract is invalid; no child run was started.",
+                request,
+                visible=False,
+                extra={
+                    "error_code": exc.code,
+                    "issues": [dict(item) for item in exc.issues],
+                },
+            )
+            raise
         started_at = time.perf_counter()
         root_run_id = request.root_run_id or context.run_id
         parent_run_id = request.parent_run_id or context.run_id
@@ -277,6 +293,44 @@ class SubAgentExecutor:
             },
         )
         return batch
+
+    def _preflight_request(self, request: DelegationRequest) -> None:
+        issues: list[dict[str, str]] = []
+        seen_task_ids: set[str] = set()
+        for task in request.tasks:
+            if task.id in seen_task_ids:
+                issues.append(
+                    {
+                        "task_id": task.id,
+                        "agent_id": task.agent_id,
+                        "detail": "duplicate task id",
+                    }
+                )
+                continue
+            seen_task_ids.add(task.id)
+            try:
+                spec = self.registry.get(task.agent_id)
+            except KeyError:
+                issues.append(
+                    {
+                        "task_id": task.id,
+                        "agent_id": task.agent_id,
+                        "detail": "subagent is not registered",
+                    }
+                )
+                continue
+            try:
+                _validate_input(task.input_data, spec.input_contract)
+            except RuntimeError as exc:
+                issues.append(
+                    {
+                        "task_id": task.id,
+                        "agent_id": task.agent_id,
+                        "detail": str(exc),
+                    }
+                )
+        if issues:
+            raise DelegationPreflightError(issues)
 
     def _execute_one(
         self,

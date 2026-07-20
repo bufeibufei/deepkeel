@@ -27,7 +27,11 @@ from harness_core.budget import (
 from harness_core.context_window import ConservativeTokenEstimator
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
-from harness_core.model_failures import classify_model_failure, provider_fingerprint
+from harness_core.model_failures import (
+    ModelToolContractError,
+    classify_model_failure,
+    provider_fingerprint,
+)
 from harness_core.model_routing import (
     AdaptiveStepModelRouter,
     ModelRouteDecision,
@@ -287,6 +291,9 @@ class NativeChatProviderAdapter:
             )
         provider_messages = provider_messages_from_agent(messages, system_prompt=system_prompt)
         tool_choice = _tool_choice(step_context)
+        forced_tool_name = str(
+            step_context.forced_tool_name if step_context is not None else ""
+        ).strip()
         turn = self.invoke(
             ModelInvocation(
                 messages=provider_messages,
@@ -294,8 +301,9 @@ class NativeChatProviderAdapter:
                 tool_choice=tool_choice,
                 request_timeout=request_timeout,
             ),
-            on_text_delta=checked_delta,
+            on_text_delta=None if forced_tool_name else checked_delta,
         )
+        _validate_forced_tool_turn(turn, step_context)
         ensure_time_remaining(deadline_monotonic)
         return turn
 
@@ -553,12 +561,14 @@ class RoutedModelGateway:
 
             visible_delta_emitted = False
             streamed_output_parts: list[str] = []
+            forced_tool_name = str(step_context.forced_tool_name or "").strip()
 
             def tracked_delta(delta: str) -> None:
                 nonlocal visible_delta_emitted
                 ensure_time_remaining(step_context.deadline_monotonic)
                 if delta:
-                    visible_delta_emitted = True
+                    if on_text_delta is not None and not forced_tool_name:
+                        visible_delta_emitted = True
                     streamed_output_parts.append(delta)
                     if (
                         max_output_tokens is not None
@@ -578,7 +588,7 @@ class RoutedModelGateway:
                                 ),
                             )
                         )
-                if on_text_delta is not None:
+                if on_text_delta is not None and not forced_tool_name:
                     on_text_delta(delta)
 
             try:
@@ -625,6 +635,7 @@ class RoutedModelGateway:
                     invocation,
                     on_text_delta=tracked_delta,
                 )
+                _validate_forced_tool_turn(turn, step_context)
                 ensure_time_remaining(step_context.deadline_monotonic)
             except Exception as exc:
                 failed_output_tokens = (
@@ -826,6 +837,20 @@ def _tool_choice(step_context: ModelStepContext | None) -> str | dict[str, Any]:
         "type": "function",
         "function": {"name": forced_tool_name},
     }
+
+
+def _validate_forced_tool_turn(
+    turn: ModelTurn,
+    step_context: ModelStepContext | None,
+) -> None:
+    expected = str(
+        step_context.forced_tool_name if step_context is not None else ""
+    ).strip()
+    if not expected:
+        return
+    actual = [str(call.name or "").strip() for call in turn.tool_calls]
+    if len(actual) != 1 or actual[0] != expected:
+        raise ModelToolContractError(expected, actual)
 
 
 def _model_call_limit(model_policy: dict[str, Any]) -> float | None:
