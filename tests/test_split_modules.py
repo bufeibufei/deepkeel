@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from harness_core.contracts import AgentMessage, RunContext, RunStatus
@@ -16,7 +18,7 @@ from harness_core.runtime_api import RuntimeResultStatus
 from harness_core.runtime_policy import _budget_limits, _resolved_model_policy
 from harness_core.runtime_results import project_harness_result
 from harness_core.subagents.contracts import DelegationTask
-from harness_core.subagents.execution_support import _child_run_id
+from harness_core.subagents.execution_support import _child_run_id, _invoke_provider
 from harness_core.subagents.execution_types import _DelegationQuota
 from harness_core.subagents.output_validation import (
     _confidence,
@@ -160,3 +162,87 @@ def test_subagent_child_run_id_is_stable_and_task_scoped() -> None:
     assert _child_run_id("parent", "delegation", first) != _child_run_id(
         "parent", "delegation", second
     )
+
+
+def test_subagent_complete_falls_back_when_json_schema_is_unsupported() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.formats: list[dict] = []
+
+        def complete(self, _system: str, _user: str, **kwargs) -> str:
+            response_format = kwargs["response_format"]
+            self.formats.append(response_format)
+            if response_format["type"] == "json_schema":
+                raise RuntimeError(
+                    "HTTP Error 400: The parameter `response_format.type` is not valid: "
+                    "`json_schema` is not supported by this model."
+                )
+            return '{"conclusion":"usable"}'
+
+    provider = Provider()
+    result = _invoke_provider(
+        provider,
+        "system",
+        "user",
+        timeout_seconds=30,
+        max_tokens=800,
+        output_schema={"type": "object"},
+    )
+
+    assert result == '{"conclusion":"usable"}'
+    assert [item["type"] for item in provider.formats] == [
+        "json_schema",
+        "json_object",
+    ]
+
+
+def test_subagent_complete_chat_falls_back_when_json_schema_is_unsupported() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.formats: list[dict] = []
+
+        def complete_chat(self, _messages: list[dict], **kwargs) -> dict:
+            response_format = kwargs["response_format"]
+            self.formats.append(response_format)
+            if response_format["type"] == "json_schema":
+                raise RuntimeError("response_format json_schema unsupported")
+            return {"message": {"parsed": {"conclusion": "usable"}}}
+
+    provider = Provider()
+    result = _invoke_provider(
+        provider,
+        "system",
+        "user",
+        timeout_seconds=30,
+        max_tokens=800,
+        output_schema={"type": "object"},
+    )
+
+    assert json.loads(result) == {"conclusion": "usable"}
+    assert [item["type"] for item in provider.formats] == [
+        "json_schema",
+        "json_object",
+    ]
+
+
+def test_subagent_does_not_fallback_for_unrelated_provider_errors() -> None:
+    class Provider:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def complete(self, _system: str, _user: str, **_kwargs) -> str:
+            self.calls += 1
+            raise RuntimeError("HTTP Error 401: invalid api key")
+
+    provider = Provider()
+    with pytest.raises(RuntimeError, match="invalid api key"):
+        _invoke_provider(
+            provider,
+            "system",
+            "user",
+            timeout_seconds=30,
+            max_tokens=800,
+            output_schema={"type": "object"},
+        )
+
+    assert provider.calls == 1

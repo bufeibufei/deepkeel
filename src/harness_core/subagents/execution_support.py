@@ -292,47 +292,82 @@ def _invoke_provider(
         kwargs = {
             "request_timeout": timeout_seconds,
             "max_tokens": completion_budget,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "subagent_result",
-                    "strict": True,
-                    "schema": output_schema,
-                },
-            },
+            "response_format": _strict_response_format(output_schema),
         }
         supported = _supported_kwargs(complete, kwargs)
-        return str(complete(system_prompt, user_prompt, **supported) or "").strip()
+        try:
+            return str(complete(system_prompt, user_prompt, **supported) or "").strip()
+        except Exception as error:
+            if not _response_format_not_supported(error):
+                raise
+            fallback = _supported_kwargs(
+                complete,
+                {**kwargs, "response_format": {"type": "json_object"}},
+            )
+            return str(complete(system_prompt, user_prompt, **fallback) or "").strip()
     complete_chat = getattr(provider, "complete_chat", None)
     if callable(complete_chat):
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "subagent_result",
-                "strict": True,
-                "schema": output_schema,
-            },
+        common_kwargs = {
+            "tools": [],
+            "tool_choice": "none",
+            "request_timeout": timeout_seconds,
+            "max_tokens": completion_budget,
         }
-        kwargs = _supported_kwargs(
-            complete_chat,
-            {
-                "tools": [],
-                "tool_choice": "none",
-                "request_timeout": timeout_seconds,
-                "max_tokens": completion_budget,
-                "response_format": response_format,
-            },
-        )
-        response = complete_chat(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}],
-            **kwargs,
-        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        try:
+            response = complete_chat(
+                messages,
+                **_supported_kwargs(
+                    complete_chat,
+                    {
+                        **common_kwargs,
+                        "response_format": _strict_response_format(output_schema),
+                    },
+                ),
+            )
+        except Exception as error:
+            if not _response_format_not_supported(error):
+                raise
+            response = complete_chat(
+                messages,
+                **_supported_kwargs(
+                    complete_chat,
+                    {
+                        **common_kwargs,
+                        "response_format": {"type": "json_object"},
+                    },
+                ),
+            )
         message = as_dict(response.get("message")) if isinstance(response, dict) else {}
         parsed = message.get("parsed") if isinstance(message, dict) else None
         if isinstance(parsed, (dict, list)):
             return json.dumps(parsed, ensure_ascii=False)
         return str(message.get("content") or "").strip()
     raise RuntimeError("subagent provider does not expose complete or complete_chat")
+
+
+def _strict_response_format(output_schema: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "subagent_result",
+            "strict": True,
+            "schema": output_schema,
+        },
+    }
+
+
+def _response_format_not_supported(error: Exception) -> bool:
+    message = str(error or "").strip().lower()
+    if "response_format" not in message and "response format" not in message:
+        return False
+    return "json_schema" in message and any(
+        marker in message
+        for marker in ("not supported", "unsupported", "not valid", "invalid")
+    )
 
 
 def _subagent_completion_budget(requested_tokens: int) -> int:
