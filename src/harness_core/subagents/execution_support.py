@@ -7,6 +7,16 @@ from typing import Any, Callable
 
 from harness_core.budget import MODEL_CALLS, BudgetRequest
 from harness_core.contracts import AgentMessage, ToolCall
+from harness_core.model_capabilities import (
+    InMemoryModelCapabilityRegistry,
+    ResponseContract,
+    StructuredOutputAttempt,
+    StructuredOutputInvocation,
+    negotiate_structured_output,
+    response_format_not_supported,
+    response_format_payload,
+    structured_output_prompt,
+)
 from harness_core.subagents.contracts import DelegationTask, SubAgentSpec
 from harness_core.subagents.execution_types import (
     EventSink, SubAgentEmptyResponseError, _DelegationQuota,
@@ -285,34 +295,73 @@ def _invoke_provider(
     timeout_seconds: int,
     max_tokens: int,
     output_schema: dict[str, Any],
-) -> str:
+    capability_registry: InMemoryModelCapabilityRegistry,
+) -> StructuredOutputInvocation:
     completion_budget = _subagent_completion_budget(max_tokens)
+    contract = ResponseContract(
+        name="subagent_result",
+        schema=output_schema,
+        strictness="prefer_strict",
+    )
+    decision = negotiate_structured_output(
+        capability_registry.capabilities_for(provider),
+        contract,
+    )
+    attempts: list[StructuredOutputAttempt] = []
+    for mode in decision.candidate_formats:
+        try:
+            text = _invoke_provider_once(
+                provider,
+                structured_output_prompt(system_prompt, contract, mode),
+                user_prompt,
+                timeout_seconds=timeout_seconds,
+                completion_budget=completion_budget,
+                response_format=response_format_payload(mode, contract),
+            )
+        except Exception as exc:
+            if not response_format_not_supported(exc):
+                raise
+            capability_registry.mark_response_format(provider, mode, supported=False)
+            attempts.append(
+                StructuredOutputAttempt(
+                    response_format=mode,
+                    outcome="unsupported",
+                    detail=str(exc)[:300],
+                )
+            )
+            continue
+        current = capability_registry.mark_response_format(provider, mode, supported=True)
+        attempts.append(StructuredOutputAttempt(response_format=mode, outcome="completed"))
+        return StructuredOutputInvocation(
+            text=text,
+            requested_format=decision.requested_format,
+            effective_format=mode,
+            capability_source=current.source,
+            attempts=attempts,
+        )
+    raise RuntimeError("subagent provider has no supported structured output format")
+
+
+def _invoke_provider_once(
+    provider: Any,
+    system_prompt: str,
+    user_prompt: str,
+    *,
+    timeout_seconds: int,
+    completion_budget: int,
+    response_format: dict[str, Any] | None,
+) -> str:
     complete = getattr(provider, "complete", None)
     if callable(complete):
         kwargs = {
             "request_timeout": timeout_seconds,
             "max_tokens": completion_budget,
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "subagent_result",
-                    "strict": True,
-                    "schema": output_schema,
-                },
-            },
+            "response_format": response_format,
         }
         supported = _supported_kwargs(complete, kwargs)
         return str(complete(system_prompt, user_prompt, **supported) or "").strip()
     complete_chat = getattr(provider, "complete_chat", None)
     if callable(complete_chat):
-        response_format = {
-            "type": "json_schema",
-            "json_schema": {
-                "name": "subagent_result",
-                "strict": True,
-                "schema": output_schema,
-            },
-        }
         kwargs = _supported_kwargs(
             complete_chat,
             {

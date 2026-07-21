@@ -10,6 +10,7 @@ from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from harness_core.failures import RunCanceledError
 from harness_core.model import NativeChatProviderAdapter, model_tools_from_registry
+from harness_core.model_capabilities import InMemoryModelCapabilityRegistry
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import DelegationPolicy
 from harness_core.subagents.contracts import (
@@ -34,6 +35,7 @@ from harness_core.subagents.output_validation import (
 from harness_core.subagents.registry import SubAgentRegistry
 from harness_core.subagents.store import SubAgentRunStore
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.type_narrowing import as_dict
 
 class SubAgentExecutor:
     """Runs bounded specialists while the parent Agent retains final-answer ownership."""
@@ -46,12 +48,14 @@ class SubAgentExecutor:
         tool_executor: ToolExecutor | None = None,
         max_parallel: int = 3,
         max_depth: int = 1,
+        model_capabilities: InMemoryModelCapabilityRegistry | None = None,
     ) -> None:
         self.registry = registry
         self.run_store = run_store
         self.tool_executor = tool_executor
         self.max_parallel = max(1, min(int(max_parallel), 3))
         self.max_depth = max(1, min(int(max_depth), 1))
+        self.model_capabilities = model_capabilities or InMemoryModelCapabilityRegistry()
 
     def execute_many(
         self,
@@ -368,7 +372,7 @@ class SubAgentExecutor:
         system_prompt = spec.system_prompt or _default_system_prompt(spec)
         schema = _output_schema(spec)
         resume_state = self._load_child_checkpoint(child_run_id)
-        raw, tool_trace, model_calls = self._run_bounded_agent(
+        raw, tool_trace, model_calls, structured_output = self._run_bounded_agent(
             task,
             spec=spec,
             provider=provider,
@@ -423,7 +427,7 @@ class SubAgentExecutor:
                     quota=quota,
                 )
                 repair_prompt = _repair_prompt(prompt, raw, schema, str(first_error), tool_trace)
-                repaired = _invoke_provider(
+                repair_invocation = _invoke_provider(
                     provider,
                     system_prompt,
                     repair_prompt,
@@ -433,7 +437,10 @@ class SubAgentExecutor:
                     ),
                     max_tokens=spec.max_tokens,
                     output_schema=schema,
+                    capability_registry=self.model_capabilities,
                 )
+                repaired = repair_invocation.text
+                structured_output["repair"] = repair_invocation.diagnostics()
                 self._raise_if_canceled(child_run_id, parent_run_id, context=context)
                 ensure_time_remaining(context.deadline_monotonic)
                 model_calls += 1
@@ -449,6 +456,7 @@ class SubAgentExecutor:
                         "tool_trace": tool_trace,
                         "model_calls": model_calls,
                         "tool_calls": len(tool_trace),
+                        "structured_output": structured_output,
                     },
                 )
                 try:
@@ -504,6 +512,7 @@ class SubAgentExecutor:
                 "read_only": spec.read_only,
                 "tool_trace": tool_trace,
                 "model_calls": model_calls,
+                "structured_output": structured_output,
                 "output_outcome": output_outcome,
                 "output_diagnostics": output_diagnostics,
             },
@@ -527,7 +536,7 @@ class SubAgentExecutor:
         parent_run_id: str,
         resume_state: dict[str, Any] | None,
         quota: _DelegationQuota | None,
-    ) -> tuple[str, list[dict[str, Any]], int]:
+    ) -> tuple[str, list[dict[str, Any]], int, dict[str, Any]]:
         allowed = set(spec.tool_allowlist)
         tool_executor = self.tool_executor
         native_tools = bool(
@@ -547,6 +556,7 @@ class SubAgentExecutor:
                 str(restored.get("raw_text") or ""),
                 _dict_list(restored.get("tool_trace")),
                 int(restored.get("model_calls") or 0),
+                as_dict(restored.get("structured_output")),
             )
         if not native_tools:
             model_calls = int(restored.get("model_calls") or 0)
@@ -563,7 +573,7 @@ class SubAgentExecutor:
                     quota=quota,
                 )
                 try:
-                    raw = _invoke_provider(
+                    invocation = _invoke_provider(
                         provider,
                         system_prompt,
                         prompt,
@@ -573,7 +583,9 @@ class SubAgentExecutor:
                         ),
                         max_tokens=spec.max_tokens,
                         output_schema=output_schema,
+                        capability_registry=self.model_capabilities,
                     )
+                    raw = invocation.text
                     ensure_time_remaining(context.deadline_monotonic)
                     model_calls += 1
                     if not raw:
@@ -628,9 +640,10 @@ class SubAgentExecutor:
                     "model_calls": model_calls,
                     "tool_calls": 0,
                     "empty_response_retries": empty_response_retries,
+                    "structured_output": invocation.diagnostics(),
                 },
             )
-            return raw, [], model_calls
+            return raw, [], model_calls, invocation.diagnostics()
 
         if tool_executor is None:
             raise RuntimeError("subagent tool executor is unavailable")
@@ -765,7 +778,13 @@ class SubAgentExecutor:
                         ),
                     )
                     if not pending_calls:
-                        return turn.content, tool_trace, model_calls
+                        return turn.content, tool_trace, model_calls, {
+                            "requested_format": "json_schema",
+                            "effective_format": "prompt_only",
+                            "capability_source": "native_tool_loop",
+                            "degraded": True,
+                            "degradation_reason": "native_tool_loop_uses_local_validation",
+                        }
                 if round_index >= spec.max_tool_rounds:
                     break
                 accepted: list[ToolCall] = []
@@ -830,7 +849,13 @@ class SubAgentExecutor:
                         empty_response_retries=empty_response_retries,
                     ),
                 )
-            return "", tool_trace, model_calls
+            return "", tool_trace, model_calls, {
+                "requested_format": "json_schema",
+                "effective_format": "prompt_only",
+                "capability_source": "native_tool_loop",
+                "degraded": True,
+                "degradation_reason": "native_tool_loop_exhausted",
+            }
         finally:
             if owned_session is not None:
                 owned_session.close()

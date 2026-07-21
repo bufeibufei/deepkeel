@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.5.0
+
+- Added provider-neutral model capability contracts and runtime capability
+  learning for concrete provider/model pairs.
+- Added structured-output negotiation with automatic JSON Schema to JSON
+  Object fallback while preserving local schema validation and repair.
+- Added SubAgent diagnostics for requested and effective response formats.
+
 ## 3.4.2
 
 - Preserved async-first runtime execution when a Host supplies a synchronous

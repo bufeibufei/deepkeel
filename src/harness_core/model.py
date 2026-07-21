@@ -33,6 +33,17 @@ from harness_core.model_failures import (
     classify_model_failure,
     provider_fingerprint,
 )
+from harness_core.model_capabilities import (
+    InMemoryModelCapabilityRegistry,
+    ModelCapabilities,
+    ResponseContract,
+    ResponseFormat,
+    StructuredOutputAttempt,
+    negotiate_structured_output,
+    response_format_not_supported,
+    response_format_payload,
+    structured_output_prompt,
+)
 from harness_core.model_routing import (
     AdaptiveStepModelRouter,
     ModelRouteDecision,
@@ -70,6 +81,7 @@ class ModelProviderInfo(BaseModel):
     model_role: str = "reasoning"
     supports_streaming: bool = True
     supports_native_tools: bool = True
+    capabilities: ModelCapabilities = Field(default_factory=ModelCapabilities)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -81,6 +93,7 @@ class ModelInvocation(BaseModel):
     tool_choice: str | dict[str, Any] = "auto"
     request_timeout: int = 300
     max_output_tokens: int | None = None
+    response_contract: ResponseContract | None = None
 
 
 class ModelInvocationEnvelope(BaseModel):
@@ -429,9 +442,16 @@ class ModelGateway(Protocol):
 class NativeChatProviderAdapter:
     """Adapter for providers exposing stream_chat or complete_chat."""
 
-    def __init__(self, provider, *, request_timeout: int = 300):
+    def __init__(
+        self,
+        provider,
+        *,
+        request_timeout: int = 300,
+        model_capabilities: InMemoryModelCapabilityRegistry | None = None,
+    ):
         self.provider = provider
         self.request_timeout = request_timeout
+        self.model_capabilities = model_capabilities or InMemoryModelCapabilityRegistry()
 
     @property
     def info(self) -> ModelProviderInfo:
@@ -447,6 +467,7 @@ class NativeChatProviderAdapter:
             model_role=str(getattr(self.provider, "model_role", "") or "reasoning"),
             supports_streaming=supports_streaming,
             supports_native_tools=supports_streaming or supports_completion,
+            capabilities=self.model_capabilities.capabilities_for(self.provider),
         )
 
     def invoke(
@@ -455,6 +476,13 @@ class NativeChatProviderAdapter:
         *,
         on_text_delta: Callable[[str], None] | None = None,
     ) -> ModelTurn:
+        if request.response_contract is not None and callable(
+            getattr(self.provider, "complete_chat", None)
+        ):
+            return self._invoke_structured(
+                request,
+                on_text_delta=on_text_delta,
+            )
         if callable(getattr(self.provider, "stream_chat", None)):
             events = self._call_stream_chat(
                 request.messages,
@@ -482,6 +510,70 @@ class NativeChatProviderAdapter:
                 on_text_delta=on_text_delta,
             )
         raise RuntimeError("provider does not support native tool calls")
+
+    def _invoke_structured(
+        self,
+        request: ModelInvocation,
+        *,
+        on_text_delta: Callable[[str], None] | None,
+    ) -> ModelTurn:
+        contract = request.response_contract
+        if contract is None:
+            raise RuntimeError("structured model invocation requires a response contract")
+        decision = negotiate_structured_output(
+            self.model_capabilities.capabilities_for(self.provider),
+            contract,
+        )
+        attempts: list[StructuredOutputAttempt] = []
+        for mode in decision.candidate_formats:
+            messages = _messages_with_structured_contract(request.messages, contract, mode)
+            try:
+                response = self._call_complete_chat(
+                    messages,
+                    request.tools,
+                    tool_choice=request.tool_choice,
+                    request_timeout=request.request_timeout,
+                    max_output_tokens=request.max_output_tokens,
+                    response_format=response_format_payload(mode, contract),
+                )
+            except Exception as exc:
+                if not response_format_not_supported(exc):
+                    raise
+                self.model_capabilities.mark_response_format(
+                    self.provider,
+                    mode,
+                    supported=False,
+                )
+                attempts.append(
+                    StructuredOutputAttempt(
+                        response_format=mode,
+                        outcome="unsupported",
+                        detail=str(exc)[:300],
+                    )
+                )
+                continue
+            self.model_capabilities.mark_response_format(
+                self.provider,
+                mode,
+                supported=True,
+            )
+            attempts.append(StructuredOutputAttempt(response_format=mode, outcome="completed"))
+            turn = _turn_from_completion(
+                response,
+                self.provider,
+                on_text_delta=on_text_delta,
+            )
+            diagnostics = {
+                "requested_format": decision.requested_format.value,
+                "effective_format": mode.value,
+                "capability_source": self.info.capabilities.source,
+                "degraded": mode != decision.requested_format,
+                "attempts": [attempt.model_dump(mode="json") for attempt in attempts],
+            }
+            return turn.model_copy(
+                update={"raw": {**turn.raw, "structured_output": diagnostics}}
+            )
+        raise RuntimeError("model provider has no supported structured output format")
 
     def run_turn(
         self,
@@ -561,6 +653,7 @@ class NativeChatProviderAdapter:
         tool_choice: str | dict[str, Any],
         request_timeout: int,
         max_output_tokens: int | None,
+        response_format: dict[str, Any] | None = None,
     ):
         return _call_supported(
             self.provider.complete_chat,
@@ -569,7 +662,27 @@ class NativeChatProviderAdapter:
             tool_choice=tool_choice,
             request_timeout=request_timeout,
             max_tokens=max_output_tokens,
+            response_format=response_format,
         )
+
+
+def _messages_with_structured_contract(
+    messages: list[dict[str, Any]],
+    contract: ResponseContract,
+    response_format: ResponseFormat,
+) -> list[dict[str, Any]]:
+    copied = deepcopy(messages)
+    if response_format == ResponseFormat.JSON_SCHEMA:
+        return copied
+    instruction = structured_output_prompt("", contract, response_format).strip()
+    if copied and str(copied[0].get("role") or "") == "system":
+        copied[0] = {
+            **copied[0],
+            "content": f"{copied[0].get('content') or ''}\n{instruction}".strip(),
+        }
+    else:
+        copied.insert(0, {"role": "system", "content": instruction})
+    return copied
 
 
 class RoutedModelGateway:
