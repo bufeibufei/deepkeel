@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.11.1
+
+- Isolate telemetry destination failures so observability backends cannot interrupt Agent execution.
+
 ## 3.11.0
 
 - Added a portable persistent TraceStore query and retention contract plus a

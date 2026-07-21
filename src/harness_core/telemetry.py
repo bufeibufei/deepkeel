@@ -170,14 +170,20 @@ class LoggingTelemetry:
 
 
 class CompositeTelemetry:
-    """Fan out one telemetry record without coupling Core to a backend."""
+    """Fan out telemetry without allowing an observer to break the runtime."""
 
     def __init__(self, destinations: Iterable[TelemetryPort]) -> None:
         self._destinations = tuple(destinations)
 
     def record(self, event: TelemetryRecord) -> None:
         for destination in self._destinations:
-            destination.record(event)
+            try:
+                destination.record(event)
+            except Exception:
+                logging.getLogger(__name__).exception(
+                    "telemetry destination failed for %s",
+                    event.event_name,
+                )
 
 
 class InMemoryTelemetry:

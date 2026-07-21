@@ -142,3 +142,16 @@ def test_composite_telemetry_fans_out_to_each_destination() -> None:
 
     assert first.snapshot() == (event,)
     assert second.snapshot() == (event,)
+
+
+def test_composite_telemetry_isolates_destination_failures() -> None:
+    class BrokenTelemetry:
+        def record(self, event: TelemetryRecord) -> None:
+            raise RuntimeError("trace backend unavailable")
+
+    healthy = InMemoryTelemetry()
+    event = TelemetryRecord(event_name="run.completed", run_id="run-isolated")
+
+    CompositeTelemetry((BrokenTelemetry(), healthy)).record(event)
+
+    assert healthy.snapshot() == (event,)
