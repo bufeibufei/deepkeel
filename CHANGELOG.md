@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.7.0
+
+- Added the portable `artifact-presentation-v1` Skill Package contract so Capability Packs can describe artifact summaries, fields, and navigation without coupling Core to product UI code.
+- Added strict validation that artifact presentation types match the package artifact contract.
+
 ## 3.6.0
 
 - Added a public runtime-event normalizer for replaying persisted Host journal

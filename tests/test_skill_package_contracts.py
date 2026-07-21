@@ -5,6 +5,7 @@ import json
 import pytest
 
 from harness_core.extension_sdk import (
+    ArtifactPresentationSpec,
     CompiledSkillSpec,
     SkillPackageManifest,
     load_skill_packages,
@@ -27,7 +28,25 @@ def _manifest_payload() -> dict:
             "icon_key": "report",
             "allowed_tools": ["report.build"],
             "required_tools": ["report.build"],
-            "output_contract": {"requires_artifact": "report"},
+            "output_contract": {
+                "requires_artifact": "report",
+                "artifact_presentation": {
+                    "schema_version": "artifact-presentation-v1",
+                    "artifact_type": "report",
+                    "kind": "report",
+                    "label": "Report",
+                    "summary_paths": ["payload.summary", "summary"],
+                    "fields": [
+                        {"label": "Sections", "paths": ["payload.sections"], "format": "count"}
+                    ],
+                    "action": {
+                        "label": "View report",
+                        "running_label": "View progress",
+                        "target_view": "report",
+                        "target_id_paths": ["run_id"],
+                    },
+                },
+            },
             "completion_policy": {
                 "required_transition": "report.build",
                 "waiting_statuses": ["waiting_user_input"],
@@ -55,6 +74,18 @@ def test_skill_package_normalizes_runtime_contract_and_digest() -> None:
     assert manifest.resume_compatible_versions == ["1.0.0"]
     assert runtime["package"]["digest"] == manifest.digest
     assert runtime["package"]["entry_tools"] == ["report.build"]
+    presentation = ArtifactPresentationSpec.model_validate(
+        compiled.output_contract["artifact_presentation"]
+    )
+    assert presentation.fields[0].format == "count"
+
+
+def test_skill_package_rejects_artifact_presentation_type_drift() -> None:
+    payload = _manifest_payload()
+    payload["skill_spec"]["output_contract"]["artifact_presentation"]["artifact_type"] = "other"
+
+    with pytest.raises(ValueError, match="must match requires_artifact"):
+        SkillPackageManifest.model_validate(payload)
 
 
 def test_skill_package_rejects_unknown_runtime_fields() -> None:
@@ -69,9 +100,7 @@ def test_skill_package_rejects_unknown_runtime_fields() -> None:
     "mutate, message",
     [
         (
-            lambda payload: payload["skill_spec"].update(
-                {"required_tools": ["report.hidden"]}
-            ),
+            lambda payload: payload["skill_spec"].update({"required_tools": ["report.hidden"]}),
             "required_tools must also be allowed",
         ),
         (

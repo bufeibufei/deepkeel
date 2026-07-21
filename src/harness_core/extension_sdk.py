@@ -30,6 +30,9 @@ from harness_core.references import (
     ReferenceProjector,
 )
 from harness_core.skill_packages import (
+    ArtifactPresentationActionSpec,
+    ArtifactPresentationFieldSpec,
+    ArtifactPresentationSpec,
     CompiledSkillSpec,
     SkillPackageManifest,
     load_skill_packages,
@@ -47,6 +50,9 @@ from harness_core.tools import (
 )
 
 EXTENSION_SDK_API = (
+    "ArtifactPresentationActionSpec",
+    "ArtifactPresentationFieldSpec",
+    "ArtifactPresentationSpec",
     "ArtifactTypeSpec",
     "CapabilityCatalog",
     "CapabilityContribution",

@@ -49,25 +49,25 @@ class WorkflowCompletionPolicySpec(BaseModel):
 
     @model_validator(mode="after")
     def validate_status_contract(self) -> "WorkflowCompletionPolicySpec":
-        _reject_unknown_statuses("waiting_statuses", self.waiting_statuses, _WORKFLOW_WAITING_STATUSES)
-        _reject_unknown_statuses("running_statuses", self.running_statuses, _WORKFLOW_RUNNING_STATUSES)
-        _reject_unknown_statuses("terminal_statuses", self.terminal_statuses, _WORKFLOW_TERMINAL_STATUSES)
+        _reject_unknown_statuses(
+            "waiting_statuses", self.waiting_statuses, _WORKFLOW_WAITING_STATUSES
+        )
+        _reject_unknown_statuses(
+            "running_statuses", self.running_statuses, _WORKFLOW_RUNNING_STATUSES
+        )
+        _reject_unknown_statuses(
+            "terminal_statuses", self.terminal_statuses, _WORKFLOW_TERMINAL_STATUSES
+        )
         if self.allow_model_clarification and "waiting_user_input" not in self.waiting_statuses:
             raise ValueError(
                 "allow_model_clarification requires waiting_user_input in waiting_statuses"
             )
         if self.clarification_strategy == "tool_contract" and self.allow_model_clarification:
-            raise ValueError(
-                "tool_contract clarification cannot allow model-only clarification"
-            )
+            raise ValueError("tool_contract clarification cannot allow model-only clarification")
         return self
 
     def transition_tools(self) -> set[str]:
-        return {
-            name
-            for name in [self.required_transition, *self.required_transition_any]
-            if name
-        }
+        return {name for name in [self.required_transition, *self.required_transition_any] if name}
 
 
 class DelegationPolicySpec(BaseModel):
@@ -95,6 +95,65 @@ class DelegationPolicySpec(BaseModel):
         if self.max_concurrency > self.max_tasks:
             raise ValueError("delegation max_concurrency cannot exceed max_tasks")
         return self
+
+
+class ArtifactPresentationFieldSpec(BaseModel):
+    """One business-defined field rendered by a Host artifact surface."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    paths: list[str] = Field(min_length=1)
+    format: Literal["text", "count"] = "text"
+
+    @field_validator("paths")
+    @classmethod
+    def unique_paths(cls, values: list[str]) -> list[str]:
+        normalized = [str(value or "").strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("artifact presentation paths must not be blank")
+        return list(dict.fromkeys(normalized))
+
+
+class ArtifactPresentationActionSpec(BaseModel):
+    """Navigation intent exposed by an artifact without Host-specific callbacks."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(min_length=1)
+    running_label: str = ""
+    target_view: str = Field(min_length=1)
+    target_id_paths: list[str] = Field(min_length=1)
+
+    @field_validator("target_id_paths")
+    @classmethod
+    def unique_target_paths(cls, values: list[str]) -> list[str]:
+        normalized = [str(value or "").strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("artifact action target paths must not be blank")
+        return list(dict.fromkeys(normalized))
+
+
+class ArtifactPresentationSpec(BaseModel):
+    """Portable artifact presentation metadata declared by a Capability Pack."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: Literal["artifact-presentation-v1"] = "artifact-presentation-v1"
+    artifact_type: str = Field(min_length=1)
+    kind: Literal["report", "case", "generic"] = "generic"
+    label: str = Field(min_length=1)
+    summary_paths: list[str] = Field(default_factory=list)
+    fields: list[ArtifactPresentationFieldSpec] = Field(default_factory=list)
+    action: ArtifactPresentationActionSpec
+
+    @field_validator("summary_paths")
+    @classmethod
+    def unique_summary_paths(cls, values: list[str]) -> list[str]:
+        normalized = [str(value or "").strip() for value in values]
+        if any(not value for value in normalized):
+            raise ValueError("artifact summary paths must not be blank")
+        return list(dict.fromkeys(normalized))
 
 
 class CompiledSkillSpec(BaseModel):
@@ -197,34 +256,37 @@ class SkillPackageManifest(BaseModel):
         if not set(self.required_tools).issubset(declared_required):
             raise ValueError("package required_tools must be required by skill_spec")
         if compiled.kind == "workflow":
-            completion = WorkflowCompletionPolicySpec.model_validate(
-                compiled.completion_policy
-            )
+            completion = WorkflowCompletionPolicySpec.model_validate(compiled.completion_policy)
             transition_tools = completion.transition_tools()
             disallowed_transitions = transition_tools - allowed_tools
             if disallowed_transitions:
-                raise ValueError(
-                    "completion policy transitions must be allowed by skill_spec"
-                )
+                raise ValueError("completion policy transitions must be allowed by skill_spec")
             required_groups = {
                 frozenset(str(name).strip() for name in group if str(name or "").strip())
                 for group in compiled.required_tool_groups
                 if isinstance(group, (list, tuple, set, frozenset))
             }
-            if completion.required_transition and completion.required_transition not in declared_required:
-                raise ValueError(
-                    "required_transition must be declared as a required_tool"
-                )
-            if completion.required_transition_any and frozenset(
+            if (
+                completion.required_transition
+                and completion.required_transition not in declared_required
+            ):
+                raise ValueError("required_transition must be declared as a required_tool")
+            if (
                 completion.required_transition_any
-            ) not in required_groups:
-                raise ValueError(
-                    "required_transition_any must match a required_tool_group"
-                )
+                and frozenset(completion.required_transition_any) not in required_groups
+            ):
+                raise ValueError("required_transition_any must match a required_tool_group")
         output = as_dict(compiled.output_contract)
         required_artifact = str(output.get("requires_artifact") or "")
         if self.artifact_types and required_artifact not in self.artifact_types:
             raise ValueError("skill_spec artifact contract is not declared by package")
+        presentation_payload = output.get("artifact_presentation")
+        if presentation_payload is not None:
+            presentation = ArtifactPresentationSpec.model_validate(presentation_payload)
+            if presentation.artifact_type != required_artifact:
+                raise ValueError("artifact presentation type must match requires_artifact")
+            if presentation.artifact_type not in self.artifact_types:
+                raise ValueError("artifact presentation type is not declared by package")
         if self.version not in self.resume_compatible_versions:
             self.resume_compatible_versions.append(self.version)
         if compiled.delegation_policy:
@@ -242,24 +304,28 @@ class SkillPackageManifest(BaseModel):
     version = computed_field(return_type=str)(property(_version))
 
     def _digest(self) -> str:
-        canonical = json.dumps(self.skill_spec, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        canonical = json.dumps(
+            self.skill_spec, ensure_ascii=False, sort_keys=True, separators=(",", ":")
+        )
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
     digest = computed_field(return_type=str)(property(_digest))
 
     def compile(self) -> CompiledSkillSpec:
-        return CompiledSkillSpec.model_validate({
-            **self.skill_spec,
-            "package": {
-                "schema_version": self.schema_version,
-                "package_id": self.package_id,
-                "capability_pack": self.capability_pack,
-                "entry_tools": list(self.entry_tools),
-                "state_schema_version": self.state_schema_version,
-                "resume_compatible_versions": list(self.resume_compatible_versions),
-                "digest": self.digest,
-            },
-        })
+        return CompiledSkillSpec.model_validate(
+            {
+                **self.skill_spec,
+                "package": {
+                    "schema_version": self.schema_version,
+                    "package_id": self.package_id,
+                    "capability_pack": self.capability_pack,
+                    "entry_tools": list(self.entry_tools),
+                    "state_schema_version": self.state_schema_version,
+                    "resume_compatible_versions": list(self.resume_compatible_versions),
+                    "digest": self.digest,
+                },
+            }
+        )
 
     def runtime_spec(self) -> dict[str, Any]:
         """Compatibility projection for hosts that still consume dictionaries."""
@@ -295,7 +361,9 @@ def validate_skill_packages(
     tool_registry: Any | None = None,
 ) -> list[str]:
     issues: list[str] = []
-    available_tools = {tool.name for tool in tool_registry.list_tools()} if tool_registry is not None else None
+    available_tools = (
+        {tool.name for tool in tool_registry.list_tools()} if tool_registry is not None else None
+    )
     for manifest in manifests:
         try:
             skill = skill_registry.get(manifest.skill_id)
@@ -303,23 +371,35 @@ def validate_skill_packages(
             issues.append(f"{manifest.skill_id}: skill is not registered")
             continue
         if str(skill.version) != manifest.version:
-            issues.append(f"{manifest.skill_id}: version mismatch ({skill.version} != {manifest.version})")
+            issues.append(
+                f"{manifest.skill_id}: version mismatch ({skill.version} != {manifest.version})"
+            )
         missing_entries = sorted(set(manifest.entry_tools) - set(skill.allowed_tools))
         if missing_entries:
-            issues.append(f"{manifest.skill_id}: entry tools are not allowed: {', '.join(missing_entries)}")
+            issues.append(
+                f"{manifest.skill_id}: entry tools are not allowed: {', '.join(missing_entries)}"
+            )
         missing_required = sorted(set(manifest.required_tools) - set(skill.required_tools))
         if missing_required:
-            issues.append(f"{manifest.skill_id}: required tools drifted: {', '.join(missing_required)}")
+            issues.append(
+                f"{manifest.skill_id}: required tools drifted: {', '.join(missing_required)}"
+            )
         artifact_type = str(skill.output_contract.get("requires_artifact") or "")
         if manifest.artifact_types and artifact_type not in manifest.artifact_types:
-            issues.append(f"{manifest.skill_id}: artifact contract drifted ({artifact_type or 'missing'})")
+            issues.append(
+                f"{manifest.skill_id}: artifact contract drifted ({artifact_type or 'missing'})"
+            )
         package = skill.package if isinstance(getattr(skill, "package", None), dict) else {}
         if package.get("digest") != manifest.digest:
             issues.append(f"{manifest.skill_id}: runtime spec is not compiled from the package")
         if available_tools is not None:
-            missing_tools = sorted(set(manifest.required_tools + manifest.entry_tools) - available_tools)
+            missing_tools = sorted(
+                set(manifest.required_tools + manifest.entry_tools) - available_tools
+            )
             if missing_tools:
-                issues.append(f"{manifest.skill_id}: tools are not registered: {', '.join(missing_tools)}")
+                issues.append(
+                    f"{manifest.skill_id}: tools are not registered: {', '.join(missing_tools)}"
+                )
     return issues
 
 
