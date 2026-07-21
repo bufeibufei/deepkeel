@@ -39,6 +39,15 @@ from harness_core.skill_packages import (
     validate_skill_packages,
 )
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tool_disclosure import (
+    TOOL_DISCOVERY_NAME,
+    ToolDescriptor,
+    ToolView,
+    discover_tools,
+    install_tool_discovery,
+    resolve_tool_view,
+    tool_discovery_spec,
+)
 from harness_core.tool_providers import ToolProvider, ToolProviderSpec, verify_tool_provider
 from harness_core.tools import (
     ToolExecutionClaim,
@@ -78,12 +87,19 @@ EXTENSION_SDK_API = (
     "ToolPreflight",
     "ToolRegistry",
     "ToolSpec",
+    "TOOL_DISCOVERY_NAME",
+    "ToolDescriptor",
+    "ToolView",
     "capability_pack_spec",
     "clarification_from_validation_error",
     "clarification_tool_result",
+    "discover_tools",
     "harness_system_prompt",
+    "install_tool_discovery",
     "load_skill_packages",
     "standardize_pending_action_payload",
+    "resolve_tool_view",
+    "tool_discovery_spec",
     "validate_capability_pack",
     "validate_skill_packages",
     "verify_tool_provider",

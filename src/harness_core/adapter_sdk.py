@@ -122,6 +122,7 @@ from harness_core.ports import (
 )
 from harness_core.telemetry import (
     InMemoryTelemetry,
+    LoggingTelemetry,
     NoopTelemetry,
     TelemetryPort,
     TelemetryRecord,
@@ -164,6 +165,7 @@ ADAPTER_SDK_API = (
     "InMemoryRuntimeEventJournal",
     "InMemoryRunLeaseStore",
     "LangGraphCheckpointerAdapter",
+    "LoggingTelemetry",
     "MODEL_CALLS",
     "MODEL_RETRIES",
     "MappingSecretProvider",

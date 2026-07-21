@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 import hashlib
+import json
+import logging
 from threading import Lock
 from typing import Any, Literal, Protocol
 
@@ -29,6 +31,9 @@ class TelemetryRecord(BaseModel):
     component: str = "runtime"
     operation_id: str = ""
     parent_operation_id: str = ""
+    trace_id: str = ""
+    span_id: str = ""
+    parent_span_id: str = ""
     privacy_class: Literal["operational_metadata"] = "operational_metadata"
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -41,6 +46,16 @@ class TelemetryRecord(BaseModel):
                 f"{self.event_name}:{self.operation_id}"
             )
             self.telemetry_id = hashlib.sha256(identity.encode("utf-8")).hexdigest()
+        if not self.trace_id:
+            self.trace_id = hashlib.sha256(
+                str(self.run_id or self.telemetry_id).encode("utf-8")
+            ).hexdigest()[:32]
+        if not self.span_id:
+            self.span_id = hashlib.sha256(self.telemetry_id.encode("utf-8")).hexdigest()[:16]
+        if not self.parent_span_id and self.parent_operation_id:
+            self.parent_span_id = hashlib.sha256(
+                f"{self.trace_id}:{self.parent_operation_id}".encode("utf-8")
+            ).hexdigest()[:16]
         return self
 
     @classmethod
@@ -102,6 +117,19 @@ class NoopTelemetry:
         del event
 
 
+class LoggingTelemetry:
+    """Structured JSON telemetry adapter suitable for containers and log collectors."""
+
+    def __init__(self, logger: logging.Logger | None = None) -> None:
+        self._logger = logger or logging.getLogger("harness_core.telemetry")
+
+    def record(self, event: TelemetryRecord) -> None:
+        self._logger.info(
+            "harness_telemetry %s",
+            json.dumps(event.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")),
+        )
+
+
 class InMemoryTelemetry:
     """Deterministic adapter for embedding, tests and local diagnostics."""
 
@@ -148,6 +176,9 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "tool_name",
     "tool_call_id",
     "tool_status",
+    "trace_id",
+    "span_id",
+    "parent_span_id",
 }
 
 

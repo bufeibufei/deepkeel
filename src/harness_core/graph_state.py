@@ -189,6 +189,8 @@ def _allowed_tool_names(
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
             names.remove("agent.delegate")
+        if names:
+            names.add("runtime.discover_tools")
         return names
     default_tools = {
         spec.name
@@ -373,6 +375,17 @@ def _apply_tool_result(
     result: ToolResult,
     config: Mapping[str, Any],
 ) -> None:
+    if result.name == "runtime.discover_tools" and result.status == "succeeded":
+        discovered = result.data.get("discovered_names")
+        if isinstance(discovered, list):
+            metadata = current.setdefault("metadata", {})
+            existing = {
+                str(name)
+                for name in metadata.get("discovered_tool_names", [])
+                if str(name).strip()
+            }
+            existing.update(str(name) for name in discovered if str(name).strip())
+            metadata["discovered_tool_names"] = sorted(existing)
     if result.observation is not None:
         current.setdefault("observations", []).append(result.observation.model_dump(mode="json"))
     for artifact in result.artifacts:

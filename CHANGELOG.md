@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.9.0
+
+- Made `RuntimeStateStore` the authoritative portable recovery source while
+  retaining LangGraph checkpoints for engine-local continuation and the legacy
+  checkpoint store as a compatibility fallback.
+- Added model-driven tool catalog discovery and durable per-run disclosure
+  grants so enforced progressive disclosure can replace full tool exposure.
+- Added structured logging telemetry with deterministic trace and span
+  correlation across runtime events.
+- Added a production SQL lease/fencing adapter in the reference product host.
+
 ## 3.8.0
 
 - Reused one versioned LangGraph per runtime worker and moved model, prompt,

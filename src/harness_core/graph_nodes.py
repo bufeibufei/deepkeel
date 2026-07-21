@@ -140,6 +140,13 @@ class GraphNodes:
             allowed_names=allowed_tools,
             skill=skill_policy,
             mode=turn_context.tool_view_mode if turn_context is not None else "legacy",
+            discovered_names=set(
+                str(name)
+                for name in as_dict(current.get("metadata")).get(
+                    "discovered_tool_names", []
+                )
+                if str(name).strip()
+            ),
         )
         metadata = current.setdefault("metadata", {})
         previous_tool_view = metadata.get("tool_view")

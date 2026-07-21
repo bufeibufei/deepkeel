@@ -3,11 +3,17 @@ from __future__ import annotations
 import asyncio
 
 from harness_core.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.extension_sdk import ToolRegistry, ToolSpec
+from harness_core.contracts import ToolCall
+from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
 from harness_core.runtime_sdk import RuntimeRequest
 from harness_core.skills import SkillPolicy
-from harness_core.tool_disclosure import resolve_tool_view
+from harness_core.tool_disclosure import (
+    TOOL_DISCOVERY_NAME,
+    install_tool_discovery,
+    resolve_tool_view,
+)
+from harness_core.tools import ToolExecutionContext
 
 
 class PromptEchoProvider:
@@ -122,3 +128,50 @@ def test_active_skill_with_empty_allowlist_denies_tool_execution() -> None:
     assert skill.allows_tool("general.read") is False
     assert decision.allowed is False
     assert decision.metadata["rule"] == "skill_tool_allowlist"
+
+
+def test_discovery_tool_grants_only_ranked_permitted_tools_to_enforced_view() -> None:
+    registry = ToolRegistry(
+        [
+            ToolSpec(name="general.read", exposure_mode="baseline"),
+            ToolSpec(
+                name="web.search",
+                description="Search current internet sources and news.",
+                exposure_mode="discoverable",
+                discovery_tags=["web", "search", "current"],
+            ),
+            ToolSpec(
+                name="private.write",
+                description="Mutate a private record.",
+                exposure_mode="skill_only",
+                discovery_tags=["private", "write"],
+            ),
+        ]
+    )
+    executor = ToolExecutor(registry)
+    install_tool_discovery(registry, executor)
+    context = ToolExecutionContext(run_id="run-discovery", user_id="user-1")
+
+    result = executor.execute(
+        ToolCall(
+            id="call-discovery",
+            name=TOOL_DISCOVERY_NAME,
+            arguments={"query": "current web search"},
+            idempotency_key="discover:current-web",
+        ),
+        context,
+    )
+
+    assert result.status == "succeeded"
+    assert result.data["discovered_names"] == ["web.search"]
+    view = resolve_tool_view(
+        registry=registry,
+        allowed_names={spec.name for spec in registry.list_tools()},
+        skill=SkillPolicy.from_snapshot({}),
+        mode="enforced",
+        discovered_names=set(result.data["discovered_names"]),
+    )
+    assert view.exposed_names == frozenset(
+        {"general.read", TOOL_DISCOVERY_NAME, "web.search"}
+    )
+    assert "private.write" not in view.exposed_names

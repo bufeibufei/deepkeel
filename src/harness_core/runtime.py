@@ -86,6 +86,7 @@ from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from harness_core.type_narrowing import as_dict
 from harness_core.tool_registry import ToolRegistry
+from harness_core.tool_disclosure import install_tool_discovery
 from harness_core.tools import ToolExecutionContext, ToolExecutor
 from harness_core.turn_context import ToolViewMode, TurnExecutionContext
 from harness_core.ui import project_run_ui_state
@@ -207,6 +208,8 @@ class HarnessRuntime:
         self.async_cancel_timeout_seconds = max(0.1, float(async_cancel_timeout_seconds))
         self.reuse_compiled_graph = bool(reuse_compiled_graph)
         self.tool_view_mode = tool_view_mode
+        if self.tool_view_mode != "legacy":
+            install_tool_discovery(self.tool_registry, self.tool_executor)
         self._compiled_graph: HarnessGraph | None = None
         self._graph_compile_count = 0
         self._graph_compile_lock = Lock()
@@ -553,11 +556,16 @@ class HarnessRuntime:
             or bundle.get("run_id")
             or uuid4()
         )
-        durable_state = (
-            self._load_durable_checkpoint(run_id, session=session, user_id=str(user_id or "local-device"))
-            if short.get("resume")
-            else {}
-        )
+        if short.get("resume"):
+            durable_state, checkpoint_authority, checkpoint_load_errors = (
+                self._load_authoritative_checkpoint(
+                    run_id,
+                    session=session,
+                    user_id=str(user_id or "local-device"),
+                )
+            )
+        else:
+            durable_state, checkpoint_authority, checkpoint_load_errors = {}, "none", []
         resolved_model_policy = _resolved_model_policy(
             model_policy,
             provider=provider,
@@ -914,7 +922,12 @@ class HarnessRuntime:
             "tool_catalog_version": self.tool_registry.catalog_version(),
             "tool_view_mode": self.tool_view_mode,
             "tool_view": as_dict(as_dict(state.get("metadata")).get("tool_view")),
+            "checkpoint_authority": checkpoint_authority,
+            "checkpoint_policy": "runtime_boundaries",
+            "graph_checkpoint_role": "engine_recovery_only",
         }
+        if checkpoint_load_errors:
+            execution_contract["checkpoint_load_errors"] = list(checkpoint_load_errors)
         diagnostics["execution_contract"] = execution_contract
         result.checkpoint["execution_contract"] = execution_contract
         elapsed_budget = self.budget_ledger.consume(
@@ -1032,6 +1045,41 @@ class HarnessRuntime:
         except Exception:
             return {}
         return loaded if isinstance(loaded, dict) else {}
+
+    def _load_authoritative_checkpoint(
+        self,
+        run_id: str,
+        *,
+        session: Any,
+        user_id: str,
+    ) -> tuple[dict[str, Any], str, list[str]]:
+        """Load portable state from the canonical store before compatibility fallbacks."""
+
+        errors: list[str] = []
+        if self.runtime_state_store is not None:
+            try:
+                snapshot = self.runtime_state_store.load_snapshot(
+                    run_id,
+                    session=session,
+                    user_id=user_id,
+                )
+                state = snapshot.checkpoint_state
+                if isinstance(state, dict) and state:
+                    return dict(state), "runtime_state_store", errors
+            except Exception as exc:
+                errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
+        if self.checkpoint_store is not None:
+            try:
+                legacy_state = self.checkpoint_store.load(
+                    run_id,
+                    session=session,
+                    user_id=user_id,
+                )
+                if isinstance(legacy_state, dict) and legacy_state:
+                    return dict(legacy_state), "durable_checkpoint_store", errors
+            except Exception as exc:
+                errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
+        return {}, "session_projection", errors
 
     def _has_graph_checkpoint(self, thread_id: str) -> bool:
         exists = getattr(self.checkpointer, "exists", None)
