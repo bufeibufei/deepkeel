@@ -14,7 +14,17 @@ permissions:
   contents: write
 
 jobs:
+  host-contract:
+    uses: bufeibufei/kuitianjiandi/.github/workflows/harness-core.yml@codex/harness-agent-workspace
+    with:
+      core_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+      host_ref: codex/harness-agent-workspace
+    secrets:
+      HARNESS_CORE_DEPLOY_KEY: ${{ secrets.HARNESS_CORE_DEPLOY_KEY }}
+      PRODUCT_HOST_DEPLOY_KEY: ${{ secrets.PRODUCT_HOST_DEPLOY_KEY }}
+
   release:
+    needs: host-contract
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
