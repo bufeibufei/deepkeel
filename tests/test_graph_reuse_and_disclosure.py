@@ -126,8 +126,33 @@ def test_active_skill_with_empty_allowlist_denies_tool_execution() -> None:
     )
 
     assert skill.allows_tool("general.read") is False
+    assert skill.allows_tool(TOOL_DISCOVERY_NAME) is False
     assert decision.allowed is False
     assert decision.metadata["rule"] == "skill_tool_allowlist"
+
+
+def test_nonempty_skill_allowlist_permits_catalog_discovery_without_expanding_scope() -> None:
+    skill = SkillPolicy.from_snapshot(
+        {
+            "skill_id": "search-only",
+            "tool_scope_mode": "allowlist",
+            "allowed_tools": ["web.search"],
+        }
+    )
+
+    decision = DefaultPolicyEngine().evaluate(
+        PolicyRequest(
+            action="tool.invoke",
+            resource_type="tool",
+            resource_id=TOOL_DISCOVERY_NAME,
+            run_id="run-1",
+            user_id="user-1",
+            context={"skill_activation": skill.runtime_snapshot()},
+        )
+    )
+
+    assert skill.allows_tool(TOOL_DISCOVERY_NAME) is True
+    assert decision.allowed is True
 
 
 def test_discovery_tool_grants_only_ranked_permitted_tools_to_enforced_view() -> None:

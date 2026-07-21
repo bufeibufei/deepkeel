@@ -120,6 +120,8 @@ class SkillPolicy:
             return True
         if self.tool_scope_mode == "inherit":
             return True
+        if tool_name == "runtime.discover_tools" and self.allowed_tools:
+            return True
         return tool_name in self.allowed_tools
 
     @property

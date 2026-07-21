@@ -1,4 +1,6 @@
-from harness_core.telemetry import TelemetryRecord
+import logging
+
+from harness_core.telemetry import LoggingTelemetry, TelemetryRecord
 
 
 def test_runtime_event_telemetry_preserves_correlations_and_excludes_content():
@@ -35,6 +37,8 @@ def test_runtime_event_telemetry_preserves_correlations_and_excludes_content():
     assert record.run_version == 3
     assert record.component == "model"
     assert record.operation_id == "invoke-1"
+    assert len(record.trace_id) == 32
+    assert len(record.span_id) == 16
     assert record.privacy_class == "operational_metadata"
     assert record.attributes == {
         "source_event_type": "model.completed",
@@ -60,3 +64,17 @@ def test_direct_telemetry_records_receive_stable_identity():
     )
 
     assert first.telemetry_id == second.telemetry_id
+    assert first.trace_id == second.trace_id
+    assert first.span_id == second.span_id
+
+
+def test_logging_telemetry_emits_structured_trace_payload(caplog):
+    telemetry = LoggingTelemetry()
+    record = TelemetryRecord(event_name="tool.completed", run_id="run-logging")
+
+    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+        telemetry.record(record)
+
+    assert "harness_telemetry" in caplog.text
+    assert record.trace_id in caplog.text
+    assert record.span_id in caplog.text

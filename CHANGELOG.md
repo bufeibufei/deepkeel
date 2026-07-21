@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.9.1
+
+- Allowed the internal catalog discovery tool through non-empty Skill
+  allowlists while preserving explicit empty allowlists as a strict deny-all.
+- Added trace-correlation and structured-logging telemetry contract coverage.
+
 ## 3.9.0
 
 - Made `RuntimeStateStore` the authoritative portable recovery source while

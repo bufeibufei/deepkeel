@@ -80,6 +80,10 @@ class DefaultPolicyEngine:
             and skill.get("skill_id")
             and tool_scope_mode == "allowlist"
             and request.resource_id not in {str(name) for name in allowed_tools}
+            and not (
+                request.resource_id == "runtime.discover_tools"
+                and bool(allowed_tools)
+            )
         ):
             return PolicyDecision(
                 allowed=False,
