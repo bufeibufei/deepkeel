@@ -29,15 +29,41 @@ from harness_core.model import ModelGateway
 from harness_core.prompts import harness_system_prompt
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.turn_context import TurnContextRegistry, TurnExecutionContext
 
 
 EventSink = Callable[[dict[str, Any]], None]
+HARNESS_GRAPH_CONTRACT_VERSION = "harness-graph-v1"
 
 
 @dataclass(slots=True)
 class HarnessGraph:
     compiled_graph: Any
     supports_async_checkpointer: bool = True
+    contract_version: str = HARNESS_GRAPH_CONTRACT_VERSION
+    turn_contexts: TurnContextRegistry | None = None
+
+    def _bind_turn_context(
+        self,
+        turn_context: TurnExecutionContext | None,
+        *keys: str,
+    ) -> tuple[str, ...]:
+        if turn_context is None or self.turn_contexts is None:
+            return ()
+        return self.turn_contexts.bind(
+            turn_context,
+            turn_context.tool_context.run_id,
+            turn_context.tool_context.thread_id,
+            *keys,
+        )
+
+    def _release_turn_context(
+        self,
+        turn_context: TurnExecutionContext | None,
+        keys: tuple[str, ...],
+    ) -> None:
+        if turn_context is not None and self.turn_contexts is not None:
+            self.turn_contexts.release(turn_context, *keys)
 
     def invoke(
         self,
@@ -45,11 +71,18 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
-        return validate_graph_state(self.compiled_graph.invoke(
-            _state_from_context(context),
-            config=_graph_config(context.thread_id, tool_context, event_sink),
-        ))
+        keys = self._bind_turn_context(turn_context, context.run_id, context.thread_id)
+        try:
+            return validate_graph_state(self.compiled_graph.invoke(
+                _state_from_context(context),
+                config=_graph_config(
+                    context.thread_id, tool_context, event_sink, turn_context
+                ),
+            ))
+        finally:
+            self._release_turn_context(turn_context, keys)
 
     def resume(
         self,
@@ -58,11 +91,16 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
-        return migrate_legacy_graph_state(self.compiled_graph.invoke(
-            Command(resume=resume_payload),
-            config=_graph_config(thread_id, tool_context, event_sink),
-        ), thread_id=thread_id)
+        keys = self._bind_turn_context(turn_context, thread_id)
+        try:
+            return migrate_legacy_graph_state(self.compiled_graph.invoke(
+                Command(resume=resume_payload),
+                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+            ), thread_id=thread_id)
+        finally:
+            self._release_turn_context(turn_context, keys)
 
     def recover(
         self,
@@ -70,12 +108,17 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
         """Continue an interrupted super-step from its durable checkpoint."""
-        return migrate_legacy_graph_state(self.compiled_graph.invoke(
-            None,
-            config=_graph_config(thread_id, tool_context, event_sink),
-        ), thread_id=thread_id)
+        keys = self._bind_turn_context(turn_context, thread_id)
+        try:
+            return migrate_legacy_graph_state(self.compiled_graph.invoke(
+                None,
+                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+            ), thread_id=thread_id)
+        finally:
+            self._release_turn_context(turn_context, keys)
 
     async def ainvoke(
         self,
@@ -83,6 +126,7 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
         if not self.supports_async_checkpointer:
             return await asyncio.to_thread(
@@ -90,12 +134,19 @@ class HarnessGraph:
                 context,
                 tool_context=tool_context,
                 event_sink=event_sink,
+                turn_context=turn_context,
             )
-        state = await self.compiled_graph.ainvoke(
-            _state_from_context(context),
-            config=_graph_config(context.thread_id, tool_context, event_sink),
-        )
-        return validate_graph_state(state)
+        keys = self._bind_turn_context(turn_context, context.run_id, context.thread_id)
+        try:
+            state = await self.compiled_graph.ainvoke(
+                _state_from_context(context),
+                config=_graph_config(
+                    context.thread_id, tool_context, event_sink, turn_context
+                ),
+            )
+            return validate_graph_state(state)
+        finally:
+            self._release_turn_context(turn_context, keys)
 
     async def aresume(
         self,
@@ -104,6 +155,7 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
         if not self.supports_async_checkpointer:
             return await asyncio.to_thread(
@@ -112,12 +164,17 @@ class HarnessGraph:
                 resume_payload,
                 tool_context=tool_context,
                 event_sink=event_sink,
+                turn_context=turn_context,
             )
-        state = await self.compiled_graph.ainvoke(
-            Command(resume=resume_payload),
-            config=_graph_config(thread_id, tool_context, event_sink),
-        )
-        return migrate_legacy_graph_state(state, thread_id=thread_id)
+        keys = self._bind_turn_context(turn_context, thread_id)
+        try:
+            state = await self.compiled_graph.ainvoke(
+                Command(resume=resume_payload),
+                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+            )
+            return migrate_legacy_graph_state(state, thread_id=thread_id)
+        finally:
+            self._release_turn_context(turn_context, keys)
 
     async def arecover(
         self,
@@ -125,6 +182,7 @@ class HarnessGraph:
         *,
         tool_context: ToolExecutionContext,
         event_sink: EventSink | None = None,
+        turn_context: TurnExecutionContext | None = None,
     ) -> HarnessGraphState:
         if not self.supports_async_checkpointer:
             return await asyncio.to_thread(
@@ -132,17 +190,22 @@ class HarnessGraph:
                 thread_id,
                 tool_context=tool_context,
                 event_sink=event_sink,
+                turn_context=turn_context,
             )
-        state = await self.compiled_graph.ainvoke(
-            None,
-            config=_graph_config(thread_id, tool_context, event_sink),
-        )
-        return migrate_legacy_graph_state(state, thread_id=thread_id)
+        keys = self._bind_turn_context(turn_context, thread_id)
+        try:
+            state = await self.compiled_graph.ainvoke(
+                None,
+                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+            )
+            return migrate_legacy_graph_state(state, thread_id=thread_id)
+        finally:
+            self._release_turn_context(turn_context, keys)
 
 
 def create_harness_graph(
     *,
-    model: ModelGateway,
+    model: ModelGateway | None = None,
     tool_executor: ToolExecutor,
     tool_registry: ToolRegistry,
     system_prompt: str = "",
@@ -156,6 +219,7 @@ def create_harness_graph(
     prompt = system_prompt or harness_system_prompt()
     ledger = budget_ledger or getattr(model, "budget_ledger", None) or tool_executor.budget_ledger
     control = run_control or NoopRunControl()
+    turn_contexts = TurnContextRegistry()
 
     nodes = GraphNodes(
         model=model,
@@ -166,6 +230,7 @@ def create_harness_graph(
         ledger=ledger,
         deadline_monotonic=deadline_monotonic,
         control=control,
+        turn_contexts=turn_contexts,
     )
     graph = StateGraph(HarnessGraphState)
 
@@ -225,4 +290,5 @@ def create_harness_graph(
     return HarnessGraph(
         compiled_graph=graph.compile(checkpointer=checkpointer),
         supports_async_checkpointer=supports_async_checkpointer,
+        turn_contexts=turn_contexts,
     )

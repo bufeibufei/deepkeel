@@ -40,7 +40,11 @@ from harness_core.control import NoopRunControl, RunControl
 from harness_core.event_journal import RuntimeEventJournal
 from harness_core.events import AgentEventPersistenceError, envelope_runtime_event
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
-from harness_core.graph import create_harness_graph
+from harness_core.graph import (
+    HARNESS_GRAPH_CONTRACT_VERSION,
+    HarnessGraph,
+    create_harness_graph,
+)
 from harness_core.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     checkpointer_supports_async,
@@ -83,6 +87,7 @@ from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from harness_core.type_narrowing import as_dict
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.turn_context import ToolViewMode, TurnExecutionContext
 from harness_core.ui import project_run_ui_state
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
 from harness_core.runtime_policy import (
@@ -168,6 +173,8 @@ class HarnessRuntime:
         state_migrations: StateMigrationRegistry | None = None,
         async_stream_buffer_size: int = 128,
         async_cancel_timeout_seconds: float = 5.0,
+        reuse_compiled_graph: bool = True,
+        tool_view_mode: ToolViewMode = "legacy",
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
@@ -198,8 +205,37 @@ class HarnessRuntime:
         self.state_migrations = state_migrations or default_state_migrations()
         self.async_stream_buffer_size = max(1, int(async_stream_buffer_size))
         self.async_cancel_timeout_seconds = max(0.1, float(async_cancel_timeout_seconds))
+        self.reuse_compiled_graph = bool(reuse_compiled_graph)
+        self.tool_view_mode = tool_view_mode
+        self._compiled_graph: HarnessGraph | None = None
+        self._graph_compile_count = 0
+        self._graph_compile_lock = Lock()
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
+
+    @property
+    def graph_compile_count(self) -> int:
+        return self._graph_compile_count
+
+    def _shared_compiled_graph(self) -> HarnessGraph:
+        graph = self._compiled_graph
+        if graph is not None:
+            return graph
+        with self._graph_compile_lock:
+            graph = self._compiled_graph
+            if graph is None:
+                graph = create_harness_graph(
+                    tool_executor=self.tool_executor,
+                    tool_registry=self.tool_registry,
+                    max_steps=self.max_steps,
+                    checkpointer=compiler_checkpointer(self.checkpointer),
+                    supports_async_checkpointer=checkpointer_supports_async(self.checkpointer),
+                    budget_ledger=self.budget_ledger,
+                    run_control=self.run_control,
+                )
+                self._compiled_graph = graph
+                self._graph_compile_count += 1
+        return graph
 
     def close(self) -> None:
         self.capability_catalog.close()
@@ -633,18 +669,21 @@ class HarnessRuntime:
             invocation_recorder=self.model_invocation_recorder,
             invocation_store=self.model_invocation_store,
         )
-        graph = create_harness_graph(
-            model=model_gateway,
-            tool_executor=self.tool_executor,
-            tool_registry=self.tool_registry,
-            system_prompt=self.system_prompt_factory(skill),
-            max_steps=self.max_steps,
-            checkpointer=compiler_checkpointer(self.checkpointer),
-            supports_async_checkpointer=checkpointer_supports_async(self.checkpointer),
-            budget_ledger=self.budget_ledger,
-            deadline_monotonic=deadline_monotonic,
-            run_control=self.run_control,
-        )
+        if self.reuse_compiled_graph:
+            graph = self._shared_compiled_graph()
+        else:
+            graph = create_harness_graph(
+                model=model_gateway,
+                tool_executor=self.tool_executor,
+                tool_registry=self.tool_registry,
+                system_prompt=self.system_prompt_factory(skill),
+                max_steps=self.max_steps,
+                checkpointer=compiler_checkpointer(self.checkpointer),
+                supports_async_checkpointer=checkpointer_supports_async(self.checkpointer),
+                budget_ledger=self.budget_ledger,
+                deadline_monotonic=deadline_monotonic,
+                run_control=self.run_control,
+            )
         budget_limits = _budget_limits(resolved_model_policy)
         tool_context = ToolExecutionContext(
             run_id=run_id,
@@ -673,6 +712,14 @@ class HarnessRuntime:
             run_control=self.run_control,
             execution_fence=execution_fence,
         )
+        turn_context = TurnExecutionContext(
+            model=model_gateway,
+            system_prompt=self.system_prompt_factory(skill),
+            tool_context=tool_context,
+            event_sink=emit,
+            deadline_monotonic=deadline_monotonic,
+            tool_view_mode=self.tool_view_mode,
+        )
 
         recovery_source = ""
         active_graph_thread_id = graph_thread_id
@@ -683,6 +730,7 @@ class HarnessRuntime:
                         graph_thread_id,
                         tool_context=tool_context,
                         event_sink=emit,
+                        turn_context=turn_context,
                     ))
                     if not isinstance(state, dict) or not state:
                         raise RuntimeError("langgraph recovery checkpoint is unavailable")
@@ -704,6 +752,7 @@ class HarnessRuntime:
                         context,
                         tool_context=tool_context,
                         event_sink=emit,
+                        turn_context=turn_context,
                     ))
                     recovery_source = "restart_replay_without_checkpoint"
             elif short.get("resume"):
@@ -714,13 +763,24 @@ class HarnessRuntime:
                         resume_payload,
                         tool_context=tool_context,
                         event_sink=emit,
+                        turn_context=turn_context,
                     ))
                     if not isinstance(state, dict):
                         raise RuntimeError("langgraph checkpoint is unavailable")
                     recovery_source = "live_langgraph"
                 except AgentEventPersistenceError:
                     raise
-                except (RuntimeError, ValueError, AttributeError):
+                except (RuntimeError, ValueError, AttributeError) as live_resume_error:
+                    emit({
+                        "event_type": "checkpoint.live_resume_failed",
+                        "title": "Live checkpoint resume failed",
+                        "summary": str(live_resume_error),
+                        "payload": {
+                            "error_type": type(live_resume_error).__name__,
+                            "error": str(live_resume_error),
+                            "visible": False,
+                        },
+                    })
                     previous_runtime = short.get("previous_runtime")
                     recovered_checkpoint = checkpoint_from_durable_state(
                         durable_state,
@@ -732,7 +792,10 @@ class HarnessRuntime:
                             migrations=self.state_migrations,
                         )
                     if not recovered_checkpoint:
-                        raise RuntimeError("durable checkpoint is unavailable")
+                        raise RuntimeError(
+                            "durable checkpoint is unavailable after live LangGraph resume "
+                            f"failed: {type(live_resume_error).__name__}: {live_resume_error}"
+                        ) from live_resume_error
                     recovery_source = (
                         "agent_run_checkpoint"
                         if checkpoint_from_durable_state(
@@ -760,6 +823,7 @@ class HarnessRuntime:
                         recovered,
                         tool_context=tool_context,
                         event_sink=emit,
+                        turn_context=turn_context,
                     ))
             else:
                 precondition_calls = _skill_precondition_tool_calls(
@@ -784,6 +848,7 @@ class HarnessRuntime:
                     context,
                     tool_context=tool_context,
                     event_sink=emit,
+                    turn_context=turn_context,
                 ))
         except AgentEventPersistenceError:
             raise
@@ -842,6 +907,16 @@ class HarnessRuntime:
             diagnostics["recovery"] = recovery
         diagnostics = result.diagnostics
         diagnostics["context_window"] = context_window_diagnostics
+        execution_contract = {
+            "graph_contract_version": HARNESS_GRAPH_CONTRACT_VERSION,
+            "graph_reused": self.reuse_compiled_graph,
+            "graph_compile_count": self.graph_compile_count,
+            "tool_catalog_version": self.tool_registry.catalog_version(),
+            "tool_view_mode": self.tool_view_mode,
+            "tool_view": as_dict(as_dict(state.get("metadata")).get("tool_view")),
+        }
+        diagnostics["execution_contract"] = execution_contract
+        result.checkpoint["execution_contract"] = execution_contract
         elapsed_budget = self.budget_ledger.consume(
             BudgetRequest(
                 run_id=run_id,

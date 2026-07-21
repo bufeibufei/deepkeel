@@ -10,6 +10,7 @@ from langchain_core.runnables import RunnableConfig
 from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction, ToolResult, utc_now
 from harness_core.skills import SkillPolicy
 from harness_core.tools import ToolExecutionContext
+from harness_core.turn_context import TurnExecutionContext
 from harness_core.type_narrowing import as_dict
 from harness_core.workflow_policy import (
     SKILL_CONTRACT_VIOLATION,
@@ -418,12 +419,17 @@ def _graph_config(
     thread_id: str,
     tool_context: ToolExecutionContext,
     event_sink: EventSink | None,
+    turn_context: TurnExecutionContext | None = None,
 ) -> RunnableConfig:
+    resolved_tool_context = turn_context.tool_context if turn_context is not None else tool_context
+    resolved_event_sink = turn_context.event_sink if turn_context is not None else event_sink
     return {
         "configurable": {
             "thread_id": thread_id,
-            "tool_context": tool_context,
-            "event_sink": event_sink,
+            # Retain legacy keys while nodes migrate to the typed context.
+            "tool_context": resolved_tool_context,
+            "event_sink": resolved_event_sink,
+            "turn_context": turn_context,
         }
     }
 

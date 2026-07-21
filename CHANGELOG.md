@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.8.0
+
+- Reused one versioned LangGraph per runtime worker and moved model, prompt,
+  deadline, event sink, and tool execution context into an isolated per-turn
+  execution context.
+- Added separate executable and model-visible tool views with legacy, shadow,
+  and enforced disclosure modes plus catalog-version diagnostics.
+- Made active Skill allowlists fail closed, including explicit empty
+  allowlists, while preserving general tool use when no Skill is active.
+- Added graph contract and tool-view metadata to runtime diagnostics and
+  durable checkpoints.
+
 ## 3.7.0
 
 - Added the portable `artifact-presentation-v1` Skill Package contract so Capability Packs can describe artifact summaries, fields, and navigation without coupling Core to product UI code.

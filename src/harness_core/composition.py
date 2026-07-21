@@ -30,6 +30,7 @@ from harness_core.state_store import RuntimeStateStore
 from harness_core.telemetry import TelemetryPort
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolHandler, ToolPreflight
+from harness_core.turn_context import ToolViewMode
 
 
 class RuntimePortChanges(TypedDict, total=False):
@@ -58,6 +59,8 @@ class RuntimePortChanges(TypedDict, total=False):
     state_migrations: StateMigrationRegistry | None
     async_stream_buffer_size: int
     async_cancel_timeout_seconds: float
+    reuse_compiled_graph: bool
+    tool_view_mode: ToolViewMode
     capability_services: Mapping[str, object]
 
 
@@ -84,6 +87,8 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     state_migrations: StateMigrationRegistry | None
     async_stream_buffer_size: int
     async_cancel_timeout_seconds: float
+    reuse_compiled_graph: bool
+    tool_view_mode: ToolViewMode
     capability_services: Mapping[str, object]
 
 
@@ -116,6 +121,8 @@ class RuntimePorts:
     state_migrations: StateMigrationRegistry | None = None
     async_stream_buffer_size: int = 128
     async_cancel_timeout_seconds: float = 5.0
+    reuse_compiled_graph: bool = True
+    tool_view_mode: ToolViewMode = "legacy"
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -261,6 +268,8 @@ class HarnessRuntimeBuilder:
             state_migrations=self._ports.state_migrations,
             async_stream_buffer_size=self._ports.async_stream_buffer_size,
             async_cancel_timeout_seconds=self._ports.async_cancel_timeout_seconds,
+            reuse_compiled_graph=self._ports.reuse_compiled_graph,
+            tool_view_mode=self._ports.tool_view_mode,
         )
 
     def _install_pack(

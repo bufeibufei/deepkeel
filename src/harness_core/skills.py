@@ -64,6 +64,7 @@ class SkillPolicy:
     source: str = ""
     explicit: bool = False
     phase: str = ""
+    tool_scope_mode: Literal["inherit", "allowlist"] = "inherit"
     allowed_tools: frozenset[str] = field(default_factory=frozenset)
     required_tools: frozenset[str] = field(default_factory=frozenset)
     required_tool_groups: tuple[frozenset[str], ...] = ()
@@ -78,6 +79,13 @@ class SkillPolicy:
     def from_snapshot(cls, snapshot: dict[str, Any] | None) -> "SkillPolicy":
         raw = snapshot if isinstance(snapshot, dict) else {}
         kind = str(raw.get("kind") or "prompt")
+        allowed_tools = frozenset(str(name) for name in raw.get("allowed_tools", []) if name)
+        configured_scope = str(raw.get("tool_scope_mode") or "")
+        tool_scope_mode: Literal["inherit", "allowlist"] = (
+            "allowlist"
+            if configured_scope == "allowlist" or (not configured_scope and allowed_tools)
+            else "inherit"
+        )
         return cls(
             skill_id=str(raw.get("skill_id") or ""),
             version=str(raw.get("version") or ""),
@@ -87,7 +95,8 @@ class SkillPolicy:
             source=str(raw.get("source") or ""),
             explicit=bool(raw.get("explicit")),
             phase=str(raw.get("phase") or ""),
-            allowed_tools=frozenset(str(name) for name in raw.get("allowed_tools", []) if name),
+            tool_scope_mode=tool_scope_mode,
+            allowed_tools=allowed_tools,
             required_tools=frozenset(str(name) for name in raw.get("required_tools", []) if name),
             required_tool_groups=_required_tool_groups(raw),
             required_artifacts=_required_artifacts(raw),
@@ -107,7 +116,11 @@ class SkillPolicy:
         return self.kind == "workflow"
 
     def allows_tool(self, tool_name: str) -> bool:
-        return not self.allowed_tools or tool_name in self.allowed_tools
+        if not self.active:
+            return True
+        if self.tool_scope_mode == "inherit":
+            return True
+        return tool_name in self.allowed_tools
 
     @property
     def policy_repair_limit(self) -> int:
@@ -134,6 +147,7 @@ class SkillPolicy:
             "source": self.source,
             "explicit": self.explicit,
             "phase": self.phase,
+            "tool_scope_mode": self.tool_scope_mode,
             "allowed_tools": sorted(self.allowed_tools),
             "required_tools": sorted(self.required_tools),
             "required_tool_groups": [sorted(group) for group in self.required_tool_groups],

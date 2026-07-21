@@ -120,6 +120,13 @@ def _completed_tool_names(state: Mapping[str, Any]) -> set[str]:
         name = str(result.get("name") or result.get("tool_name") or "").strip()
         if name:
             completed.add(name)
+    failed_resume_sources = {
+        str(item.get("source") or "").strip()
+        for item in _mapping_items(state.get("observations"))
+        if str(item.get("status") or "").strip() == "failed"
+        and str(as_dict(item.get("metadata")).get("resume_source") or "").strip()
+    }
+    completed.difference_update(failed_resume_sources)
     return completed
 
 

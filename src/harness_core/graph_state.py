@@ -183,19 +183,22 @@ def _allowed_tool_names(
     registry: ToolRegistry,
 ) -> set[str] | None:
     skill = as_dict(state.get("skill_activation"))
+    skill_policy = SkillPolicy.from_snapshot(skill)
     allowed = as_list(skill.get("allowed_tools"))
-    if allowed:
+    if skill_policy.active and skill_policy.tool_scope_mode == "allowlist":
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
             names.remove("agent.delegate")
         return names
-    if skill.get("skill_id"):
-        return set()
     default_tools = {
         spec.name
         for spec in registry.list_tools()
         if str(spec.runtime_policy.get("model_exposure") or "always") != "skill_only"
     }
+    if skill_policy.active:
+        default_tools.update(skill_policy.required_tools)
+        for group in skill_policy.required_tool_groups:
+            default_tools.update(group)
     return default_tools
 
 
@@ -431,6 +434,7 @@ def _apply_resume_payload(
 ) -> dict[str, Any]:
     payload = resume_payload if isinstance(resume_payload, dict) else {"value": resume_payload}
     pending = current.get("pending_action") or current.get("pending_async") or {}
+    resumed_async = bool(current.get("pending_async"))
     is_clarification = str(pending.get("action_type") or "") == "clarification"
     tool_call_id = str(pending.get("tool_call_id") or "")
     tool_name = str(
@@ -506,6 +510,12 @@ def _apply_resume_payload(
         if not is_clarification:
             _record_completed_tool_name(current, tool_name)
         _record_resume_artifact(current, payload)
+    elif resumed_async:
+        # A definitive external task failure cannot be repaired by rewording a
+        # final answer. The model may explicitly issue a retry tool call, but a
+        # prose-only response settles as a workflow contract violation.
+        skill = SkillPolicy.from_snapshot(current.get("skill_activation"))
+        current["repair_count"] = skill.policy_repair_limit
     current["pending_action"] = None
     current["pending_async"] = None
     current["status"] = "reasoning"

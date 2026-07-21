@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any
+import hashlib
+import json
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -24,6 +26,10 @@ class ToolSpec(BaseModel):
     observation_contract: dict[str, Any] = Field(default_factory=dict)
     argument_contract: dict[str, Any] = Field(default_factory=dict)
     task_kind: str = ""
+    exposure_mode: Literal[
+        "baseline", "discoverable", "skill_entry", "skill_only", "internal"
+    ] = "baseline"
+    discovery_tags: list[str] = Field(default_factory=list)
 
     def formal_parameters_schema(self) -> dict[str, Any]:
         return self.parameters_schema
@@ -55,3 +61,17 @@ class ToolRegistry:
 
     def as_public_list(self) -> list[dict[str, Any]]:
         return [tool.model_dump(mode="json") for tool in self.list_tools()]
+
+    def catalog_version(self) -> str:
+        payload = [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "exposure_mode": tool.exposure_mode,
+                "discovery_tags": sorted(tool.discovery_tags),
+                "parameters_schema": tool.parameters_schema,
+            }
+            for tool in sorted(self.list_tools(), key=lambda item: item.name)
+        ]
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:16]

@@ -72,10 +72,13 @@ class DefaultPolicyEngine:
 
         skill = as_dict(request.context.get("skill_activation"))
         allowed_tools = as_list(skill.get("allowed_tools"))
+        tool_scope_mode = str(skill.get("tool_scope_mode") or "") or (
+            "allowlist" if allowed_tools else "inherit"
+        )
         if (
             request.action == "tool.invoke"
             and skill.get("skill_id")
-            and allowed_tools
+            and tool_scope_mode == "allowlist"
             and request.resource_id not in {str(name) for name in allowed_tools}
         ):
             return PolicyDecision(

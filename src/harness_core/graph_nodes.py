@@ -18,7 +18,9 @@ from harness_core.model import ModelGateway, model_tools_from_registry
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
 from harness_core.tool_registry import ToolRegistry
+from harness_core.tool_disclosure import resolve_tool_view
 from harness_core.tools import ToolExecutionContext, ToolExecutor
+from harness_core.turn_context import TurnContextRegistry, TurnExecutionContext
 from harness_core.type_narrowing import as_dict
 from harness_core.workflow_policy import evaluate_workflow_completion
 from harness_core.graph_state import (
@@ -37,9 +39,10 @@ from harness_core.graph_workflow import (
 
 class GraphNodes:
     def __init__(
-        self, *, model: ModelGateway, tool_executor: ToolExecutor,
+        self, *, model: ModelGateway | None, tool_executor: ToolExecutor,
         tool_registry: ToolRegistry, prompt: str, max_steps: int,
         ledger: BudgetLedger, deadline_monotonic: float | None, control: RunControl,
+        turn_contexts: TurnContextRegistry,
     ) -> None:
         self.model = model
         self.tool_executor = tool_executor
@@ -49,10 +52,37 @@ class GraphNodes:
         self.ledger = ledger
         self.deadline_monotonic = deadline_monotonic
         self.control = control
+        self.turn_contexts = turn_contexts
 
-    def ensure_active(self, state: Mapping[str, Any], *, force: bool = False) -> None:
+    def turn_context(
+        self,
+        config: RunnableConfig | None,
+        state: Mapping[str, Any] | None = None,
+    ) -> TurnExecutionContext | None:
+        context = _config_value(config or {}, "turn_context")
+        if isinstance(context, TurnExecutionContext):
+            return context
+        current = state or {}
+        return self.turn_contexts.resolve(
+            str(current.get("run_id") or ""),
+            str(current.get("thread_id") or ""),
+        )
+
+    def ensure_active(
+        self,
+        state: Mapping[str, Any],
+        config: RunnableConfig | None = None,
+        *,
+        force: bool = False,
+    ) -> None:
         self.control.raise_if_cancelled(str(state.get("run_id") or ""), force=force)
-        ensure_time_remaining(self.deadline_monotonic)
+        turn_context = self.turn_context(config, state)
+        deadline = (
+            turn_context.deadline_monotonic
+            if turn_context is not None
+            else self.deadline_monotonic
+        )
+        ensure_time_remaining(deadline)
 
     @staticmethod
     def normalize_state(state: dict[str, Any], config: RunnableConfig) -> HarnessGraphState:
@@ -75,13 +105,20 @@ class GraphNodes:
         normalized_state = self.normalize_state(state, config)
         if not normalized_state["messages"]:
             raise ValueError("graph checkpoint cannot resume model execution without messages")
-        model = self.model
+        turn_context = self.turn_context(config, normalized_state)
+        model = turn_context.model if turn_context is not None else self.model
+        if model is None:
+            raise RuntimeError("a model gateway is required in TurnExecutionContext")
         tool_registry = self.tool_registry
-        prompt = self.prompt
+        prompt = turn_context.system_prompt if turn_context is not None else self.prompt
         max_steps = self.max_steps
         ledger = self.ledger
-        deadline_monotonic = self.deadline_monotonic
-        self.ensure_active(normalized_state, force=True)
+        deadline_monotonic = (
+            turn_context.deadline_monotonic
+            if turn_context is not None
+            else self.deadline_monotonic
+        )
+        self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
         if int(current.get("step_count") or 0) >= max_steps:
             skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
@@ -97,9 +134,28 @@ class GraphNodes:
         current["status"] = "reasoning"
         _emit(current, config, "agent.reasoning", "Reasoning", "The agent is evaluating context and selecting the next step.")
         allowed_tools = _allowed_tool_names(current, tool_registry)
+        skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
+        tool_view = resolve_tool_view(
+            registry=tool_registry,
+            allowed_names=allowed_tools,
+            skill=skill_policy,
+            mode=turn_context.tool_view_mode if turn_context is not None else "legacy",
+        )
+        metadata = current.setdefault("metadata", {})
+        previous_tool_view = metadata.get("tool_view")
+        metadata["tool_view"] = tool_view.as_dict()
+        if previous_tool_view != metadata["tool_view"]:
+            _emit(
+                current,
+                config,
+                "tools.disclosure.resolved",
+                "Tool view resolved",
+                f"{len(tool_view.exposed_names)} tools exposed",
+                {**tool_view.as_dict(), "visible": False},
+            )
         tools = model_tools_from_registry(
             tool_registry,
-            allowed_names=allowed_tools,
+            allowed_names=set(tool_view.exposed_names),
             parameter_overrides=_skill_tool_parameter_overrides(current, tool_registry),
         )
         forced_tool_name = _forced_workflow_tool_name(current, tools)
@@ -145,7 +201,7 @@ class GraphNodes:
 
         def on_delta(delta: str) -> None:
             nonlocal delta_chars, delta_index, first_delta_at
-            self.ensure_active(current)
+            self.ensure_active(current, config)
             if first_delta_at is None:
                 first_delta_at = time.perf_counter()
             delta_chars += len(delta)
@@ -200,7 +256,7 @@ class GraphNodes:
                     step_context=model_step_context,
                     on_route=on_route,
                 )
-            self.ensure_active(current, force=True)
+            self.ensure_active(current, config, force=True)
         except AgentEventPersistenceError:
             raise
         except Exception as exc:
@@ -372,7 +428,7 @@ class GraphNodes:
         tool_registry = self.tool_registry
         tool_executor = self.tool_executor
         ledger = self.ledger
-        self.ensure_active(normalized_state, force=True)
+        self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
         calls = [_hydrate_call(item, tool_registry, current["run_id"]) for item in current.get("pending_tool_calls", [])]
         context = _config_value(config, "tool_context")
@@ -432,7 +488,7 @@ class GraphNodes:
 
     def await_user_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
         normalized_state = self.normalize_state(state, config)
-        self.ensure_active(normalized_state, force=True)
+        self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
         resume_payload = interrupt(current.get("pending_action") or {})
         if _is_policy_confirmation(current.get("pending_action")):
@@ -441,7 +497,7 @@ class GraphNodes:
 
     def await_async_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
         normalized_state = self.normalize_state(state, config)
-        self.ensure_active(normalized_state, force=True)
+        self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
         resume_payload = interrupt(current.get("pending_async") or {})
         return _apply_resume_payload(current, resume_payload, config, source="async_observation")
