@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.10.0
+
+- Added a host-configurable LangGraph durability policy and made `exit` the
+  default so internal super-steps do not create unnecessary checkpoints while
+  interrupt and terminal boundaries remain recoverable.
+- Suppressed ephemeral token-stream telemetry from structured logs by default,
+  with an explicit opt-in for low-level diagnostics.
+
 ## 3.9.1
 
 - Allowed the internal catalog discovery tool through non-empty Skill

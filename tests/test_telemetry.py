@@ -78,3 +78,19 @@ def test_logging_telemetry_emits_structured_trace_payload(caplog):
     assert "harness_telemetry" in caplog.text
     assert record.trace_id in caplog.text
     assert record.span_id in caplog.text
+
+
+def test_logging_telemetry_suppresses_ephemeral_stream_events_by_default(caplog):
+    record = TelemetryRecord(
+        event_name="model.delta",
+        run_id="run-stream",
+        ephemeral=True,
+    )
+
+    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+        LoggingTelemetry().record(record)
+    assert "harness_telemetry" not in caplog.text
+
+    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+        LoggingTelemetry(include_ephemeral=True).record(record)
+    assert "harness_telemetry" in caplog.text

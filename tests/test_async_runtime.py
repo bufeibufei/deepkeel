@@ -48,13 +48,14 @@ def test_async_graph_falls_back_to_sync_for_sync_only_checkpointer() -> None:
         def __init__(self) -> None:
             self.sync_calls = 0
 
-        def invoke(self, value, *, config):
+        def invoke(self, value, *, config, durability):
             del config
+            assert durability == "exit"
             self.sync_calls += 1
             return value
 
-        async def ainvoke(self, value, *, config):
-            del value, config
+        async def ainvoke(self, value, *, config, durability):
+            del value, config, durability
             raise AssertionError("sync-only checkpointer must not use ainvoke")
 
     async def scenario():

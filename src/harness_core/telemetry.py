@@ -34,6 +34,7 @@ class TelemetryRecord(BaseModel):
     trace_id: str = ""
     span_id: str = ""
     parent_span_id: str = ""
+    ephemeral: bool = False
     privacy_class: Literal["operational_metadata"] = "operational_metadata"
     occurred_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     attributes: dict[str, Any] = Field(default_factory=dict)
@@ -100,6 +101,7 @@ class TelemetryRecord(BaseModel):
             component=_event_component(event_name),
             operation_id=operation_id,
             parent_operation_id=str(payload.get("parent_operation_id") or ""),
+            ephemeral=bool(event.get("ephemeral")),
             occurred_at=_event_occurred_at(event.get("created_at")),
             attributes={
                 "source_event_type": str(event.get("source_event_type") or ""),
@@ -120,10 +122,18 @@ class NoopTelemetry:
 class LoggingTelemetry:
     """Structured JSON telemetry adapter suitable for containers and log collectors."""
 
-    def __init__(self, logger: logging.Logger | None = None) -> None:
+    def __init__(
+        self,
+        logger: logging.Logger | None = None,
+        *,
+        include_ephemeral: bool = False,
+    ) -> None:
         self._logger = logger or logging.getLogger("harness_core.telemetry")
+        self._include_ephemeral = include_ephemeral
 
     def record(self, event: TelemetryRecord) -> None:
+        if event.ephemeral and not self._include_ephemeral:
+            return
         self._logger.info(
             "harness_telemetry %s",
             json.dumps(event.model_dump(mode="json"), ensure_ascii=False, separators=(",", ":")),

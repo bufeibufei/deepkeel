@@ -2,7 +2,13 @@ from __future__ import annotations
 
 import asyncio
 
-from harness_core.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
+from langgraph.checkpoint.memory import InMemorySaver
+
+from harness_core.adapter_sdk import (
+    HarnessRuntimeBuilder,
+    LangGraphCheckpointerAdapter,
+    RuntimePorts,
+)
 from harness_core.contracts import ToolCall
 from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
@@ -33,6 +39,38 @@ class PromptEchoProvider:
                 }
             ]
         }
+
+
+class CountingSaver(InMemorySaver):
+    def __init__(self) -> None:
+        super().__init__()
+        self.put_count = 0
+
+    def put(self, config, checkpoint, metadata, new_versions):
+        self.put_count += 1
+        return super().put(config, checkpoint, metadata, new_versions)
+
+
+def test_default_graph_durability_checkpoints_only_at_runtime_exit() -> None:
+    saver = CountingSaver()
+    runtime = (
+        HarnessRuntimeBuilder()
+        .with_ports(
+            RuntimePorts(
+                checkpointer=LangGraphCheckpointerAdapter(saver),
+            )
+        )
+        .build()
+    )
+
+    result = runtime.run(
+        RuntimeRequest(question="hello", run_id="exit-durability"),
+        provider=PromptEchoProvider(),
+    )
+
+    assert result.status == "completed"
+    assert saver.put_count == 1
+    assert result.diagnostics["execution_contract"]["graph_durability"] == "exit"
 
 
 def test_runtime_reuses_one_graph_without_leaking_turn_prompt() -> None:

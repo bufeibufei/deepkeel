@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, cast
+from typing import Any, Callable, Literal, cast
 
 from langchain_core.runnables import RunnableConfig, RunnableLambda
 from langgraph.graph import END, START, StateGraph
@@ -34,12 +34,14 @@ from harness_core.turn_context import TurnContextRegistry, TurnExecutionContext
 
 EventSink = Callable[[dict[str, Any]], None]
 HARNESS_GRAPH_CONTRACT_VERSION = "harness-graph-v1"
+GraphDurability = Literal["sync", "async", "exit"]
 
 
 @dataclass(slots=True)
 class HarnessGraph:
     compiled_graph: Any
     supports_async_checkpointer: bool = True
+    durability: GraphDurability = "exit"
     contract_version: str = HARNESS_GRAPH_CONTRACT_VERSION
     turn_contexts: TurnContextRegistry | None = None
 
@@ -80,6 +82,7 @@ class HarnessGraph:
                 config=_graph_config(
                     context.thread_id, tool_context, event_sink, turn_context
                 ),
+                durability=self.durability,
             ))
         finally:
             self._release_turn_context(turn_context, keys)
@@ -98,6 +101,7 @@ class HarnessGraph:
             return migrate_legacy_graph_state(self.compiled_graph.invoke(
                 Command(resume=resume_payload),
                 config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                durability=self.durability,
             ), thread_id=thread_id)
         finally:
             self._release_turn_context(turn_context, keys)
@@ -116,6 +120,7 @@ class HarnessGraph:
             return migrate_legacy_graph_state(self.compiled_graph.invoke(
                 None,
                 config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                durability=self.durability,
             ), thread_id=thread_id)
         finally:
             self._release_turn_context(turn_context, keys)
@@ -143,6 +148,7 @@ class HarnessGraph:
                 config=_graph_config(
                     context.thread_id, tool_context, event_sink, turn_context
                 ),
+                durability=self.durability,
             )
             return validate_graph_state(state)
         finally:
@@ -171,6 +177,7 @@ class HarnessGraph:
             state = await self.compiled_graph.ainvoke(
                 Command(resume=resume_payload),
                 config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                durability=self.durability,
             )
             return migrate_legacy_graph_state(state, thread_id=thread_id)
         finally:
@@ -197,6 +204,7 @@ class HarnessGraph:
             state = await self.compiled_graph.ainvoke(
                 None,
                 config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                durability=self.durability,
             )
             return migrate_legacy_graph_state(state, thread_id=thread_id)
         finally:
@@ -215,6 +223,7 @@ def create_harness_graph(
     budget_ledger: BudgetLedger | None = None,
     deadline_monotonic: float | None = None,
     run_control: RunControl | None = None,
+    durability: GraphDurability = "exit",
 ) -> HarnessGraph:
     prompt = system_prompt or harness_system_prompt()
     ledger = budget_ledger or getattr(model, "budget_ledger", None) or tool_executor.budget_ledger
@@ -290,5 +299,6 @@ def create_harness_graph(
     return HarnessGraph(
         compiled_graph=graph.compile(checkpointer=checkpointer),
         supports_async_checkpointer=supports_async_checkpointer,
+        durability=durability,
         turn_contexts=turn_contexts,
     )

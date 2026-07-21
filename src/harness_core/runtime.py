@@ -41,6 +41,7 @@ from harness_core.event_journal import RuntimeEventJournal
 from harness_core.events import AgentEventPersistenceError, envelope_runtime_event
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.graph import (
+    GraphDurability,
     HARNESS_GRAPH_CONTRACT_VERSION,
     HarnessGraph,
     create_harness_graph,
@@ -175,6 +176,7 @@ class HarnessRuntime:
         async_stream_buffer_size: int = 128,
         async_cancel_timeout_seconds: float = 5.0,
         reuse_compiled_graph: bool = True,
+        graph_durability: GraphDurability = "exit",
         tool_view_mode: ToolViewMode = "legacy",
     ) -> None:
         self.tool_registry = tool_registry
@@ -207,6 +209,7 @@ class HarnessRuntime:
         self.async_stream_buffer_size = max(1, int(async_stream_buffer_size))
         self.async_cancel_timeout_seconds = max(0.1, float(async_cancel_timeout_seconds))
         self.reuse_compiled_graph = bool(reuse_compiled_graph)
+        self.graph_durability = graph_durability
         self.tool_view_mode = tool_view_mode
         if self.tool_view_mode != "legacy":
             install_tool_discovery(self.tool_registry, self.tool_executor)
@@ -235,6 +238,7 @@ class HarnessRuntime:
                     supports_async_checkpointer=checkpointer_supports_async(self.checkpointer),
                     budget_ledger=self.budget_ledger,
                     run_control=self.run_control,
+                    durability=self.graph_durability,
                 )
                 self._compiled_graph = graph
                 self._graph_compile_count += 1
@@ -691,6 +695,7 @@ class HarnessRuntime:
                 budget_ledger=self.budget_ledger,
                 deadline_monotonic=deadline_monotonic,
                 run_control=self.run_control,
+                durability=self.graph_durability,
             )
         budget_limits = _budget_limits(resolved_model_policy)
         tool_context = ToolExecutionContext(
@@ -918,6 +923,7 @@ class HarnessRuntime:
         execution_contract = {
             "graph_contract_version": HARNESS_GRAPH_CONTRACT_VERSION,
             "graph_reused": self.reuse_compiled_graph,
+            "graph_durability": self.graph_durability,
             "graph_compile_count": self.graph_compile_count,
             "tool_catalog_version": self.tool_registry.catalog_version(),
             "tool_view_mode": self.tool_view_mode,

@@ -17,6 +17,7 @@ from harness_core.control import RunControl
 from harness_core.event_journal import RuntimeEventJournal
 from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
+from harness_core.graph import GraphDurability
 from harness_core.model_routing import ModelRouter
 from harness_core.model import ModelInvocationRecorder, ModelInvocationStore
 from harness_core.leases import RunLeaseStore
@@ -60,6 +61,7 @@ class RuntimePortChanges(TypedDict, total=False):
     async_stream_buffer_size: int
     async_cancel_timeout_seconds: float
     reuse_compiled_graph: bool
+    graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
     capability_services: Mapping[str, object]
 
@@ -88,6 +90,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     async_stream_buffer_size: int
     async_cancel_timeout_seconds: float
     reuse_compiled_graph: bool
+    graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
     capability_services: Mapping[str, object]
 
@@ -122,6 +125,7 @@ class RuntimePorts:
     async_stream_buffer_size: int = 128
     async_cancel_timeout_seconds: float = 5.0
     reuse_compiled_graph: bool = True
+    graph_durability: GraphDurability = "exit"
     tool_view_mode: ToolViewMode = "legacy"
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
@@ -269,6 +273,7 @@ class HarnessRuntimeBuilder:
             async_stream_buffer_size=self._ports.async_stream_buffer_size,
             async_cancel_timeout_seconds=self._ports.async_cancel_timeout_seconds,
             reuse_compiled_graph=self._ports.reuse_compiled_graph,
+            graph_durability=self._ports.graph_durability,
             tool_view_mode=self._ports.tool_view_mode,
         )
 
