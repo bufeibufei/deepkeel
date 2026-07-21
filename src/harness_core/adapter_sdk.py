@@ -5,9 +5,11 @@ from harness_core.adapter_conformance import (
     verify_runtime_event_projection_contract,
     verify_runtime_event_journal_contract,
     verify_durable_checkpoint_store_contract,
+    verify_context_summary_cache_contract,
     verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
     verify_tool_execution_store_contract,
+    verify_trace_store_contract,
 )
 
 from harness_core.budget import (
@@ -121,11 +123,15 @@ from harness_core.ports import (
     SessionFactory,
 )
 from harness_core.telemetry import (
+    CompositeTelemetry,
     InMemoryTelemetry,
     LoggingTelemetry,
     NoopTelemetry,
     TelemetryPort,
     TelemetryRecord,
+    TracePage,
+    TraceQuery,
+    TraceStore,
 )
 
 ADAPTER_SDK_API = (
@@ -144,6 +150,7 @@ ADAPTER_SDK_API = (
     "ContextWindowManager",
     "ContextWindowPolicy",
     "ContextWindowResult",
+    "CompositeTelemetry",
     "DefaultPolicyEngine",
     "DenySecretProvider",
     "DeterministicContextWindowManager",
@@ -214,6 +221,9 @@ ADAPTER_SDK_API = (
     "TOOL_CONCURRENCY",
     "TelemetryPort",
     "TelemetryRecord",
+    "TracePage",
+    "TraceQuery",
+    "TraceStore",
     "TokenEstimator",
     "UsageReport",
     "classify_model_failure",
@@ -225,12 +235,14 @@ ADAPTER_SDK_API = (
     "response_format_not_supported",
     "response_format_payload",
     "verify_durable_checkpoint_store_contract",
+    "verify_context_summary_cache_contract",
     "verify_model_invocation_store_contract",
     "verify_runtime_event_projection_contract",
     "verify_run_lease_store_contract",
     "verify_runtime_event_journal_contract",
     "verify_runtime_state_store_contract",
     "verify_tool_execution_store_contract",
+    "verify_trace_store_contract",
 )
 
 __all__ = list(ADAPTER_SDK_API)

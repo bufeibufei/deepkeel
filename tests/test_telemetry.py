@@ -1,6 +1,14 @@
 import logging
 
-from harness_core.telemetry import LoggingTelemetry, TelemetryRecord
+from datetime import UTC, datetime, timedelta
+
+from harness_core.telemetry import (
+    CompositeTelemetry,
+    InMemoryTelemetry,
+    LoggingTelemetry,
+    TelemetryRecord,
+    TraceQuery,
+)
 
 
 def test_runtime_event_telemetry_preserves_correlations_and_excludes_content():
@@ -94,3 +102,43 @@ def test_logging_telemetry_suppresses_ephemeral_stream_events_by_default(caplog)
     with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
         LoggingTelemetry(include_ephemeral=True).record(record)
     assert "harness_telemetry" in caplog.text
+
+
+def test_trace_store_queries_deduplicates_and_purges_records() -> None:
+    store = InMemoryTelemetry()
+    now = datetime.now(UTC)
+    old = TelemetryRecord(
+        event_name="run.started",
+        run_id="run-1",
+        occurred_at=now - timedelta(days=2),
+    )
+    recent = TelemetryRecord(
+        event_name="tool.completed",
+        run_id="run-1",
+        component="tool",
+        occurred_at=now,
+    )
+    store.record(old)
+    store.record(old)
+    store.record(recent)
+
+    page = store.query(TraceQuery(run_id="run-1", limit=2))
+    assert [record.event_name for record in page.records] == [
+        "run.started",
+        "tool.completed",
+    ]
+    assert page.truncated is False
+    assert store.query(TraceQuery(component="tool", limit=1)).records == [recent]
+    assert store.delete_before(now - timedelta(days=1)) == 1
+    assert store.query(TraceQuery(run_id="run-1")).records == [recent]
+
+
+def test_composite_telemetry_fans_out_to_each_destination() -> None:
+    first = InMemoryTelemetry()
+    second = InMemoryTelemetry()
+    event = TelemetryRecord(event_name="run.completed", run_id="run-2")
+
+    CompositeTelemetry((first, second)).record(event)
+
+    assert first.snapshot() == (event,)
+    assert second.snapshot() == (event,)

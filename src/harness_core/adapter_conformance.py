@@ -4,6 +4,7 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
+from harness_core.context_window import ContextSummaryCache, ContextSummaryRecord
 from harness_core.event_journal import EventJournalConflict, RuntimeEventJournal
 from harness_core.leases import RunLeaseConflict, RunLeaseStore
 from harness_core.persistence import DurableCheckpointStore
@@ -23,6 +24,37 @@ from harness_core.state_store import (
     RuntimeStateStore,
 )
 from harness_core.tools import ToolExecutionStore
+from harness_core.telemetry import TelemetryRecord, TraceQuery, TraceStore
+
+
+def verify_trace_store_contract(store: TraceStore, *, run_id: str) -> None:
+    first = TelemetryRecord(event_name="run.started", run_id=run_id, sequence=1)
+    second = TelemetryRecord(event_name="tool.completed", run_id=run_id, sequence=2)
+    store.record(first)
+    store.record(first)
+    store.record(second)
+
+    page = store.query(TraceQuery(run_id=run_id, limit=10))
+    assert [record.telemetry_id for record in page.records] == [
+        first.telemetry_id,
+        second.telemetry_id,
+    ]
+    assert page.truncated is False
+    assert store.query(TraceQuery(run_id=run_id, limit=1)).truncated is True
+
+
+def verify_context_summary_cache_contract(cache: ContextSummaryCache) -> None:
+    record = ContextSummaryRecord(
+        cache_key="profile:summary",
+        source_fingerprint="fingerprint-v1",
+        summary={"focus": "career"},
+        summary_version="v1",
+    )
+    cache.put(record)
+    assert cache.get(record.cache_key, record.source_fingerprint) == record
+    assert cache.get(record.cache_key, "stale") is None
+    cache.invalidate(record.cache_key)
+    assert cache.get(record.cache_key, record.source_fingerprint) is None
 
 
 def verify_runtime_event_projection_contract(

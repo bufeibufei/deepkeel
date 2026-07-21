@@ -5,7 +5,7 @@ import hashlib
 import json
 import logging
 from threading import Lock
-from typing import Any, Literal, Protocol
+from typing import Any, Iterable, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -114,6 +114,35 @@ class TelemetryPort(Protocol):
     def record(self, event: TelemetryRecord) -> None: ...
 
 
+class TraceQuery(BaseModel):
+    """Portable query contract for persisted operational traces."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str = ""
+    thread_id: str = ""
+    turn_id: str = ""
+    trace_id: str = ""
+    component: str = ""
+    event_name: str = ""
+    occurred_after: datetime | None = None
+    occurred_before: datetime | None = None
+    limit: int = Field(default=200, ge=1, le=2_000)
+
+
+class TracePage(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    records: list[TelemetryRecord] = Field(default_factory=list)
+    truncated: bool = False
+
+
+class TraceStore(TelemetryPort, Protocol):
+    def query(self, query: TraceQuery) -> TracePage: ...
+
+    def delete_before(self, cutoff: datetime, *, limit: int = 10_000) -> int: ...
+
+
 class NoopTelemetry:
     def record(self, event: TelemetryRecord) -> None:
         del event
@@ -140,6 +169,17 @@ class LoggingTelemetry:
         )
 
 
+class CompositeTelemetry:
+    """Fan out one telemetry record without coupling Core to a backend."""
+
+    def __init__(self, destinations: Iterable[TelemetryPort]) -> None:
+        self._destinations = tuple(destinations)
+
+    def record(self, event: TelemetryRecord) -> None:
+        for destination in self._destinations:
+            destination.record(event)
+
+
 class InMemoryTelemetry:
     """Deterministic adapter for embedding, tests and local diagnostics."""
 
@@ -149,11 +189,35 @@ class InMemoryTelemetry:
 
     def record(self, event: TelemetryRecord) -> None:
         with self._lock:
+            if any(existing.telemetry_id == event.telemetry_id for existing in self._events):
+                return
             self._events.append(event.model_copy(deep=True))
 
     def snapshot(self) -> tuple[TelemetryRecord, ...]:
         with self._lock:
             return tuple(event.model_copy(deep=True) for event in self._events)
+
+    def query(self, query: TraceQuery) -> TracePage:
+        with self._lock:
+            matches = [event for event in self._events if _trace_matches(event, query)]
+            matches.sort(key=lambda event: (event.occurred_at, event.telemetry_id))
+            truncated = len(matches) > query.limit
+            return TracePage(
+                records=[event.model_copy(deep=True) for event in matches[: query.limit]],
+                truncated=truncated,
+            )
+
+    def delete_before(self, cutoff: datetime, *, limit: int = 10_000) -> int:
+        normalized_limit = max(1, int(limit))
+        with self._lock:
+            candidates = [
+                index
+                for index, event in enumerate(self._events)
+                if event.occurred_at < cutoff
+            ][:normalized_limit]
+            for index in reversed(candidates):
+                self._events.pop(index)
+            return len(candidates)
 
 
 _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
@@ -223,3 +287,22 @@ def _event_occurred_at(value: Any) -> datetime:
 def _event_component(event_name: str) -> str:
     prefix = str(event_name or "runtime").split(".", 1)[0]
     return prefix if prefix in {"agent", "answer", "budget", "model", "run", "tool"} else "runtime"
+
+
+def _trace_matches(event: TelemetryRecord, query: TraceQuery) -> bool:
+    exact = (
+        (query.run_id, event.run_id),
+        (query.thread_id, event.thread_id),
+        (query.turn_id, event.turn_id),
+        (query.trace_id, event.trace_id),
+        (query.component, event.component),
+        (query.event_name, event.event_name),
+    )
+    if any(expected and expected != actual for expected, actual in exact):
+        return False
+    if query.occurred_after is not None and event.occurred_at < query.occurred_after:
+        return False
+    return not (
+        query.occurred_before is not None
+        and event.occurred_at >= query.occurred_before
+    )

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.11.0
+
+- Added a portable persistent TraceStore query and retention contract plus a
+  composite telemetry adapter for simultaneous storage and structured logs.
+- Added conformance coverage for TraceStore and shared ContextSummaryCache
+  adapters so multi-worker Hosts can share bounded context summaries safely.
+
 ## 3.10.0
 
 - Added a host-configurable LangGraph durability policy and made `exit` the
