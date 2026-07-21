@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.6.0
+
+- Added a public runtime-event normalizer for replaying persisted Host journal
+  rows without exposing nested event envelopes.
+- Added a Host event-projection conformance contract covering canonical tool
+  lifecycle events and answer deltas.
+
 ## 3.5.0
 
 - Added provider-neutral model capability contracts and runtime capability

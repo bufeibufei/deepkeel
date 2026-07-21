@@ -17,7 +17,7 @@ from harness_core.context_snapshot import (
     normalize_agent_context_snapshot,
 )
 from harness_core.control import InMemoryRunControl, NoopRunControl, RunControl
-from harness_core.events import AgentEventPersistenceError
+from harness_core.events import AgentEventPersistenceError, normalize_runtime_event
 from harness_core.event_journal import (
     EventJournalConflict,
     InMemoryRuntimeEventJournal,
@@ -114,6 +114,7 @@ RUNTIME_SDK_API = (
     "context_snapshot_subject",
     "failure_from_code",
     "normalize_agent_context_snapshot",
+    "normalize_runtime_event",
     "normalize_runtime_status",
     "project_run_ui_state",
     "workflow_projection",

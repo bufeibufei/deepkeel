@@ -7,7 +7,7 @@ from harness_core.event_journal import (
     EventJournalConflict,
     InMemoryRuntimeEventJournal,
 )
-from harness_core.events import envelope_runtime_event
+from harness_core.events import envelope_runtime_event, normalize_runtime_event
 from harness_core.runtime_api import RuntimeEventEnvelope
 from harness_core.runtime_sdk import RuntimeRequest
 
@@ -27,7 +27,11 @@ class ScriptedProvider:
 def _event(*, sequence: int, event_type: str = "run.created") -> RuntimeEventEnvelope:
     return RuntimeEventEnvelope.model_validate(
         envelope_runtime_event(
-            {"event_type": event_type, "payload": {"value": sequence}},
+            {
+                "event_type": event_type,
+                "payload": {"value": sequence},
+                "created_at": "2026-01-01T00:00:00+00:00",
+            },
             run_id="run-1",
             thread_id="thread-1",
             turn_id="turn-1",
@@ -46,6 +50,30 @@ def test_event_envelope_has_stable_identity_and_cursor():
     assert first.cursor == "run-1:1"
     assert first.run_version == 3
     assert first.source_event_type == "run.created"
+
+
+def test_persisted_event_wrapper_is_flattened_for_host_replay():
+    normalized = normalize_runtime_event(
+        {
+            "id": "journal-1",
+            "run_id": "run-1",
+            "sequence": 4,
+            "payload": {
+                "event_type": "tool.started",
+                "payload": {
+                    "tool_name": "demo.lookup",
+                    "tool_call": {"id": "call-1"},
+                },
+            },
+        }
+    )
+
+    assert normalized["event_type"] == "tool.call.started"
+    assert normalized["source_event_type"] == "tool.started"
+    assert normalized["run_id"] == "run-1"
+    assert normalized["sequence"] == 4
+    assert normalized["payload"]["tool_name"] == "demo.lookup"
+    assert "event_type" not in normalized["payload"]
 
 
 def test_in_memory_journal_is_idempotent_and_supports_cursor_replay():

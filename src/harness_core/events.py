@@ -33,6 +33,37 @@ def project_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def normalize_runtime_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Flatten a persisted event wrapper and return the canonical public shape.
+
+    Hosts commonly persist the complete runtime event inside a journal row's
+    ``payload`` field. Replaying that row must not expose a second nested event
+    envelope to consumers.
+    """
+
+    outer = dict(event or {})
+    stored = as_dict(outer.get("payload"))
+    nested = stored if isinstance(stored.get("event_type"), str) else as_dict(stored.get("event"))
+    if nested:
+        normalized = dict(nested)
+        for key in (
+            "id",
+            "event_id",
+            "run_id",
+            "thread_id",
+            "turn_id",
+            "sequence",
+            "run_version",
+            "visibility",
+            "created_at",
+        ):
+            if outer.get(key) not in (None, ""):
+                normalized[key] = outer[key]
+    else:
+        normalized = outer
+    return project_runtime_event(normalized)
+
+
 def envelope_runtime_event(
     event: dict[str, Any],
     *,

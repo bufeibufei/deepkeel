@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 from uuid import uuid4
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
@@ -23,6 +23,40 @@ from harness_core.state_store import (
     RuntimeStateStore,
 )
 from harness_core.tools import ToolExecutionStore
+
+
+def verify_runtime_event_projection_contract(
+    projector: Callable[[dict[str, Any]], dict[str, Any]],
+) -> None:
+    """Assert that a Host exposes flat canonical events after journal replay."""
+
+    projected = projector(
+        {
+            "id": "journal-event-1",
+            "run_id": "run-projection",
+            "sequence": 7,
+            "payload": {
+                "event_type": "tool.started",
+                "title": "Lookup",
+                "payload": {
+                    "tool_name": "example.lookup",
+                    "tool_call": {"id": "call-1", "arguments": {"query": "test"}},
+                },
+            },
+        }
+    )
+    assert projected["event_type"] == "tool.call.started"
+    assert projected["source_event_type"] == "tool.started"
+    assert projected["run_id"] == "run-projection"
+    assert projected["sequence"] == 7
+    assert projected["payload"]["tool_name"] == "example.lookup"
+    assert "event_type" not in projected["payload"]
+
+    answer_delta = projector(
+        {"event_type": "model.delta", "payload": {"delta": "hello"}}
+    )
+    assert answer_delta["event_type"] == "answer.delta"
+    assert answer_delta["payload"]["delta"] == "hello"
 
 
 def verify_runtime_event_journal_contract(

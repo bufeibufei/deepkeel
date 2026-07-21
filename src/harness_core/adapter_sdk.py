@@ -2,6 +2,7 @@
 
 from harness_core.adapter_conformance import (
     verify_model_invocation_store_contract,
+    verify_runtime_event_projection_contract,
     verify_runtime_event_journal_contract,
     verify_durable_checkpoint_store_contract,
     verify_run_lease_store_contract,
@@ -223,6 +224,7 @@ ADAPTER_SDK_API = (
     "response_format_payload",
     "verify_durable_checkpoint_store_contract",
     "verify_model_invocation_store_contract",
+    "verify_runtime_event_projection_contract",
     "verify_run_lease_store_contract",
     "verify_runtime_event_journal_contract",
     "verify_runtime_state_store_contract",
