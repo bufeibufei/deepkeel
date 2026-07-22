@@ -87,6 +87,11 @@ class TelemetryRecord(BaseModel):
         identity = event_id or (
             f"{run_id}:{turn_id}:{sequence}:{event_name}:{operation_id}"
         )
+        attributes = {
+            "source_event_type": str(event.get("source_event_type") or ""),
+            **_safe_runtime_attributes(payload),
+        }
+        attributes.update(_nested_tool_attributes(payload))
         return cls(
             telemetry_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
             event_id=event_id,
@@ -103,10 +108,7 @@ class TelemetryRecord(BaseModel):
             parent_operation_id=str(payload.get("parent_operation_id") or ""),
             ephemeral=bool(event.get("ephemeral")),
             occurred_at=_event_occurred_at(event.get("created_at")),
-            attributes={
-                "source_event_type": str(event.get("source_event_type") or ""),
-                **_safe_runtime_attributes(payload),
-            },
+            attributes=attributes,
         )
 
 
@@ -228,11 +230,13 @@ class InMemoryTelemetry:
 
 _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "artifact_type",
+    "argument_digest",
     "attempt_index",
     "budget_metric",
     "budget_remaining",
     "checkpoint_source",
     "duration_ms",
+    "deployment_commit",
     "error_code",
     "error_type",
     "failure_category",
@@ -251,15 +255,40 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "router_id",
     "status",
     "skill_id",
+    "skill_version",
     "stop_reason",
     "step_index",
     "tool_name",
     "tool_call_id",
     "tool_status",
+    "runtime_version",
     "trace_id",
     "span_id",
     "parent_span_id",
 }
+
+
+def _nested_tool_attributes(payload: dict[str, Any]) -> dict[str, Any]:
+    """Project safe tool identity fields from lifecycle event envelopes."""
+
+    tool = as_dict(payload.get("tool_result")) or as_dict(payload.get("tool_call"))
+    if not tool:
+        return {}
+    name = str(tool.get("name") or tool.get("tool_name") or "").strip()
+    call_id = str(tool.get("tool_call_id") or tool.get("id") or "").strip()
+    status = str(tool.get("status") or "").strip()
+    projected: dict[str, Any] = {}
+    if name:
+        projected["tool_name"] = name
+    if call_id:
+        projected["tool_call_id"] = call_id
+    if status:
+        projected["tool_status"] = status
+    arguments = tool.get("arguments")
+    if isinstance(arguments, dict):
+        encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+        projected["argument_digest"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+    return projected
 
 
 def _safe_runtime_attributes(payload: dict[str, Any]) -> dict[str, Any]:

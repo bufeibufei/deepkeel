@@ -33,6 +33,7 @@ from harness_core.model import (
 )
 from harness_core.failures import RunCanceledError, failure_from_code
 from harness_core.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
+from harness_core.recovery import RecoveryOutcome, RecoveryState, classify_recovery_outcome
 from harness_core.runtime import HarnessRuntime
 from harness_core.runtime_api import (
     RuntimeActiveTask,
@@ -79,6 +80,8 @@ RUNTIME_SDK_API = (
     "NoopRunControl",
     "Observation",
     "PendingAction",
+    "RecoveryOutcome",
+    "RecoveryState",
     "RunCanceledError",
     "RUN_SETTLED_EVENT",
     "RunAggregate",
@@ -112,6 +115,7 @@ RUNTIME_SDK_API = (
     "ToolCall",
     "ToolResult",
     "context_snapshot_subject",
+    "classify_recovery_outcome",
     "failure_from_code",
     "normalize_agent_context_snapshot",
     "normalize_runtime_event",

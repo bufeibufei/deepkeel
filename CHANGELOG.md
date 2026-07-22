@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.12.0
+
+- Added a portable recovery outcome contract that distinguishes successful,
+  typed terminal, untyped terminal, aborted, recovering, and stuck runs.
+- Projected safe tool identity and argument digests from nested lifecycle
+  events so persisted traces no longer degrade completed calls to unknown tools.
+
 ## 3.11.1
 
 - Isolate telemetry destination failures so observability backends cannot interrupt Agent execution.

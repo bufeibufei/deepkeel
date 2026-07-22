@@ -76,6 +76,34 @@ def test_direct_telemetry_records_receive_stable_identity():
     assert first.span_id == second.span_id
 
 
+def test_tool_telemetry_projects_nested_identity_without_arguments() -> None:
+    event = {
+        "event_type": "tool.completed",
+        "event_id": "event-tool-1",
+        "payload": {
+            "tool_result": {
+                "name": "calendar.select_dates",
+                "tool_call_id": "call-1",
+                "status": "succeeded",
+                "arguments": {"private": "value"},
+            }
+        },
+    }
+
+    record = TelemetryRecord.from_runtime_event(
+        event,
+        run_id="run-1",
+        thread_id="thread-1",
+        turn_id="turn-1",
+    )
+
+    assert record.attributes["tool_name"] == "calendar.select_dates"
+    assert record.attributes["tool_call_id"] == "call-1"
+    assert record.attributes["tool_status"] == "succeeded"
+    assert len(record.attributes["argument_digest"]) == 24
+    assert "arguments" not in record.attributes
+
+
 def test_logging_telemetry_emits_structured_trace_payload(caplog):
     telemetry = LoggingTelemetry()
     record = TelemetryRecord(event_name="tool.completed", run_id="run-logging")
