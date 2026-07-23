@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.2
+
+- Promoted the Memory contracts to a first-class versioned SDK layer and added
+  them to the machine-readable public API manifest.
+
 ## 3.12.1
 
 - Added product-neutral Memory claim, evidence, mutation, retrieval, and

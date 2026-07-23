@@ -1,6 +1,6 @@
 [project]
 name = "harness-agent-core"
-version = "3.12.1"
+version = "3.12.2"
 description = "Product-neutral Harness Agent runtime core."
 readme = "README.md"
 requires-python = ">=3.12"

@@ -118,7 +118,7 @@ class MemoryPort(Protocol):
     def get(self, claim_id: str) -> MemoryClaim | None: ...
 
 
-__all__ = [
+MEMORY_SDK_API = (
     "MemoryClaim",
     "MemoryEvidence",
     "MemoryMutation",
@@ -130,4 +130,6 @@ __all__ = [
     "MemorySearchHit",
     "MemorySearchPage",
     "MemoryStatus",
-]
+)
+
+__all__ = list(MEMORY_SDK_API)

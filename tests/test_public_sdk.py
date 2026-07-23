@@ -10,6 +10,7 @@ import harness_core
 import harness_core.adapter_sdk as adapter_sdk
 import harness_core.extension_sdk as extension_sdk
 import harness_core.mcp_sdk as mcp_sdk
+import harness_core.memory_sdk as memory_sdk
 import harness_core.orchestration_sdk as orchestration_sdk
 import harness_core.runtime_sdk as runtime_sdk
 
@@ -59,13 +60,14 @@ from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUB
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "3.3.0"
+    assert PUBLIC_API_VERSION == "3.4.0"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
         "HARNESS_CORE_VERSION",
         "adapter_sdk",
         "extension_sdk",
         "mcp_sdk",
+        "memory_sdk",
         "orchestration_sdk",
         "runtime_sdk",
     )
@@ -100,6 +102,7 @@ def test_public_api_matches_the_frozen_v3_snapshot() -> None:
         (extension_sdk, "extension"),
         (orchestration_sdk, "orchestration"),
         (mcp_sdk, "mcp"),
+        (memory_sdk, "memory"),
         (adapter_sdk, "adapter"),
     ],
 )
