@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.1
+
+- Added product-neutral Memory claim, evidence, mutation, retrieval, and
+  host-provided persistence port contracts.
+
 ## 3.12.0
 
 - Added a portable recovery outcome contract that distinguishes successful,
