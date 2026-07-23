@@ -972,7 +972,8 @@ class RoutedModelGateway:
                 )
                 envelope = ModelInvocationEnvelope(
                     invocation_id=(
-                        f"{step_context.run_id}:model:{step_context.step_index}:"
+                        f"{step_context.run_id}:turn:{step_context.turn_id}:"
+                        f"model:{step_context.step_index}:"
                         f"attempt:{attempt_index}"
                     ),
                     run_id=step_context.run_id,

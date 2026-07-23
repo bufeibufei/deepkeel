@@ -113,3 +113,43 @@ def test_runtime_replays_completed_model_invocation_without_second_provider_call
     route = next(item for item in second.trace if item["action"] == "model.route.selected")
     assert route["invocation"]["claim_outcome"] == "replay"
     assert route["invocation"]["replayed"] is True
+
+
+def test_runtime_does_not_reuse_model_invocation_across_turns():
+    store = InMemoryModelInvocationStore()
+    provider = CountingProvider()
+    runtime = HarnessRuntimeBuilder().with_ports(
+        RuntimePorts(model_invocation_store=store)
+    ).build()
+
+    first = runtime.run(
+        RuntimeRequest(
+            question="first turn",
+            run_id="run-multi-turn",
+            thread_id="thread-multi-turn",
+            turn_id="turn-1",
+            model_policy={"mode": "single", "primary_role": "fast"},
+        ),
+        provider=provider,
+    )
+    second = runtime.run(
+        RuntimeRequest(
+            question="second turn",
+            run_id="run-multi-turn",
+            thread_id="thread-multi-turn",
+            turn_id="turn-2",
+            model_policy={"mode": "single", "primary_role": "fast"},
+        ),
+        provider=provider,
+    )
+
+    first_route = next(
+        item for item in first.trace if item["action"] == "model.route.selected"
+    )
+    second_route = next(
+        item for item in second.trace if item["action"] == "model.route.selected"
+    )
+    assert provider.calls == 2
+    assert first_route["invocation"]["invocation_id"] != second_route["invocation"][
+        "invocation_id"
+    ]

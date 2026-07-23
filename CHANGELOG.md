@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.3
+
+- Include the turn identity in durable model invocation IDs so resumed or
+  multi-turn runs cannot collide with an earlier step-zero invocation.
+
 ## 3.12.2
 
 - Promoted the Memory contracts to a first-class versioned SDK layer and added
