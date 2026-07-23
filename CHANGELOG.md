@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.12.4
+
+- Treat tools skipped after a user-action or asynchronous suspension as
+  internal scheduling events instead of user-visible execution failures.
+
 ## 3.12.3
 
 - Include the turn identity in durable model invocation IDs so resumed or

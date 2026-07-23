@@ -477,6 +477,20 @@ class GraphNodes:
         current["pending_action"] = None
         current["pending_async"] = None
         for result in results:
+            if _is_unexecuted_suspension_rejection(result):
+                _emit(
+                    current,
+                    config,
+                    "tool.skipped",
+                    result.name,
+                    "Skipped until the pending action is resolved.",
+                    {
+                        "tool_call": result.call.model_dump(mode="json") if result.call else {},
+                        "tool_result": result.model_dump(mode="json", exclude={"call"}),
+                        "visible": False,
+                    },
+                )
+                continue
             current.setdefault("tool_results", []).append(result.model_dump(mode="json"))
             _record_completed_tool(current, result)
             _apply_tool_result(current, result, config)
@@ -508,3 +522,8 @@ class GraphNodes:
         current = _copy_state(normalized_state)
         resume_payload = interrupt(current.get("pending_async") or {})
         return _apply_resume_payload(current, resume_payload, config, source="async_observation")
+
+
+def _is_unexecuted_suspension_rejection(result: Any) -> bool:
+    metadata = result.metadata if isinstance(getattr(result, "metadata", None), dict) else {}
+    return bool(metadata.get("suspension_rejected")) and metadata.get("executed") is False

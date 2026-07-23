@@ -1016,6 +1016,79 @@ def test_runtime_waiting_action_is_committed_through_atomic_state_store() -> Non
     assert len(snapshot["events"]) == len(snapshot["checkpoints"]) == 1
 
 
+def test_runtime_hides_tools_skipped_after_user_action_suspension() -> None:
+    class HandoffWithSiblingModelAdapter:
+        info = ModelProviderInfo(
+            provider_id="example.handoff-sibling",
+            model_id="handoff-sibling-v1",
+            model_role="reasoning",
+        )
+
+        def invoke(self, request: ModelInvocation, *, on_text_delta=None) -> ModelTurn:
+            return ModelTurn(
+                tool_calls=[
+                    ToolCall(id="handoff-call", name="workflow.handoff"),
+                    ToolCall(id="memory-call", name="memory.read"),
+                ],
+                finish_reason="tool_calls",
+                model_id=self.info.model_id,
+                model_role=self.info.model_role,
+            )
+
+    registry = ToolRegistry(
+        [
+            ToolSpec(
+                name="workflow.handoff",
+                parameters_schema={"type": "object", "properties": {}},
+                requires_user_action=True,
+            ),
+            ToolSpec(
+                name="memory.read",
+                parameters_schema={"type": "object", "properties": {}},
+            ),
+        ]
+    )
+    executor = ToolExecutor(registry)
+    memory_calls = 0
+
+    def require_action(call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        return ToolResult(
+            call=call,
+            status="requires_user_action",
+            summary="User confirmation is required.",
+            pending_action=PendingAction(
+                id="pending-with-sibling",
+                run_id=context.run_id,
+                tool_call_id=call.id,
+                action_type="confirmation",
+                prompt="Continue?",
+            ),
+        )
+
+    def read_memory(call: ToolCall, _context: ToolExecutionContext) -> ToolResult:
+        nonlocal memory_calls
+        memory_calls += 1
+        return ToolResult(call=call, status="succeeded", summary="Memory loaded.")
+
+    executor.register("workflow.handoff", require_action)
+    executor.register("memory.read", read_memory)
+    result = run_runtime(
+        HarnessRuntimeBuilder(registry, executor).build(),
+        "start workflow",
+        provider=HandoffWithSiblingModelAdapter(),
+        context_bundle={"agent_session_id": "run-handoff-with-sibling"},
+    )
+
+    assert result.status.value == "waiting_user_action"
+    assert memory_calls == 0
+    assert all(item.name != "memory.read" for item in result.tool_results)
+    assert not any(
+        event.source_event_type in {"tool.failed", "tool.call.failed"}
+        for event in result.events
+    )
+    assert any(event.source_event_type == "tool.skipped" for event in result.events)
+
+
 def test_tool_executor_rejects_artifact_that_violates_registered_schema() -> None:
     @dataclass(frozen=True, slots=True)
     class ArtifactPack:
