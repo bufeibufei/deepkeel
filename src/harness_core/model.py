@@ -7,7 +7,7 @@ import json
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from threading import Lock
-from typing import Any, Callable, Protocol, runtime_checkable
+from typing import Any, Callable, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -93,6 +93,7 @@ class ModelInvocation(BaseModel):
     tool_choice: str | dict[str, Any] = "auto"
     request_timeout: int = 300
     max_output_tokens: int | None = None
+    reasoning_effort: Literal["low", "medium", "high"] | None = None
     response_contract: ResponseContract | None = None
 
 
@@ -490,6 +491,7 @@ class NativeChatProviderAdapter:
                 tool_choice=request.tool_choice,
                 request_timeout=request.request_timeout,
                 max_output_tokens=request.max_output_tokens,
+                reasoning_effort=request.reasoning_effort,
             )
             return _assemble_streamed_turn(
                 events,
@@ -503,6 +505,7 @@ class NativeChatProviderAdapter:
                 tool_choice=request.tool_choice,
                 request_timeout=request.request_timeout,
                 max_output_tokens=request.max_output_tokens,
+                reasoning_effort=request.reasoning_effort,
             )
             return _turn_from_completion(
                 response,
@@ -534,6 +537,7 @@ class NativeChatProviderAdapter:
                     tool_choice=request.tool_choice,
                     request_timeout=request.request_timeout,
                     max_output_tokens=request.max_output_tokens,
+                    reasoning_effort=request.reasoning_effort,
                     response_format=response_format_payload(mode, contract),
                 )
             except Exception as exc:
@@ -635,6 +639,7 @@ class NativeChatProviderAdapter:
         tool_choice: str | dict[str, Any],
         request_timeout: int,
         max_output_tokens: int | None,
+        reasoning_effort: str | None,
     ):
         return _call_supported(
             self.provider.stream_chat,
@@ -643,6 +648,7 @@ class NativeChatProviderAdapter:
             tool_choice=tool_choice,
             request_timeout=request_timeout,
             max_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
         )
 
     def _call_complete_chat(
@@ -653,6 +659,7 @@ class NativeChatProviderAdapter:
         tool_choice: str | dict[str, Any],
         request_timeout: int,
         max_output_tokens: int | None,
+        reasoning_effort: str | None,
         response_format: dict[str, Any] | None = None,
     ):
         return _call_supported(
@@ -662,6 +669,7 @@ class NativeChatProviderAdapter:
             tool_choice=tool_choice,
             request_timeout=request_timeout,
             max_tokens=max_output_tokens,
+            reasoning_effort=reasoning_effort,
             response_format=response_format,
         )
 
@@ -887,9 +895,20 @@ class RoutedModelGateway:
                 if policy.allowed and attempt_index > 1
                 else None
             )
+            provider_capabilities = getattr(
+                provider.info,
+                "capabilities",
+                ModelCapabilities(source="adapter_unknown"),
+            )
             max_output_tokens = _remaining_output_tokens(
                 budget_policy,
                 self.budget_ledger.snapshot(step_context.run_id),
+                route.role,
+                capabilities=provider_capabilities,
+                estimated_input_tokens=estimated_input_tokens,
+            )
+            reasoning_effort = _reasoning_effort(
+                provider_capabilities,
                 route.role,
             )
             route_payload = {
@@ -906,6 +925,12 @@ class RoutedModelGateway:
                 "attempt_index": attempt_index,
                 "retry_kind": retry_kind,
                 "max_output_tokens": max_output_tokens,
+                "reasoning_effort": reasoning_effort,
+                "model_limits": {
+                    "context_window_tokens": provider_capabilities.context_window_tokens,
+                    "max_output_tokens": provider_capabilities.max_output_tokens,
+                    "capability_source": provider_capabilities.source,
+                },
                 **previous_failure,
             }
             if not policy.allowed:
@@ -969,6 +994,7 @@ class RoutedModelGateway:
                     tool_choice=_tool_choice(step_context),
                     request_timeout=request_timeout,
                     max_output_tokens=route_payload["max_output_tokens"],
+                    reasoning_effort=route_payload["reasoning_effort"],
                 )
                 envelope = ModelInvocationEnvelope(
                     invocation_id=(
@@ -1317,6 +1343,9 @@ def _remaining_output_tokens(
     policy: BudgetPolicy,
     snapshot,
     role: str,
+    *,
+    capabilities: ModelCapabilities,
+    estimated_input_tokens: int,
 ) -> int | None:
     total_limit = policy.limit("max_output_tokens_total")
     per_call_limit = policy.limit("max_output_tokens_per_call", role=role)
@@ -1325,9 +1354,19 @@ def _remaining_output_tokens(
         if total_limit is not None
         else None
     )
+    context_remaining = (
+        max(1, capabilities.context_window_tokens - max(0, estimated_input_tokens))
+        if capabilities.context_window_tokens is not None
+        else None
+    )
     candidates = [
         int(value)
-        for value in (remaining_total, per_call_limit)
+        for value in (
+            remaining_total,
+            per_call_limit,
+            capabilities.max_output_tokens,
+            context_remaining,
+        )
         if value is not None
     ]
     if not candidates:
@@ -1345,6 +1384,15 @@ def _remaining_output_tokens(
         )
         raise BudgetExceededError(decision)
     return available
+
+
+def _reasoning_effort(
+    capabilities: ModelCapabilities,
+    role: str,
+) -> Literal["low", "medium", "high"] | None:
+    if capabilities.supports_reasoning_effort is not True:
+        return None
+    return "low" if role == "fast" else "high"
 
 
 def _provider_usage(raw: dict[str, Any] | None) -> dict[str, Any]:

@@ -23,6 +23,14 @@ class ModelCapabilities(BaseModel):
 
     supports_streaming: bool | None = None
     supports_native_tools: bool | None = None
+    supports_reasoning: bool | None = None
+    supports_reasoning_effort: bool | None = None
+    context_window_tokens: int | None = Field(default=None, ge=1)
+    max_output_tokens: int | None = Field(default=None, ge=1)
+    completion_limit_parameter: Literal[
+        "max_tokens",
+        "max_completion_tokens",
+    ] | None = None
     supported_response_formats: set[ResponseFormat] = Field(
         default_factory=lambda: {ResponseFormat.TEXT}
     )
