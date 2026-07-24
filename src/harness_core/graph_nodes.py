@@ -31,7 +31,9 @@ from harness_core.graph_state import (
     HarnessGraphState, migrate_legacy_graph_state,
 )
 from harness_core.graph_workflow import (
-    _answer_summary, _config_value, _emit, _finish_failed, _latency_ms,
+    TRUNCATED_FINISH_REASONS,
+    _answer_summary, _complete_continued_answer, _config_value,
+    _continue_or_fail_truncated_model_response, _emit, _finish_failed, _latency_ms,
     _record_completed_tool, _repair_or_fail_workflow,
     _retry_or_fail_empty_model_response, _set_policy_state,
     _wait_for_workflow_input, _workflow_can_wait_for_user_input,
@@ -370,6 +372,17 @@ class GraphNodes:
             turn.content[:160],
             model_metrics,
         )
+        if (
+            not tool_calls
+            and turn.finish_reason.strip().lower() in TRUNCATED_FINISH_REASONS
+        ):
+            return _continue_or_fail_truncated_model_response(
+                current,
+                config,
+                content=turn.content,
+                finish_reason=turn.finish_reason,
+                can_continue=int(current.get("step_count") or 0) < max_steps,
+            )
         if not turn.tool_calls and not turn.content.strip():
             # Do not poison the next provider request with an empty assistant
             # message when retrying a transient successful-but-empty response.
@@ -402,9 +415,13 @@ class GraphNodes:
             return _repair_or_fail_workflow(current, skill_policy, completion, config)
         if skill_policy.active and skill_policy.durable:
             _set_policy_state(current, phase="completed", decision=completion)
+        final_content = _complete_continued_answer(
+            current.setdefault("metadata", {}),
+            turn.content,
+        )
         answer = FinalAnswer(
-            markdown=turn.content,
-            summary=_answer_summary(turn.content),
+            markdown=final_content,
+            summary=_answer_summary(final_content),
             model_id=turn.model_id,
             model_role=turn.model_role,
             stop_reason=turn.finish_reason or "completed",

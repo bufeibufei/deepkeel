@@ -12,6 +12,7 @@ from harness_core.extension_sdk import (
 )
 from harness_core.runtime_sdk import RuntimeRequest
 from harness_core.policy import DefaultPolicyEngine
+from harness_core.model import ModelTurn
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tools import ToolExecutor
 
@@ -30,6 +31,30 @@ class ScriptedNativeProvider:
             "finish_reason": "stop",
             "model": self.model,
         }
+
+
+class TruncatingModelAdapter:
+    info = type(
+        "ProviderInfo",
+        (),
+        {
+            "provider_id": "test.truncating",
+            "model_id": "test-long-answer",
+            "model_role": "reasoning",
+            "supports_native_tools": True,
+        },
+    )()
+
+    def __init__(self, turns: list[ModelTurn]):
+        self.turns = list(turns)
+        self.requests = []
+
+    def invoke(self, request, *, on_text_delta=None):
+        self.requests.append(request)
+        turn = self.turns.pop(0)
+        if on_text_delta is not None:
+            on_text_delta(turn.content)
+        return turn
 
 
 @dataclass
@@ -85,6 +110,44 @@ def test_builder_rejects_duplicate_capability_package_identity():
 
     with pytest.raises(ValueError, match="already registered"):
         builder.add_capability_pack(DemoCapabilityPack())
+
+
+def test_runtime_continues_and_merges_output_truncated_by_model_limit():
+    provider = TruncatingModelAdapter(
+        [
+            ModelTurn(
+                content="The first section ends with shared text",
+                finish_reason="length",
+                model_id="test-long-answer",
+                model_role="reasoning",
+            ),
+            ModelTurn(
+                content="shared text and the answer is complete.",
+                finish_reason="stop",
+                model_id="test-long-answer",
+                model_role="reasoning",
+            ),
+        ]
+    )
+    runtime = HarnessRuntimeBuilder().build()
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="give me a long answer",
+            context_bundle={"agent_session_id": "run-output-continuation"},
+        ),
+        provider=provider,
+    )
+
+    assert result.status.value == "completed"
+    assert (
+        result.final_answer.markdown
+        == "The first section ends with shared text and the answer is complete."
+    )
+    assert len(provider.requests) == 2
+    assert provider.requests[1].messages[-1]["role"] == "user"
+    assert "Continue exactly where it stopped" in provider.requests[1].messages[-1]["content"]
+    assert any(event.event_type == "model.output_truncated.retrying" for event in result.events)
 
 
 def test_builder_injects_shared_governance_ports_into_executor_and_runtime():

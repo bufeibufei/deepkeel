@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.12.5
+
+- Detect model responses stopped by output token limits, continue them
+  automatically, and merge streamed continuation segments into one final
+  answer instead of settling a truncated response as completed.
+
 ## 3.12.4
 
 - Treat tools skipped after a user-action or asynchronous suspension as

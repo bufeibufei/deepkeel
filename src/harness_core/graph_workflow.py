@@ -22,6 +22,11 @@ from harness_core.workflow_policy import (
 EventSink = Callable[[dict[str, Any]], None]
 EMPTY_MODEL_RESPONSE = "EMPTY_MODEL_RESPONSE"
 MAX_CONSECUTIVE_EMPTY_MODEL_RETRIES = 1
+TRUNCATED_MODEL_RESPONSE = "TRUNCATED_MODEL_RESPONSE"
+MAX_MODEL_OUTPUT_CONTINUATIONS = 2
+TRUNCATED_FINISH_REASONS = frozenset(
+    {"length", "max_tokens", "max_output_tokens", "token_limit"}
+)
 
 def _route_after_tools(state: dict[str, Any]) -> str:
     if state.get("status") == "waiting_user":
@@ -49,7 +54,133 @@ def _route_after_model(state: dict[str, Any]) -> str:
     metadata = as_dict(state.get("metadata"))
     if state.get("status") == "reasoning" and metadata.get("empty_model_retry_pending"):
         return "model"
+    if state.get("status") == "reasoning" and metadata.get("output_continuation_pending"):
+        return "model"
     return "end"
+
+
+def _continue_or_fail_truncated_model_response(
+    current: dict[str, Any],
+    config: Mapping[str, Any],
+    *,
+    content: str,
+    finish_reason: str,
+    can_continue: bool,
+) -> dict[str, Any]:
+    metadata = current.setdefault("metadata", {})
+    parts = [
+        str(part)
+        for part in metadata.get("partial_answer_parts", [])
+        if str(part)
+    ]
+    if content:
+        parts.append(content)
+    metadata["partial_answer_parts"] = parts
+    continuation_count = int(metadata.get("output_continuation_count") or 0) + 1
+    metadata["output_continuation_count"] = continuation_count
+
+    if can_continue and continuation_count <= MAX_MODEL_OUTPUT_CONTINUATIONS:
+        metadata["output_continuation_pending"] = True
+        current.setdefault("messages", []).append(
+            AgentMessage(
+                id=f"model-output-continuation-{uuid4()}",
+                role="user",
+                content=(
+                    "The previous assistant response stopped only because the model output "
+                    "token limit was reached. Continue exactly where it stopped. Do not "
+                    "repeat earlier content, do not restart the answer, and do not call "
+                    "tools. Finish the remaining answer directly."
+                ),
+                metadata={
+                    "kind": "model_output_continuation",
+                    "continuation_count": continuation_count,
+                    "internal": True,
+                },
+            ).model_dump(mode="json")
+        )
+        current["status"] = "reasoning"
+        current["pending_tool_calls"] = []
+        _emit(
+            current,
+            config,
+            "model.output_truncated.retrying",
+            "Continuing truncated model output",
+            "The model reached its output limit; continuation started automatically.",
+            {
+                "error_code": TRUNCATED_MODEL_RESPONSE,
+                "finish_reason": finish_reason,
+                "continuation_count": continuation_count,
+                "continuation_limit": MAX_MODEL_OUTPUT_CONTINUATIONS,
+                "partial_chars": len(_merge_answer_parts(parts)),
+                "visible": False,
+            },
+        )
+        return current
+
+    metadata.pop("output_continuation_pending", None)
+    message = (
+        "The model repeatedly reached its output limit before completing the answer. "
+        "The run ended safely; retry with a narrower question or a larger output budget."
+    )
+    metadata["runtime_error"] = {
+        "type": "TruncatedModelResponse",
+        "code": TRUNCATED_MODEL_RESPONSE,
+        "category": "upstream",
+        "retryable": True,
+        "message": message,
+        "user_message": message,
+        "partial_answer": _merge_answer_parts(parts),
+    }
+    _emit(
+        current,
+        config,
+        "model.output_truncated.exhausted",
+        "Model output remained incomplete",
+        message,
+        {
+            "error_code": TRUNCATED_MODEL_RESPONSE,
+            "finish_reason": finish_reason,
+            "continuation_count": continuation_count,
+            "continuation_limit": MAX_MODEL_OUTPUT_CONTINUATIONS,
+            "partial_chars": len(_merge_answer_parts(parts)),
+            "visible": False,
+        },
+    )
+    return _finish_failed(current, message, config)
+
+
+def _complete_continued_answer(metadata: dict[str, Any], content: str) -> str:
+    parts = [
+        str(part)
+        for part in metadata.pop("partial_answer_parts", [])
+        if str(part)
+    ]
+    metadata.pop("output_continuation_pending", None)
+    metadata.pop("output_continuation_count", None)
+    if not parts:
+        return content
+    if content:
+        parts.append(content)
+    return _merge_answer_parts(parts)
+
+
+def _merge_answer_parts(parts: list[str]) -> str:
+    merged = ""
+    for part in parts:
+        if not merged:
+            merged = part
+            continue
+        overlap = _suffix_prefix_overlap(merged, part)
+        merged += part[overlap:]
+    return merged
+
+
+def _suffix_prefix_overlap(left: str, right: str, *, limit: int = 1200) -> int:
+    maximum = min(len(left), len(right), limit)
+    for size in range(maximum, 0, -1):
+        if left[-size:] == right[:size]:
+            return size
+    return 0
 
 
 def _retry_or_fail_empty_model_response(
