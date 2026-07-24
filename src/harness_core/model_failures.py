@@ -58,6 +58,14 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             retry_after,
             "The model timed out; a fallback was attempted.",
         )
+    if status_code == 400 and _looks_like_provider_parameter_drift(message):
+        return ModelFailureInfo(
+            "provider_parameter_drift",
+            True,
+            status_code,
+            0.0,
+            "The selected model rejected a provider capability parameter; a fallback was attempted.",
+        )
     if status_code in {400, 401, 403, 404, 409, 422}:
         return ModelFailureInfo(
             "invalid_request",
@@ -92,6 +100,19 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
         status_code,
         0.0,
         "The model call failed. Try again later.",
+    )
+
+
+def _looks_like_provider_parameter_drift(message: str) -> bool:
+    return any(
+        token in message
+        for token in (
+            "a parameter specified in the request is not valid",
+            "invalid parameter",
+            "unsupported parameter",
+            "parameter is not supported",
+            "does not support this parameter",
+        )
     )
 
 

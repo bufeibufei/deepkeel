@@ -126,6 +126,21 @@ def test_model_failure_classifier_covers_provider_failure_categories() -> None:
     assert classify_model_failure(RuntimeError("unknown")).category == "provider_error"
 
 
+def test_model_failure_classifier_retries_provider_parameter_drift_only() -> None:
+    drift = RuntimeError(
+        "HTTP Error 400: Bad Request: A parameter specified in the request is not valid"
+    )
+    drift.status_code = 400
+    ordinary_bad_request = RuntimeError("HTTP Error 400: malformed messages")
+    ordinary_bad_request.status_code = 400
+
+    failure = classify_model_failure(drift)
+
+    assert failure.category == "provider_parameter_drift"
+    assert failure.retryable is True
+    assert classify_model_failure(ordinary_bad_request).retryable is False
+
+
 def test_model_failure_helpers_tolerate_malformed_metadata() -> None:
     malformed = RuntimeError("rate limit")
     malformed.code = object()
