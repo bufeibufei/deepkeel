@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.13.2
+
+- Interpret an unlimited product budget as unlimited total generation rather
+  than an unbounded single model request: fast steps default to 8K output and
+  reasoning steps to 16K, while automatic continuation preserves long answers.
+- Reserve context-window headroom before calculating each provider request's
+  physical output allowance.
+
 ## 3.12.5
 
 - Detect model responses stopped by output token limits, continue them

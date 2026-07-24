@@ -61,6 +61,14 @@ from harness_core.type_narrowing import as_dict, as_list
 
 ModelRouteSink = Callable[[dict[str, Any]], None]
 
+DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE = {
+    "fast": 8_192,
+    "reasoning": 16_384,
+}
+DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL = 16_384
+MIN_CONTEXT_RESERVE_TOKENS = 2_048
+CONTEXT_RESERVE_RATIO = 0.08
+
 
 class ModelTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1348,16 +1356,22 @@ def _remaining_output_tokens(
     estimated_input_tokens: int,
 ) -> int | None:
     total_limit = policy.limit("max_output_tokens_total")
-    per_call_limit = policy.limit("max_output_tokens_per_call", role=role)
+    configured_per_call_limit = policy.limit(
+        "max_output_tokens_per_call",
+        role=role,
+    )
+    per_call_limit = configured_per_call_limit or DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE.get(
+        role,
+        DEFAULT_MAX_OUTPUT_TOKENS_PER_CALL,
+    )
     remaining_total = (
         max(0, int(total_limit - float(snapshot.usage.get(OUTPUT_TOKENS) or 0)))
         if total_limit is not None
         else None
     )
-    context_remaining = (
-        max(1, capabilities.context_window_tokens - max(0, estimated_input_tokens))
-        if capabilities.context_window_tokens is not None
-        else None
+    context_remaining = _context_output_capacity(
+        capabilities.context_window_tokens,
+        estimated_input_tokens,
     )
     candidates = [
         int(value)
@@ -1384,6 +1398,25 @@ def _remaining_output_tokens(
         )
         raise BudgetExceededError(decision)
     return available
+
+
+def _context_output_capacity(
+    context_window_tokens: int | None,
+    estimated_input_tokens: int,
+) -> int | None:
+    if context_window_tokens is None:
+        return None
+    context_window = max(1, int(context_window_tokens))
+    estimated_input = max(0, int(estimated_input_tokens))
+    unreserved = max(1, context_window - estimated_input)
+    reserve = min(
+        max(
+            MIN_CONTEXT_RESERVE_TOKENS,
+            int(context_window * CONTEXT_RESERVE_RATIO),
+        ),
+        max(0, unreserved - 1),
+    )
+    return max(1, unreserved - reserve)
 
 
 def _reasoning_effort(
