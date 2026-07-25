@@ -9,7 +9,7 @@ from harness_core.adapter_sdk import (
     LangGraphCheckpointerAdapter,
     RuntimePorts,
 )
-from harness_core.contracts import ToolCall
+from harness_core.contracts import Artifact, ToolCall, ToolResult
 from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
 from harness_core.runtime_sdk import RuntimeRequest
@@ -52,6 +52,48 @@ class CountingSaver(InMemorySaver):
         return super().put(config, checkpoint, metadata, new_versions)
 
 
+class WorkflowFinalizationProvider:
+    model = "workflow-finalization"
+    model_role = "reasoning"
+
+    def __init__(self) -> None:
+        self.tool_views: list[list[str]] = []
+
+    def complete_chat(self, _messages, *, tools=None, **_kwargs):
+        names = [
+            str(item.get("function", {}).get("name") or "")
+            for item in tools or []
+        ]
+        self.tool_views.append(names)
+        if len(self.tool_views) == 1:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "build-report",
+                            "type": "function",
+                            "function": {
+                                "name": "workflow.build_report",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+                "model": self.model,
+            }
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "The completed report is ready.",
+            },
+            "finish_reason": "stop",
+            "model": self.model,
+        }
+
+
 def test_repeated_artifact_observations_update_one_durable_identity() -> None:
     state = {"artifacts": []}
     _upsert_artifact(
@@ -87,6 +129,60 @@ def test_repeated_artifact_observations_update_one_durable_identity() -> None:
     }
     assert state["artifacts"][0]["metadata"] == {"source": "second"}
     assert state["artifacts"][0]["created_at"] == "2026-07-25T00:00:00Z"
+
+
+def test_completed_workflow_enters_tool_free_answer_finalization() -> None:
+    registry = ToolRegistry(
+        [
+            ToolSpec(
+                name="workflow.build_report",
+                exposure_mode="skill_entry",
+                read_only=False,
+            )
+        ]
+    )
+    executor = ToolExecutor(registry)
+
+    def build_report(call, context):
+        return ToolResult(
+            call=call,
+            status="succeeded",
+            summary="Report completed.",
+            artifacts=[
+                Artifact(
+                    id="report-1",
+                    run_id=context.run_id,
+                    artifact_type="report",
+                    summary="Report completed.",
+                    data={"status": "completed"},
+                )
+            ],
+        )
+
+    executor.register("workflow.build_report", build_report)
+    runtime = HarnessRuntimeBuilder(registry, executor).build()
+    executor.configure_artifact_schemas({"report": {"type": "object"}})
+    provider = WorkflowFinalizationProvider()
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="Build a report.",
+            run_id="workflow-finalization",
+            skill_activation={
+                "skill_id": "report",
+                "kind": "workflow",
+                "tool_scope_mode": "allowlist",
+                "allowed_tools": ["workflow.build_report"],
+                "required_tools": ["workflow.build_report"],
+                "output_contract": {"requires_artifact": "report"},
+            },
+        ),
+        provider=provider,
+    )
+
+    assert result.status == "completed", result.model_dump(mode="json")
+    assert provider.tool_views == [["workflow.build_report"], []]
+    assert [item.id for item in result.artifacts] == ["report-1"]
 
 
 def test_default_graph_durability_checkpoints_only_at_runtime_exit() -> None:

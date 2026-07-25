@@ -200,6 +200,15 @@ class GraphNodes:
         _emit(current, config, "agent.reasoning", "Reasoning", "The agent is evaluating context and selecting the next step.")
         allowed_tools = _allowed_tool_names(current, tool_registry)
         skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
+        workflow_completion = evaluate_workflow_completion(skill_policy, current)
+        workflow_finalization_tools: list[str] = []
+        if (
+            skill_policy.active
+            and skill_policy.durable
+            and workflow_completion.allowed
+        ):
+            workflow_finalization_tools = sorted(allowed_tools or ())
+            allowed_tools = set()
         tool_view = resolve_tool_view(
             registry=tool_registry,
             allowed_names=allowed_tools,
@@ -214,6 +223,22 @@ class GraphNodes:
             ),
         )
         metadata = current.setdefault("metadata", {})
+        if workflow_finalization_tools:
+            metadata["workflow_finalization"] = {
+                "contract_satisfied": True,
+                "suppressed_tool_names": workflow_finalization_tools,
+            }
+            _emit(
+                current,
+                config,
+                "workflow.finalizing",
+                "Workflow result ready",
+                "The workflow contract is satisfied; the model must now finalize the answer.",
+                {
+                    "suppressed_tool_names": workflow_finalization_tools,
+                    "visible": False,
+                },
+            )
         previous_tool_view = metadata.get("tool_view")
         metadata["tool_view"] = tool_view.as_dict()
         if previous_tool_view != metadata["tool_view"]:

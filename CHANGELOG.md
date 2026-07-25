@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.16.3
+
+- Enter a tool-free finalization step once a durable Workflow Skill has
+  satisfied its required tools and Artifact contract, preventing models from
+  repeatedly invoking completed generation actions.
+
 ## 3.16.2
 
 - Merge repeated observations of the same Artifact identity instead of
