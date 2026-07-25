@@ -60,6 +60,16 @@ from harness_core.type_narrowing import as_dict, as_list
 
 
 ModelRouteSink = Callable[[dict[str, Any]], None]
+MODEL_FAILURE_AUTO_FALLBACK = "auto_fallback"
+MODEL_FAILURE_RETRY_SELECTED = "retry_selected"
+MODEL_FAILURE_FAIL_FAST = "fail_fast"
+VALID_MODEL_FAILURE_POLICIES = frozenset(
+    {
+        MODEL_FAILURE_AUTO_FALLBACK,
+        MODEL_FAILURE_RETRY_SELECTED,
+        MODEL_FAILURE_FAIL_FAST,
+    }
+)
 
 DEFAULT_MAX_OUTPUT_TOKENS_BY_ROLE = {
     "fast": 8_192,
@@ -791,7 +801,12 @@ class RoutedModelGateway:
                 deadline_monotonic=step_context.deadline_monotonic,
             )
         primary_route = self.router.route(step_context)
-        attempts = self._attempts(primary_route)
+        failure_policy = _model_failure_policy(step_context.model_policy)
+        attempts = self._attempts(
+            primary_route,
+            failure_policy=failure_policy,
+            requires_native_tools=bool(tools or step_context.forced_tool_name),
+        )
         previous_failure: dict[str, Any] = {}
         token_estimator = ConservativeTokenEstimator()
         budget_policy = BudgetPolicy.from_mapping(
@@ -923,6 +938,11 @@ class RoutedModelGateway:
                 **route.as_dict(),
                 "model_id": provider.info.model_id,
                 "provider_id": provider.info.provider_id,
+                "requested_role": primary_route.role,
+                "preferred_model_id": self.providers[primary_route.role].info.model_id,
+                "actual_model_id": provider.info.model_id,
+                "failure_policy": failure_policy,
+                "fallback_allowed": failure_policy == MODEL_FAILURE_AUTO_FALLBACK,
                 "policy": policy.as_dict(),
                 "budget": budget.as_dict() if budget is not None else {},
                 "budget_metrics": {
@@ -939,6 +959,11 @@ class RoutedModelGateway:
                     "max_output_tokens": provider_capabilities.max_output_tokens,
                     "capability_source": provider_capabilities.source,
                 },
+                "required_capabilities": {
+                    "native_tools": bool(tools or step_context.forced_tool_name),
+                    "streaming": on_text_delta is not None,
+                },
+                "provider_capabilities": provider_capabilities.model_dump(mode="json"),
                 **previous_failure,
             }
             if not policy.allowed:
@@ -1221,6 +1246,9 @@ class RoutedModelGateway:
     def _attempts(
         self,
         primary_route: ModelRouteDecision,
+        *,
+        failure_policy: str = MODEL_FAILURE_AUTO_FALLBACK,
+        requires_native_tools: bool = False,
     ) -> list[
         tuple[
             ModelRouteDecision,
@@ -1234,6 +1262,22 @@ class RoutedModelGateway:
                 f"model provider for role {primary_route.role!r} is unavailable"
             )
         result = [(primary_route, primary, "primary")]
+        if failure_policy == MODEL_FAILURE_FAIL_FAST:
+            return result
+        if failure_policy == MODEL_FAILURE_RETRY_SELECTED:
+            return [
+                *result,
+                (
+                    ModelRouteDecision(
+                        role=primary_route.role,
+                        reason="retry selected model",
+                        router_id=primary_route.router_id,
+                        metadata=dict(primary_route.metadata),
+                    ),
+                    primary,
+                    "retry",
+                ),
+            ]
         primary_fingerprint = _adapter_fingerprint(primary)
         preferred_roles = (
             ("reasoning", "fast")
@@ -1244,6 +1288,8 @@ class RoutedModelGateway:
         for role in ordered_roles:
             provider = self.providers.get(role)
             if provider is None or _adapter_fingerprint(provider) == primary_fingerprint:
+                continue
+            if requires_native_tools and not provider.info.supports_native_tools:
                 continue
             result.append(
                 (
@@ -1276,6 +1322,17 @@ class RoutedModelGateway:
         return result
 
 
+def _model_failure_policy(model_policy: dict[str, Any]) -> str:
+    value = str(
+        model_policy.get("failure_policy") or MODEL_FAILURE_AUTO_FALLBACK
+    ).strip().lower()
+    return (
+        value
+        if value in VALID_MODEL_FAILURE_POLICIES
+        else MODEL_FAILURE_AUTO_FALLBACK
+    )
+
+
 def _as_provider_adapter(provider: Any) -> ModelProviderAdapter | AsyncModelProviderAdapter:
     return (
         provider
@@ -1286,9 +1343,9 @@ def _as_provider_adapter(provider: Any) -> ModelProviderAdapter | AsyncModelProv
 
 def _adapter_fingerprint(
     provider: ModelProviderAdapter | AsyncModelProviderAdapter,
-) -> tuple[str, str, str]:
+) -> tuple[str, str]:
     info = provider.info
-    return (info.provider_id, info.model_id, info.model_role)
+    return (info.provider_id, info.model_id)
 
 
 async def _ainvoke_provider(
