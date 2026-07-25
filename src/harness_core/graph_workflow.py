@@ -188,6 +188,7 @@ def _retry_or_fail_empty_model_response(
     config: Mapping[str, Any],
     *,
     can_retry: bool,
+    answer_only: bool = False,
 ) -> dict[str, Any]:
     metadata = current.setdefault("metadata", {})
     empty_count = int(metadata.get("consecutive_empty_model_responses") or 0) + 1
@@ -199,12 +200,22 @@ def _retry_or_fail_empty_model_response(
                 id=f"model-empty-repair-{uuid4()}",
                 role="system",
                 content=(
-                    "The prior model step returned no content or tool calls. Complete the step again: "
-                    "Emit a valid tool call when needed; otherwise return a usable answer."
+                    (
+                        "The prior model step attempted an unavailable tool after the "
+                        "workflow was complete. Do not call tools. Return the final "
+                        "user-facing answer now."
+                    )
+                    if answer_only
+                    else (
+                        "The prior model step returned no content or tool calls. "
+                        "Complete the step again: Emit a valid tool call when needed; "
+                        "otherwise return a usable answer."
+                    )
                 ),
                 metadata={
                     "kind": "empty_model_response_repair",
                     "retry_count": empty_count,
+                    "answer_only": answer_only,
                 },
             ).model_dump(mode="json")
         )

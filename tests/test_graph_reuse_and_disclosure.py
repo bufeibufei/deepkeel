@@ -81,8 +81,9 @@ class WorkflowFinalizationProvider:
     model = "workflow-finalization"
     model_role = "reasoning"
 
-    def __init__(self) -> None:
+    def __init__(self, *, hallucinate_finalization_tool: bool = False) -> None:
         self.tool_views: list[list[str]] = []
+        self.hallucinate_finalization_tool = hallucinate_finalization_tool
 
     def complete_chat(self, _messages, *, tools=None, **_kwargs):
         names = [
@@ -98,6 +99,25 @@ class WorkflowFinalizationProvider:
                     "tool_calls": [
                         {
                             "id": "build-report",
+                            "type": "function",
+                            "function": {
+                                "name": "workflow.build_report",
+                                "arguments": "{}",
+                            },
+                        }
+                    ],
+                },
+                "finish_reason": "tool_calls",
+                "model": self.model,
+            }
+        if self.hallucinate_finalization_tool and len(self.tool_views) == 2:
+            return {
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "hallucinated-report",
                             "type": "function",
                             "function": {
                                 "name": "workflow.build_report",
@@ -208,6 +228,66 @@ def test_completed_workflow_enters_tool_free_answer_finalization() -> None:
     assert result.status == "completed", result.model_dump(mode="json")
     assert provider.tool_views == [["workflow.build_report"], []]
     assert [item.id for item in result.artifacts] == ["report-1"]
+
+
+def test_completed_workflow_rejects_undisclosed_tool_and_retries_final_answer() -> None:
+    registry = ToolRegistry(
+        [
+            ToolSpec(
+                name="workflow.build_report",
+                exposure_mode="skill_entry",
+                read_only=False,
+            )
+        ]
+    )
+    executor = ToolExecutor(registry)
+    executions: list[str] = []
+
+    def build_report(call, context):
+        executions.append(call.id)
+        return ToolResult(
+            call=call,
+            status="succeeded",
+            summary="Report completed.",
+            artifacts=[
+                Artifact(
+                    id="report-1",
+                    run_id=context.run_id,
+                    artifact_type="report",
+                    summary="Report completed.",
+                    data={"status": "completed"},
+                )
+            ],
+        )
+
+    executor.register("workflow.build_report", build_report)
+    runtime = HarnessRuntimeBuilder(registry, executor).build()
+    executor.configure_artifact_schemas({"report": {"type": "object"}})
+    provider = WorkflowFinalizationProvider(hallucinate_finalization_tool=True)
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="Build a report.",
+            run_id="workflow-undisclosed-finalization",
+            skill_activation={
+                "skill_id": "report",
+                "kind": "workflow",
+                "tool_scope_mode": "allowlist",
+                "allowed_tools": ["workflow.build_report"],
+                "required_tools": ["workflow.build_report"],
+                "output_contract": {"requires_artifact": "report"},
+            },
+        ),
+        provider=provider,
+    )
+
+    assert result.status == "completed", result.model_dump(mode="json")
+    assert provider.tool_views == [["workflow.build_report"], [], []]
+    assert executions == ["build-report"]
+    assert any(
+        event.event_type == "tools.disclosure.rejected"
+        for event in result.events
+    )
 
 
 def test_default_graph_durability_checkpoints_only_at_runtime_exit() -> None:

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.16.6
+
+- Enforce the resolved Tool View at execution time and reject model calls to
+  tools that were not disclosed for the current step.
+- Inject an answer-only Workflow finalization guard and recover once when a
+  provider still emits a stale tool call after the contract is satisfied.
+
 ## 3.16.5
 
 - Deduplicate identical implicit tool calls emitted in one model response while

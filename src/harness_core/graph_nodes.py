@@ -201,12 +201,13 @@ class GraphNodes:
         allowed_tools = _allowed_tool_names(current, tool_registry)
         skill_policy = SkillPolicy.from_snapshot(current.get("skill_activation"))
         workflow_completion = evaluate_workflow_completion(skill_policy, current)
-        workflow_finalization_tools: list[str] = []
-        if (
+        workflow_is_finalizing = (
             skill_policy.active
             and skill_policy.durable
             and workflow_completion.allowed
-        ):
+        )
+        workflow_finalization_tools: list[str] = []
+        if workflow_is_finalizing:
             workflow_finalization_tools = sorted(allowed_tools or ())
             allowed_tools = set()
         tool_view = resolve_tool_view(
@@ -223,22 +224,39 @@ class GraphNodes:
             ),
         )
         metadata = current.setdefault("metadata", {})
-        if workflow_finalization_tools:
+        if workflow_is_finalizing:
+            finalization = as_dict(metadata.get("workflow_finalization"))
+            if not finalization.get("instruction_injected"):
+                current.setdefault("messages", []).append(
+                    AgentMessage(
+                        id=f"workflow-finalization-{uuid4()}",
+                        role="system",
+                        content=(
+                            "The active workflow contract is fully satisfied. "
+                            "Do not call or discover any more tools. Return the final "
+                            "user-facing answer using the completed observations and artifacts."
+                        ),
+                        metadata={"kind": "workflow_finalization_guard"},
+                    ).model_dump(mode="json")
+                )
             metadata["workflow_finalization"] = {
+                **finalization,
                 "contract_satisfied": True,
                 "suppressed_tool_names": workflow_finalization_tools,
+                "instruction_injected": True,
             }
-            _emit(
-                current,
-                config,
-                "workflow.finalizing",
-                "Workflow result ready",
-                "The workflow contract is satisfied; the model must now finalize the answer.",
-                {
-                    "suppressed_tool_names": workflow_finalization_tools,
-                    "visible": False,
-                },
-            )
+            if not finalization.get("instruction_injected"):
+                _emit(
+                    current,
+                    config,
+                    "workflow.finalizing",
+                    "Workflow result ready",
+                    "The workflow contract is satisfied; the model must now finalize the answer.",
+                    {
+                        "suppressed_tool_names": workflow_finalization_tools,
+                        "visible": False,
+                    },
+                )
         previous_tool_view = metadata.get("tool_view")
         metadata["tool_view"] = tool_view.as_dict()
         if previous_tool_view != metadata["tool_view"]:
@@ -509,11 +527,48 @@ class GraphNodes:
             },
         )
         current["step_count"] = int(current.get("step_count") or 0) + 1
-        tool_calls = _stable_tool_calls(
+        reported_tool_calls = _stable_tool_calls(
             turn.tool_calls,
             run_id=str(current.get("run_id") or ""),
             step_index=int(current["step_count"]),
         )
+        exposed_tool_names = set(tool_view.exposed_names)
+        registered_tool_names = {
+            spec.name for spec in tool_registry.list_tools()
+        }
+        tool_calls = [
+            call
+            for call in reported_tool_calls
+            if call.name in exposed_tool_names
+            or call.name not in registered_tool_names
+        ]
+        rejected_tool_calls = [
+            call
+            for call in reported_tool_calls
+            if call.name in registered_tool_names
+            and call.name not in exposed_tool_names
+        ]
+        if rejected_tool_calls:
+            rejected_names = [call.name for call in rejected_tool_calls]
+            metadata = current.setdefault("metadata", {})
+            metadata.setdefault("rejected_undisclosed_tool_calls", []).append(
+                {
+                    "step_index": int(current["step_count"]),
+                    "tool_names": rejected_names,
+                }
+            )
+            _emit(
+                current,
+                config,
+                "tools.disclosure.rejected",
+                "Undisclosed tool call rejected",
+                ", ".join(rejected_names),
+                {
+                    "tool_names": rejected_names,
+                    "exposed_tool_names": sorted(exposed_tool_names),
+                    "visible": False,
+                },
+            )
         assistant = AgentMessage(
             id=f"assistant-{uuid4()}",
             role="assistant",
@@ -546,7 +601,7 @@ class GraphNodes:
                 finish_reason=turn.finish_reason,
                 can_continue=int(current.get("step_count") or 0) < max_steps,
             )
-        if not turn.tool_calls and not turn.content.strip():
+        if not tool_calls and not turn.content.strip():
             # Do not poison the next provider request with an empty assistant
             # message when retrying a transient successful-but-empty response.
             current["messages"].pop()
@@ -554,6 +609,7 @@ class GraphNodes:
                 current,
                 config,
                 can_retry=int(current.get("step_count") or 0) < max_steps,
+                answer_only=workflow_is_finalizing,
             )
         metadata = current.setdefault("metadata", {})
         metadata["consecutive_empty_model_responses"] = 0
