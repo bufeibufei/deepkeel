@@ -102,3 +102,21 @@ Before release, exercise at least:
 
 The package test suite includes reference fault-injection tests, but each
 production adapter needs equivalent integration tests against its real backend.
+
+## Concurrency baseline
+
+Run the package-owned benchmark before a release to verify that one shared,
+precompiled runtime can safely serve independent turns:
+
+```powershell
+uv run python verification/concurrency_benchmark.py `
+  --requests 300 `
+  --workers 32 `
+  --min-success-rate 1 `
+  --max-p95-ms 2000
+```
+
+This benchmark isolates Core overhead with a deterministic local provider. It
+is not a substitute for a Host load test using the production model gateway,
+database pool, event journal and tool adapters. Record both results so model
+latency is not mistaken for runtime contention.

@@ -24,6 +24,11 @@ try {
         throw "Harness Core package contract tests failed."
     }
 
+    & uv run python verification/concurrency_benchmark.py --requests 300 --workers 32
+    if ($LASTEXITCODE -ne 0) {
+        throw "Harness Core concurrency baseline failed."
+    }
+
     & uv build --out-dir $outputRoot --clear
     if ($LASTEXITCODE -ne 0) {
         throw "Harness Core distribution build failed."

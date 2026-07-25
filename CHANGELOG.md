@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.15.0
 
 - Add `RuntimeScope` and scoped state/trace contracts with fail-closed legacy
   adapter compatibility for tenant and namespace isolation.
