@@ -439,10 +439,13 @@ def _manifest_from_pack(
         entrypoint=f"{type(pack).__module__}:{type(pack).__qualname__}",
         skills=spec.declared_skills,
         tools=spec.declared_tools,
+        artifact_types=spec.declared_artifact_types,
         subagents=spec.declared_subagents,
         handoffs=spec.declared_handoffs,
         hooks=spec.declared_hooks,
+        context_contributors=spec.declared_context_contributors,
         mcp_servers=spec.declared_tool_providers,
+        resources=spec.declared_resources,
         permissions=spec.required_scopes,
         metadata=dict(spec.metadata),
     )
@@ -460,9 +463,18 @@ def _validate_pack_manifest(
     comparisons = {
         "tools": (set(spec.declared_tools), set(manifest.tools)),
         "skills": (set(spec.declared_skills), set(manifest.skills)),
+        "artifact_types": (
+            set(spec.declared_artifact_types),
+            set(manifest.artifact_types),
+        ),
         "subagents": (set(spec.declared_subagents), set(manifest.subagents)),
         "handoffs": (set(spec.declared_handoffs), set(manifest.handoffs)),
         "hooks": (set(spec.declared_hooks), set(manifest.hooks)),
+        "context_contributors": (
+            set(spec.declared_context_contributors),
+            set(manifest.context_contributors),
+        ),
+        "resources": (set(spec.declared_resources), set(manifest.resources)),
     }
     mismatches = [
         name

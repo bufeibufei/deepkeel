@@ -14,7 +14,7 @@ from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
 from harness_core.runtime_sdk import RuntimeRequest
 from harness_core.skills import SkillPolicy
-from harness_core.graph_state import _upsert_artifact
+from harness_core.graph_state import _allowed_tool_names, _upsert_artifact
 from harness_core.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
     install_tool_discovery,
@@ -372,3 +372,26 @@ def test_discovery_tool_grants_only_ranked_permitted_tools_to_enforced_view() ->
         {"general.read", TOOL_DISCOVERY_NAME, "web.search"}
     )
     assert "private.write" not in view.exposed_names
+
+
+def test_tool_discovery_is_hidden_after_two_attempts() -> None:
+    registry = ToolRegistry(
+        [
+            ToolSpec(name=TOOL_DISCOVERY_NAME, exposure_mode="baseline"),
+            ToolSpec(name="web.search", exposure_mode="discoverable"),
+        ]
+    )
+    state = {
+        "skill_activation": {
+            "skill_id": "research",
+            "tool_scope_mode": "allowlist",
+            "allowed_tools": ["web.search"],
+        },
+        "tool_results": [
+            {"name": TOOL_DISCOVERY_NAME, "status": "succeeded"},
+            {"name": TOOL_DISCOVERY_NAME, "status": "succeeded"},
+        ],
+        "metadata": {},
+    }
+
+    assert _allowed_tool_names(state, registry) == {"web.search"}

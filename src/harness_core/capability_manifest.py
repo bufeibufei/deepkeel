@@ -29,10 +29,13 @@ class CapabilityManifest(BaseModel):
     dependencies: dict[str, str] = Field(default_factory=dict)
     skills: tuple[str, ...] = ()
     tools: tuple[str, ...] = ()
+    artifact_types: tuple[str, ...] = ()
     subagents: tuple[str, ...] = ()
     handoffs: tuple[str, ...] = ()
     hooks: tuple[str, ...] = ()
+    context_contributors: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
+    resources: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
     memory_namespaces: tuple[str, ...] = ()
     ui_surfaces: tuple[str, ...] = ()
@@ -52,10 +55,13 @@ class CapabilityManifest(BaseModel):
         for field_name in (
             "skills",
             "tools",
+            "artifact_types",
             "subagents",
             "handoffs",
             "hooks",
+            "context_contributors",
             "mcp_servers",
+            "resources",
             "permissions",
             "memory_namespaces",
             "ui_surfaces",
@@ -187,7 +193,16 @@ def validate_manifest_set(manifests: tuple[CapabilityManifest, ...]) -> None:
         if manifest.id in by_id:
             issues.append(f"duplicate package id: {manifest.id}")
         by_id[manifest.id] = manifest
-        for kind in ("skills", "tools", "subagents", "handoffs", "hooks"):
+        for kind in (
+            "skills",
+            "tools",
+            "artifact_types",
+            "subagents",
+            "handoffs",
+            "hooks",
+            "context_contributors",
+            "resources",
+        ):
             for capability_id in getattr(manifest, kind):
                 key = (kind, capability_id)
                 owner = ownership.get(key)

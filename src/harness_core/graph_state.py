@@ -189,7 +189,7 @@ def _allowed_tool_names(
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
             names.remove("agent.delegate")
-        if names:
+        if names and _tool_discovery_available(state):
             names.add("runtime.discover_tools")
         return names
     default_tools = {
@@ -201,7 +201,26 @@ def _allowed_tool_names(
         default_tools.update(skill_policy.required_tools)
         for group in skill_policy.required_tool_groups:
             default_tools.update(group)
+    if not _tool_discovery_available(state):
+        default_tools.discard("runtime.discover_tools")
     return default_tools
+
+
+def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
+    metadata = as_dict(state.get("metadata"))
+    try:
+        limit = int(metadata.get("tool_discovery_attempt_limit") or 2)
+    except (TypeError, ValueError):
+        limit = 2
+    limit = min(2, max(0, limit))
+    attempts = sum(
+        1
+        for result in as_list(state.get("tool_results"))
+        if isinstance(result, Mapping)
+        and str(result.get("name") or result.get("tool_name") or "")
+        == "runtime.discover_tools"
+    )
+    return attempts < limit
 
 
 def _forced_workflow_tool_name(
@@ -414,9 +433,12 @@ def _apply_tool_result(
     config: Mapping[str, Any],
 ) -> None:
     if result.name == "runtime.discover_tools" and result.status == "succeeded":
+        metadata = current.setdefault("metadata", {})
+        metadata["tool_discovery_attempts"] = (
+            int(metadata.get("tool_discovery_attempts") or 0) + 1
+        )
         discovered = result.data.get("discovered_names")
         if isinstance(discovered, list):
-            metadata = current.setdefault("metadata", {})
             existing = {
                 str(name)
                 for name in metadata.get("discovered_tool_names", [])

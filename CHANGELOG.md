@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.16.4
+
+- Make artifact types, context contributors, and resources first-class Capability Manifest declarations.
+- Enforce full manifest-to-package conformance for every public capability category.
+- Bound semantic tool discovery to two attempts per turn and expose the count in runtime diagnostics.
+
 ## 3.16.3
 
 - Enter a tool-free finalization step once a durable Workflow Skill has

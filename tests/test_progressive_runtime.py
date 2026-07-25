@@ -210,3 +210,25 @@ def test_runtime_generation_validates_dependencies_and_is_deterministic() -> Non
     )
     with pytest.raises(ValueError, match="requires demo.foundation"):
         validate_manifest_set((foundation, incompatible))
+
+
+def test_manifest_normalizes_and_owns_extended_capability_categories() -> None:
+    manifest = CapabilityManifest(
+        id="demo.extended",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="demo:Pack",
+        artifact_types=(" report ", "report"),
+        context_contributors=("identity", "identity"),
+        resources=("vector:memory", "vector:memory"),
+    )
+
+    assert manifest.artifact_types == ("report",)
+    assert manifest.context_contributors == ("identity",)
+    assert manifest.resources == ("vector:memory",)
+
+    duplicate = manifest.model_copy(
+        update={"id": "demo.other", "version": "1.0.0"}
+    )
+    with pytest.raises(ValueError, match="artifact_types 'report'"):
+        validate_manifest_set((manifest, duplicate))
