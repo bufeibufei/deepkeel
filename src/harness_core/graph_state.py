@@ -332,6 +332,7 @@ def _stable_tool_calls(
     step_index: int,
 ) -> list[ToolCall]:
     stable: list[ToolCall] = []
+    implicit_identities: set[str] = set()
     for ordinal, call in enumerate(calls):
         if call.idempotency_key:
             stable.append(call)
@@ -342,6 +343,9 @@ def _stable_tool_calls(
             sort_keys=True,
             separators=(",", ":"),
         )
+        if identity in implicit_identities:
+            continue
+        implicit_identities.add(identity)
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
         stable.append(
             call.model_copy(

@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.16.5
+
+- Deduplicate identical implicit tool calls emitted in one model response while
+  preserving distinct arguments and explicit idempotency keys.
+
 ## 3.16.4
 
 - Make artifact types, context contributors, and resources first-class Capability Manifest declarations.

@@ -14,7 +14,11 @@ from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
 from harness_core.runtime_sdk import RuntimeRequest
 from harness_core.skills import SkillPolicy
-from harness_core.graph_state import _allowed_tool_names, _upsert_artifact
+from harness_core.graph_state import (
+    _allowed_tool_names,
+    _stable_tool_calls,
+    _upsert_artifact,
+)
 from harness_core.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
     install_tool_discovery,
@@ -50,6 +54,27 @@ class CountingSaver(InMemorySaver):
     def put(self, config, checkpoint, metadata, new_versions):
         self.put_count += 1
         return super().put(config, checkpoint, metadata, new_versions)
+
+
+def test_stable_tool_calls_deduplicate_identical_implicit_calls() -> None:
+    calls = [
+        ToolCall(id="call-1", name="workflow.build", arguments={"topic": "career"}),
+        ToolCall(id="call-2", name="workflow.build", arguments={"topic": "career"}),
+        ToolCall(id="call-3", name="workflow.build", arguments={"topic": "wealth"}),
+        ToolCall(
+            id="call-4",
+            name="workflow.build",
+            arguments={"topic": "career"},
+            idempotency_key="caller:explicit",
+        ),
+    ]
+
+    stable = _stable_tool_calls(calls, run_id="run-1", step_index=2)
+
+    assert [call.id for call in stable] == ["call-1", "call-3", "call-4"]
+    assert stable[0].idempotency_key.startswith("run-1:step:2:tool:0:")
+    assert stable[1].idempotency_key.startswith("run-1:step:2:tool:2:")
+    assert stable[2].idempotency_key == "caller:explicit"
 
 
 class WorkflowFinalizationProvider:
