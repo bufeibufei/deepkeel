@@ -35,6 +35,17 @@ from harness_core.event_journal import (
     InMemoryRuntimeEventJournal,
     RuntimeEventJournal,
 )
+from harness_core.async_ports import (
+    AsyncDurableCheckpointStore,
+    AsyncDurableCheckpointStoreAdapter,
+    AsyncRuntimeEventJournal,
+    AsyncRuntimeEventJournalAdapter,
+    AsyncRuntimeStateStore,
+    AsyncRuntimeStateStoreAdapter,
+    AsyncTraceStore,
+    AsyncTraceStoreAdapter,
+    run_sync_adapter,
+)
 from harness_core.context_window import (
     ConservativeTokenEstimator,
     ContextSegment,
@@ -136,7 +147,15 @@ from harness_core.telemetry import (
 
 ADAPTER_SDK_API = (
     "AdaptiveStepModelRouter",
+    "AsyncDurableCheckpointStore",
+    "AsyncDurableCheckpointStoreAdapter",
     "AsyncModelProviderAdapter",
+    "AsyncRuntimeEventJournal",
+    "AsyncRuntimeEventJournalAdapter",
+    "AsyncRuntimeStateStore",
+    "AsyncRuntimeStateStoreAdapter",
+    "AsyncTraceStore",
+    "AsyncTraceStoreAdapter",
     "BudgetDecision",
     "BudgetLedger",
     "BudgetPolicy",
@@ -243,6 +262,7 @@ ADAPTER_SDK_API = (
     "verify_runtime_state_store_contract",
     "verify_tool_execution_store_contract",
     "verify_trace_store_contract",
+    "run_sync_adapter",
 )
 
 __all__ = list(ADAPTER_SDK_API)

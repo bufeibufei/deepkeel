@@ -26,6 +26,9 @@ class TelemetryRecord(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
+    tenant_id: str = ""
+    user_id: str = ""
+    namespace: str = "default"
     step_index: int | None = None
     status: str = ""
     component: str = "runtime"
@@ -101,6 +104,9 @@ class TelemetryRecord(BaseModel):
             run_id=run_id,
             thread_id=thread_id,
             turn_id=turn_id,
+            tenant_id=str(event.get("tenant_id") or ""),
+            user_id=str(event.get("user_id") or ""),
+            namespace=str(event.get("namespace") or "default"),
             step_index=step_index,
             status=str(event.get("status") or payload.get("status") or ""),
             component=_event_component(event_name),
@@ -124,6 +130,9 @@ class TraceQuery(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
+    tenant_id: str = ""
+    user_id: str = ""
+    namespace: str = ""
     trace_id: str = ""
     component: str = ""
     event_name: str = ""
@@ -190,6 +199,8 @@ class CompositeTelemetry:
 
 class InMemoryTelemetry:
     """Deterministic adapter for embedding, tests and local diagnostics."""
+
+    supports_runtime_scope = True
 
     def __init__(self) -> None:
         self._events: list[TelemetryRecord] = []
@@ -326,6 +337,9 @@ def _event_component(event_name: str) -> str:
 
 def _trace_matches(event: TelemetryRecord, query: TraceQuery) -> bool:
     exact = (
+        (query.tenant_id, event.tenant_id),
+        (query.user_id, event.user_id),
+        (query.namespace, event.namespace),
         (query.run_id, event.run_id),
         (query.thread_id, event.thread_id),
         (query.turn_id, event.turn_id),

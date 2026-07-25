@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from threading import Lock
-from typing import Any, Callable, Protocol
+from typing import Any, Callable, Iterable, Protocol
+
+from harness_core.scope import RuntimeScope
 
 
 TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "canceled"})
@@ -31,6 +34,7 @@ class RunStateSnapshot:
     resume_token: str = ""
     fence_token: str = ""
     fence_generation: int = 0
+    updated_at: datetime | None = None
 
     def __post_init__(self) -> None:
         normalized = normalize_runtime_status(self.status)
@@ -69,6 +73,7 @@ class RunStateSnapshot:
             "resume_token": self.resume_token,
             "fence_token": self.fence_token,
             "fence_generation": self.fence_generation,
+            "updated_at": self.updated_at.isoformat() if self.updated_at is not None else None,
             "can_accept_input": self.can_accept_input,
             "input_strategy": self.input_strategy,
         }
@@ -90,6 +95,7 @@ class RunAggregate:
     resume_token: str = ""
     fence_token: str = ""
     fence_generation: int = 0
+    updated_at: datetime | None = None
 
     def apply(self, mutation: RuntimeStateMutation, *, sequence: int) -> None:
         if mutation.run_id != self.run_id:
@@ -135,6 +141,7 @@ class RunAggregate:
             resume_token=self.resume_token,
             fence_token=self.fence_token,
             fence_generation=self.fence_generation,
+            updated_at=self.updated_at,
         )
 
 
@@ -206,6 +213,48 @@ class RuntimeStateStore(Protocol):
     ) -> RunStateSnapshot: ...
 
 
+class QueryableRuntimeStateStore(RuntimeStateStore, Protocol):
+    """Optional operations extension for enumerating scoped run projections."""
+
+    def list_snapshots(
+        self,
+        *,
+        session: Any = None,
+        user_id: str = "",
+        statuses: Iterable[str] = (),
+        limit: int = 100,
+    ) -> tuple[RunStateSnapshot, ...]: ...
+
+
+class ScopedRuntimeStateStore(RuntimeStateStore, Protocol):
+    """Optional v3 extension providing tenant and namespace isolation."""
+
+    def commit_scoped(
+        self,
+        mutation: RuntimeStateMutation,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+    ) -> RuntimeStateReceipt: ...
+
+    def load_snapshot_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+    ) -> RunStateSnapshot: ...
+
+    def list_snapshots_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+        statuses: Iterable[str] = (),
+        limit: int = 100,
+    ) -> tuple[RunStateSnapshot, ...]: ...
+
+
 @dataclass(slots=True)
 class _MemoryRuntimeState:
     version: int = 0
@@ -216,6 +265,7 @@ class _MemoryRuntimeState:
     receipts: dict[str, RuntimeStateReceipt] = field(default_factory=dict)
     fence_token: str = ""
     fence_generation: int = 0
+    updated_at: datetime | None = None
 
     def aggregate(self, run_id: str) -> RunAggregate:
         latest = self.checkpoints[-1] if self.checkpoints else {}
@@ -233,6 +283,7 @@ class _MemoryRuntimeState:
             resume_token=str(latest.get("resume_token") or ""),
             fence_token=self.fence_token,
             fence_generation=self.fence_generation,
+            updated_at=self.updated_at,
         )
 
 
@@ -242,7 +293,7 @@ class InMemoryRuntimeStateStore:
     terminal_settlement_owner = "runtime"
 
     def __init__(self, failure_injector: Callable[[str], None] | None = None) -> None:
-        self._states: dict[str, _MemoryRuntimeState] = {}
+        self._states: dict[tuple[str, str, str, str], _MemoryRuntimeState] = {}
         self._lock = Lock()
         self._failure_injector = failure_injector
 
@@ -253,9 +304,21 @@ class InMemoryRuntimeStateStore:
         session: Any = None,
         user_id: str = "",
     ) -> RuntimeStateReceipt:
-        del session, user_id
+        del session
+        scope = RuntimeScope(user_id=str(user_id or "local-device"))
+        return self.commit_scoped(mutation, scope=scope)
+
+    def commit_scoped(
+        self,
+        mutation: RuntimeStateMutation,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+    ) -> RuntimeStateReceipt:
+        del session
         with self._lock:
-            current = self._states.setdefault(mutation.run_id, _MemoryRuntimeState())
+            state_key = (*scope.storage_key, mutation.run_id)
+            current = self._states.setdefault(state_key, _MemoryRuntimeState())
             replay = current.receipts.get(mutation.mutation_id)
             if replay is not None:
                 return RuntimeStateReceipt(**{**replay.as_dict(), "replayed": True})
@@ -311,6 +374,7 @@ class InMemoryRuntimeStateStore:
                 self._fail_at("after_checkpoint_cleanup")
                 current.version = aggregate.version
                 current.status = aggregate.status
+                current.updated_at = datetime.now(UTC)
                 if mutation.fence_generation:
                     current.fence_generation = mutation.fence_generation
                     current.fence_token = mutation.fence_token
@@ -325,12 +389,16 @@ class InMemoryRuntimeStateStore:
                 self._fail_at("before_commit")
                 return receipt
             except Exception:
-                self._states[mutation.run_id] = before
+                self._states[state_key] = before
                 raise
 
-    def snapshot(self, run_id: str) -> dict[str, Any]:
+    def snapshot(self, run_id: str, *, user_id: str = "") -> dict[str, Any]:
+        scope = RuntimeScope(user_id=str(user_id or "local-device"))
+        return self.snapshot_scoped(run_id, scope=scope)
+
+    def snapshot_scoped(self, run_id: str, *, scope: RuntimeScope) -> dict[str, Any]:
         with self._lock:
-            state = copy.deepcopy(self._states.get(run_id) or _MemoryRuntimeState())
+            state = copy.deepcopy(self._lookup_state(run_id, scope=scope))
         snapshot = {
             "version": state.version,
             "sequence": state.sequence,
@@ -338,6 +406,8 @@ class InMemoryRuntimeStateStore:
             "events": state.events,
             "checkpoints": state.checkpoints,
         }
+        if state.updated_at is not None:
+            snapshot["updated_at"] = state.updated_at
         if state.fence_generation:
             snapshot["fence_token"] = state.fence_token
             snapshot["fence_generation"] = state.fence_generation
@@ -350,14 +420,91 @@ class InMemoryRuntimeStateStore:
         session: Any = None,
         user_id: str = "",
     ) -> RunStateSnapshot:
-        del session, user_id
+        del session
+        scope = RuntimeScope(user_id=str(user_id or "local-device"))
+        return self.load_snapshot_scoped(run_id, scope=scope)
+
+    def load_snapshot_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+    ) -> RunStateSnapshot:
+        del session
         with self._lock:
-            state = copy.deepcopy(self._states.get(run_id) or _MemoryRuntimeState())
+            state = copy.deepcopy(self._lookup_state(run_id, scope=scope))
         return state.aggregate(run_id).snapshot()
+
+    def list_snapshots(
+        self,
+        *,
+        session: Any = None,
+        user_id: str = "",
+        statuses: Iterable[str] = (),
+        limit: int = 100,
+    ) -> tuple[RunStateSnapshot, ...]:
+        del session
+        scope = RuntimeScope(user_id=str(user_id or "local-device"))
+        return self.list_snapshots_scoped(
+            scope=scope,
+            statuses=statuses,
+            limit=limit,
+        )
+
+    def list_snapshots_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        session: Any = None,
+        statuses: Iterable[str] = (),
+        limit: int = 100,
+    ) -> tuple[RunStateSnapshot, ...]:
+        del session
+        allowed = {
+            normalize_runtime_status(status)
+            for status in statuses
+            if str(status or "").strip()
+        }
+        ceiling = max(0, min(int(limit), 10_000))
+        with self._lock:
+            snapshots = [
+                state.aggregate(run_id).snapshot()
+                for (
+                    stored_tenant,
+                    stored_namespace,
+                    stored_user_id,
+                    run_id,
+                ), state in self._states.items()
+                if (
+                    stored_tenant,
+                    stored_namespace,
+                    stored_user_id,
+                ) == scope.storage_key
+                and (not allowed or normalize_runtime_status(state.status) in allowed)
+            ]
+        snapshots.sort(key=lambda item: (item.sequence, item.run_id), reverse=True)
+        return tuple(snapshots[:ceiling])
 
     def _fail_at(self, stage: str) -> None:
         if self._failure_injector is not None:
             self._failure_injector(stage)
+
+    def _lookup_state(self, run_id: str, *, scope: RuntimeScope) -> _MemoryRuntimeState:
+        exact = self._states.get((*scope.storage_key, run_id))
+        if exact is not None:
+            return exact
+        # Preserve the original local-embedding behavior when the caller omits
+        # a scope and the run identity is globally unambiguous.
+        if scope.user_id == "local-device" and scope.is_legacy_compatible:
+            matches = [
+                state
+                for (*_scope_parts, stored_run_id), state in self._states.items()
+                if stored_run_id == run_id
+            ]
+            if len(matches) == 1:
+                return matches[0]
+        return _MemoryRuntimeState()
 
 
 def _assert_fence_is_current(

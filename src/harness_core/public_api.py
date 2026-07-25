@@ -7,7 +7,7 @@ from harness_core.memory_sdk import MEMORY_SDK_API
 from harness_core.orchestration_sdk import ORCHESTRATION_SDK_API
 from harness_core.runtime_sdk import RUNTIME_SDK_API
 
-PUBLIC_API_VERSION = "3.4.0"
+PUBLIC_API_VERSION = "3.5.0"
 PUBLIC_API_BY_LAYER = {
     "runtime": RUNTIME_SDK_API,
     "extension": EXTENSION_SDK_API,

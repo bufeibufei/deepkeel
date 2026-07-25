@@ -14,6 +14,12 @@ class RunControl(Protocol):
     def release(self, run_id: str) -> None: ...
 
 
+class CancellableRunControl(RunControl, Protocol):
+    """Optional control-plane extension for requesting cooperative cancellation."""
+
+    def cancel(self, run_id: str) -> None: ...
+
+
 class NoopRunControl:
     def cancel(self, run_id: str) -> None:
         del run_id

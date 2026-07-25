@@ -5,6 +5,7 @@ import hashlib
 from typing import Any
 
 from harness_core.type_narrowing import as_dict
+from harness_core.scope import RuntimeScope
 
 
 class AgentEventPersistenceError(RuntimeError):
@@ -72,6 +73,7 @@ def envelope_runtime_event(
     turn_id: str,
     sequence: int,
     run_version: int = 0,
+    scope: RuntimeScope | None = None,
 ) -> dict[str, Any]:
     projected = project_runtime_event(event)
     source_type = str(
@@ -79,6 +81,7 @@ def envelope_runtime_event(
     )
     event_key = f"{run_id}:{turn_id}:{sequence}:{source_type}"
     visibility = str(projected.get("visibility") or "internal")
+    resolved_scope = scope or RuntimeScope()
     return {
         **projected,
         "schema_version": "harness-runtime-event-v1",
@@ -88,6 +91,9 @@ def envelope_runtime_event(
         "run_id": run_id,
         "thread_id": thread_id,
         "turn_id": turn_id,
+        "tenant_id": resolved_scope.tenant_id,
+        "user_id": resolved_scope.user_id,
+        "namespace": resolved_scope.namespace,
         "visibility": visibility if visibility in {"public", "internal"} else "internal",
         "created_at": projected.get("created_at") or datetime.now(UTC).isoformat(),
     }

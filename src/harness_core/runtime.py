@@ -83,7 +83,12 @@ from harness_core.runtime_api import (
     RuntimeStreamEvent,
 )
 from harness_core.skills import SkillPolicy
-from harness_core.state_store import RuntimeStateMutation, RuntimeStateStore
+from harness_core.scope import RuntimeScope, require_legacy_compatible_scope
+from harness_core.state_store import (
+    RuntimeStateMutation,
+    RuntimeStateStore,
+    ScopedRuntimeStateStore,
+)
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from harness_core.type_narrowing import as_dict
 from harness_core.tool_registry import ToolRegistry
@@ -512,7 +517,8 @@ class HarnessRuntime:
     ) -> RuntimeResult:
         """Execute one turn through the typed, product-neutral public API."""
         question = request.question
-        user_id = request.user_id
+        runtime_scope = request.runtime_scope
+        user_id = runtime_scope.user_id
         short_context = request.short_context
         context_bundle = request.context_bundle
         skill_activation = request.skill_activation
@@ -566,6 +572,7 @@ class HarnessRuntime:
                     run_id,
                     session=session,
                     user_id=str(user_id or "local-device"),
+                    scope=runtime_scope,
                 )
             )
         else:
@@ -640,6 +647,7 @@ class HarnessRuntime:
                     turn_id=turn_id,
                     sequence=event_sequence,
                     run_version=run_version,
+                    scope=runtime_scope,
                 )
                 payload = as_dict(projected.get("payload"))
                 payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
@@ -958,6 +966,9 @@ class HarnessRuntime:
                     run_id=run_id,
                     thread_id=conversation_thread_id,
                     turn_id=turn_id,
+                    tenant_id=runtime_scope.tenant_id,
+                    user_id=runtime_scope.user_id,
+                    namespace=runtime_scope.namespace,
                     status=result.status.value,
                     attributes={
                         "status": result.status.value,
@@ -984,6 +995,7 @@ class HarnessRuntime:
             user_id=str(user_id or "local-device"),
             context_bundle=bundle,
             execution_fence=execution_fence,
+            scope=runtime_scope,
         )
         if result.status.value in {"completed", "failed", "canceled"}:
             self.cleanup_run(
@@ -991,6 +1003,7 @@ class HarnessRuntime:
                 run_id=run_id,
                 session=session,
                 user_id=str(user_id or "local-device"),
+                scope=runtime_scope,
                 graph_thread_ids=[active_graph_thread_id],
             )
         return result
@@ -1002,16 +1015,21 @@ class HarnessRuntime:
         run_id: str,
         session: Any = None,
         user_id: str = "",
+        scope: RuntimeScope | None = None,
         graph_thread_ids: list[str] | None = None,
     ) -> dict[str, str]:
         cleanup: dict[str, str] = {}
         errors: dict[str, str] = {}
         if self.checkpoint_store is not None:
             try:
+                legacy_user_id = require_legacy_compatible_scope(
+                    scope or RuntimeScope(user_id=user_id),
+                    adapter_name=type(self.checkpoint_store).__name__,
+                )
                 self.checkpoint_store.delete(
                     run_id,
                     session=session,
-                    user_id=user_id,
+                    user_id=legacy_user_id,
                 )
                 cleanup["durable"] = "deleted"
             except Exception as exc:
@@ -1058,17 +1076,34 @@ class HarnessRuntime:
         *,
         session: Any,
         user_id: str,
+        scope: RuntimeScope | None = None,
     ) -> tuple[dict[str, Any], str, list[str]]:
         """Load portable state from the canonical store before compatibility fallbacks."""
 
         errors: list[str] = []
         if self.runtime_state_store is not None:
             try:
-                snapshot = self.runtime_state_store.load_snapshot(
-                    run_id,
-                    session=session,
-                    user_id=user_id,
+                load_scoped = getattr(
+                    self.runtime_state_store,
+                    "load_snapshot_scoped",
+                    None,
                 )
+                if scope is not None and callable(load_scoped):
+                    snapshot = load_scoped(
+                        run_id,
+                        session=session,
+                        scope=scope,
+                    )
+                else:
+                    legacy_user_id = require_legacy_compatible_scope(
+                        scope or RuntimeScope(user_id=user_id),
+                        adapter_name=type(self.runtime_state_store).__name__,
+                    )
+                    snapshot = self.runtime_state_store.load_snapshot(
+                        run_id,
+                        session=session,
+                        user_id=legacy_user_id,
+                    )
                 state = snapshot.checkpoint_state
                 if isinstance(state, dict) and state:
                     return dict(state), "runtime_state_store", errors
@@ -1076,10 +1111,14 @@ class HarnessRuntime:
                 errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
         if self.checkpoint_store is not None:
             try:
+                legacy_user_id = require_legacy_compatible_scope(
+                    scope or RuntimeScope(user_id=user_id),
+                    adapter_name=type(self.checkpoint_store).__name__,
+                )
                 legacy_state = self.checkpoint_store.load(
                     run_id,
                     session=session,
-                    user_id=user_id,
+                    user_id=legacy_user_id,
                 )
                 if isinstance(legacy_state, dict) and legacy_state:
                     return dict(legacy_state), "durable_checkpoint_store", errors
@@ -1294,6 +1333,7 @@ class HarnessRuntime:
         user_id: str,
         context_bundle: dict[str, Any],
         execution_fence: ExecutionFence | None = None,
+        scope: RuntimeScope | None = None,
     ) -> None:
         status = result.status.value
         if status not in {
@@ -1338,8 +1378,7 @@ class HarnessRuntime:
                 durable_state,
             )
             try:
-                receipt = self.runtime_state_store.commit(
-                    RuntimeStateMutation(
+                mutation = RuntimeStateMutation(
                         mutation_id=mutation_id,
                         run_id=run_id,
                         event_type=event_type,
@@ -1376,10 +1415,24 @@ class HarnessRuntime:
                         fence_generation=(
                             execution_fence.generation if execution_fence is not None else 0
                         ),
-                    ),
-                    session=session,
-                    user_id=user_id,
                 )
+                commit_scoped = getattr(self.runtime_state_store, "commit_scoped", None)
+                if scope is not None and callable(commit_scoped):
+                    receipt = commit_scoped(
+                        mutation,
+                        session=session,
+                        scope=scope,
+                    )
+                else:
+                    legacy_user_id = require_legacy_compatible_scope(
+                        scope or RuntimeScope(user_id=user_id),
+                        adapter_name=type(self.runtime_state_store).__name__,
+                    )
+                    receipt = self.runtime_state_store.commit(
+                        mutation,
+                        session=session,
+                        user_id=legacy_user_id,
+                    )
             except Exception as exc:
                 recovery["atomic_checkpoint"] = "failed"
                 recovery["checkpoint_error"] = str(exc)
@@ -1392,11 +1445,15 @@ class HarnessRuntime:
         if self.checkpoint_store is None:
             return
         try:
+            legacy_user_id = require_legacy_compatible_scope(
+                scope or RuntimeScope(user_id=user_id),
+                adapter_name=type(self.checkpoint_store).__name__,
+            )
             self.checkpoint_store.save(
                 run_id,
                 durable_state,
                 session=session,
-                user_id=user_id,
+                user_id=legacy_user_id,
             )
             recovery["durable_checkpoint"] = "persisted"
         except Exception as exc:

@@ -16,7 +16,21 @@ from harness_core.context_snapshot import (
     context_snapshot_subject,
     normalize_agent_context_snapshot,
 )
-from harness_core.control import InMemoryRunControl, NoopRunControl, RunControl
+from harness_core.control import (
+    CancellableRunControl,
+    InMemoryRunControl,
+    NoopRunControl,
+    RunControl,
+)
+from harness_core.evaluation import (
+    EvalCase,
+    EvalCaseResult,
+    EvalExpectation,
+    EvalSuiteReport,
+    EvalSuiteRunner,
+    EvalViolation,
+    evaluate_runtime_result,
+)
 from harness_core.events import AgentEventPersistenceError, normalize_runtime_event
 from harness_core.event_journal import (
     EventJournalConflict,
@@ -34,6 +48,16 @@ from harness_core.model import (
 from harness_core.failures import RunCanceledError, failure_from_code
 from harness_core.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from harness_core.recovery import RecoveryOutcome, RecoveryState, classify_recovery_outcome
+from harness_core.operations import (
+    InMemoryRunRecoveryExecutor,
+    RunInspection,
+    RunOperationReceipt,
+    RunOperations,
+    RunOperationsUnavailable,
+    RunRecoveryAction,
+    RunRecoveryCommand,
+    RunRecoveryExecutor,
+)
 from harness_core.runtime import HarnessRuntime
 from harness_core.runtime_api import (
     RuntimeActiveTask,
@@ -46,8 +70,14 @@ from harness_core.runtime_api import (
     RuntimeStreamEvent,
     RuntimeUIState,
 )
+from harness_core.scope import (
+    RuntimeScope,
+    RuntimeScopeUnsupported,
+    resolve_runtime_scope,
+)
 from harness_core.state_store import (
     InMemoryRuntimeStateStore,
+    QueryableRuntimeStateStore,
     RUN_SETTLED_EVENT,
     RunAggregate,
     RunStateSnapshot,
@@ -55,6 +85,7 @@ from harness_core.state_store import (
     RuntimeStateMutation,
     RuntimeStateReceipt,
     RuntimeStateStore,
+    ScopedRuntimeStateStore,
     TERMINAL_RUN_STATUSES,
     normalize_runtime_status,
 )
@@ -66,13 +97,21 @@ RUNTIME_SDK_API = (
     "AgentEventPersistenceError",
     "AgentMessage",
     "Artifact",
+    "CancellableRunControl",
     "DurableCheckpointStore",
+    "EvalCase",
+    "EvalCaseResult",
+    "EvalExpectation",
+    "EvalSuiteReport",
+    "EvalSuiteRunner",
+    "EvalViolation",
     "EventJournalConflict",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",
     "HARNESS_CORE_VERSION",
     "HarnessRuntime",
     "InMemoryRunControl",
+    "InMemoryRunRecoveryExecutor",
     "InMemoryDurableCheckpointStore",
     "InMemoryRuntimeStateStore",
     "InMemoryRuntimeEventJournal",
@@ -80,9 +119,17 @@ RUNTIME_SDK_API = (
     "NoopRunControl",
     "Observation",
     "PendingAction",
+    "QueryableRuntimeStateStore",
     "RecoveryOutcome",
     "RecoveryState",
     "RunCanceledError",
+    "RunInspection",
+    "RunOperationReceipt",
+    "RunOperations",
+    "RunOperationsUnavailable",
+    "RunRecoveryAction",
+    "RunRecoveryCommand",
+    "RunRecoveryExecutor",
     "RUN_SETTLED_EVENT",
     "RunAggregate",
     "RunContext",
@@ -103,10 +150,13 @@ RUNTIME_SDK_API = (
     "RuntimeRequest",
     "RuntimeResult",
     "RuntimeResultStatus",
+    "RuntimeScope",
+    "RuntimeScopeUnsupported",
     "RuntimeStateConflict",
     "RuntimeStateMutation",
     "RuntimeStateReceipt",
     "RuntimeStateStore",
+    "ScopedRuntimeStateStore",
     "RuntimeStreamEvent",
     "RuntimeUIState",
     "TERMINAL_RUNTIME_STATUSES",
@@ -117,10 +167,12 @@ RUNTIME_SDK_API = (
     "context_snapshot_subject",
     "classify_recovery_outcome",
     "failure_from_code",
+    "evaluate_runtime_result",
     "normalize_agent_context_snapshot",
     "normalize_runtime_event",
     "normalize_runtime_status",
     "project_run_ui_state",
+    "resolve_runtime_scope",
     "workflow_projection",
 )
 

@@ -17,6 +17,7 @@ from harness_core.model import (
     ModelTurn,
 )
 from harness_core.runtime_api import RuntimeEventEnvelope
+from harness_core.scope import RuntimeScope
 from harness_core.state_store import (
     RUN_SETTLED_EVENT,
     RuntimeStateConflict,
@@ -243,6 +244,40 @@ def verify_runtime_state_store_contract(
     assert snapshot.settlement_status == "completed"
     assert snapshot.fence_generation == 1
     assert snapshot.fence_token == "worker-a-token"
+    isolated_user_id = f"{user_id or 'conformance'}:isolated"
+    try:
+        isolated = store.load_snapshot(
+            run_id,
+            session=session,
+            user_id=isolated_user_id,
+        )
+    except Exception as exc:
+        if not _is_scope_denial(exc):
+            raise
+    else:
+        if isolated.version or isolated.sequence or isolated.settled:
+            raise AssertionError("runtime state store leaked a run across user scopes")
+
+    commit_scoped = getattr(store, "commit_scoped", None)
+    load_scoped = getattr(store, "load_snapshot_scoped", None)
+    if callable(commit_scoped) and callable(load_scoped):
+        tenant_run_id = f"{run_id}:tenant-scope"
+        tenant_a = RuntimeScope(tenant_id="tenant-a", user_id=user_id or "user-a")
+        tenant_b = RuntimeScope(tenant_id="tenant-b", user_id=user_id or "user-a")
+        commit_scoped(
+            RuntimeStateMutation(
+                mutation_id=f"conformance:{uuid4().hex}",
+                run_id=tenant_run_id,
+                event_type="conformance.scoped",
+                target_status="task_running",
+            ),
+            scope=tenant_a,
+            session=session,
+        )
+        scoped_a = load_scoped(tenant_run_id, scope=tenant_a, session=session)
+        scoped_b = load_scoped(tenant_run_id, scope=tenant_b, session=session)
+        if not scoped_a.version or scoped_b.version or scoped_b.sequence:
+            raise AssertionError("runtime state store leaked a run across tenant scopes")
 
     stale = RuntimeStateMutation(
         mutation_id=f"conformance:{uuid4().hex}",
@@ -361,7 +396,22 @@ def verify_durable_checkpoint_store_contract(
     loaded["phase"] = "mutated-after-load"
     reloaded = store.load(run_id, session=session, user_id=user_id)
     assert reloaded is not None and reloaded["phase"] == "waiting"
+    isolated_user_id = f"{user_id or 'conformance'}:isolated"
+    try:
+        isolated = store.load(run_id, session=session, user_id=isolated_user_id)
+    except Exception as exc:
+        if not _is_scope_denial(exc):
+            raise
+    else:
+        if isolated is not None:
+            raise AssertionError("durable checkpoint store leaked a run across user scopes")
     assert run_id in store.list_ids(session=session, user_id=user_id, limit=100)
     store.delete(run_id, session=session, user_id=user_id)
     assert not store.exists(run_id, session=session, user_id=user_id)
     assert store.load(run_id, session=session, user_id=user_id) is None
+
+
+def _is_scope_denial(exc: Exception) -> bool:
+    return isinstance(exc, (LookupError, PermissionError)) or int(
+        getattr(exc, "status_code", 0) or 0
+    ) in {403, 404}

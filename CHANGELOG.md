@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- Add `RuntimeScope` and scoped state/trace contracts with fail-closed legacy
+  adapter compatibility for tenant and namespace isolation.
+- Extend `RunOperations` with stale-run discovery and auditable, idempotent
+  resume, retry, requeue, and terminalize command submission.
+- Add asynchronous persistence Port contracts and opt-in thread-offload
+  bridges for thread-safe synchronous adapters.
+- Add fault coverage for a completed external side effect whose durable
+  settlement fails.
+- Add user-scoped runtime state isolation to the reference adapter and enforce
+  state/checkpoint isolation in adapter conformance.
+- Add deterministic Eval suite contracts for status, tools, artifacts, step
+  budgets, errors, and ordered trace events.
+- Add production-readiness guidance and failure-injection coverage for
+  persistence outages and partially failed parallel tool execution.
+
 ## 3.13.2
 
 - Interpret an unlimited product budget as unlimited total generation rather

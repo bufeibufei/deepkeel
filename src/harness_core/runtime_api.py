@@ -14,6 +14,7 @@ from harness_core.contracts import (
     RunContext,
     ToolResult,
 )
+from harness_core.scope import RuntimeScope, resolve_runtime_scope
 
 
 class RuntimeActiveTask(TypedDict):
@@ -72,6 +73,9 @@ class RuntimeRequest(BaseModel):
 
     question: str = Field(min_length=1)
     user_id: str = "local-device"
+    tenant_id: str = ""
+    namespace: str = "default"
+    scope: RuntimeScope | None = None
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
@@ -79,6 +83,15 @@ class RuntimeRequest(BaseModel):
     context_bundle: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
     model_policy: dict[str, Any] = Field(default_factory=dict)
+
+    @property
+    def runtime_scope(self) -> RuntimeScope:
+        return resolve_runtime_scope(
+            self.scope,
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            namespace=self.namespace,
+        )
 
 
 class RuntimeResultStatus(StrEnum):
@@ -103,6 +116,9 @@ class RuntimeEventEnvelope(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
+    tenant_id: str = ""
+    user_id: str = ""
+    namespace: str = "default"
     visibility: Literal["public", "internal"] = "internal"
     event_type: str = Field(min_length=1)
     source_event_type: str = ""

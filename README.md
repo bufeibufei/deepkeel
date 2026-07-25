@@ -6,6 +6,11 @@ governance ports, interruption, recovery, ToolProvider integration and
 Capability Pack composition. MCP transports and bounded orchestration are
 optional SDK modules rather than required runtime concepts.
 
+Production deployments should follow
+[`docs/production-readiness.md`](docs/production-readiness.md), replace every
+process-local `InMemory*` adapter, and run the exported adapter conformance
+verifiers against the real backend.
+
 The package does not contain host tools, database models, API routes or product
 prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 `RuntimePorts` and a versioned Capability Pack. New packs should expose a
@@ -65,6 +70,24 @@ result = runtime.run(
 print(result.status, result.final_answer.markdown)
 ```
 
+Multi-tenant Hosts pass a `RuntimeScope` rather than encoding ownership into
+run identifiers. The reference state adapter isolates tenant, namespace, and
+user dimensions. Legacy `user_id` adapters remain supported for the default
+scope and fail closed when asked to represent a tenant they cannot isolate.
+
+```python
+from harness_core.runtime_sdk import RuntimeRequest, RuntimeScope
+
+request = RuntimeRequest(
+    question="Inspect this account",
+    scope=RuntimeScope(
+        tenant_id="tenant-1",
+        namespace="production",
+        user_id="user-1",
+    ),
+)
+```
+
 Async Hosts use the same canonical runtime rather than a second execution
 implementation. `arun()` moves the synchronous provider boundary off the event
 loop, while `astream()` publishes typed events and cooperatively cancels the run
@@ -77,6 +100,11 @@ async for event in runtime.astream(request, provider=provider):
     if event.event_type == "answer.delta":
         publish(event.payload["delta"])
 ```
+
+Thread-safe synchronous persistence adapters can be exposed to async Host
+control paths through the opt-in bridges in `harness_core.adapter_sdk`.
+Production async database drivers should implement the corresponding
+`Async*Store` protocol directly instead of using thread offload.
 
 Reference extraction is also a Port. The default projector discovers generic
 records and web sources without knowing tool names or business vocabulary.
