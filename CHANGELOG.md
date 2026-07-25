@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.16.1
+
+- Preserve known model capabilities when provider adapters also declare transport-specific hints.
+- Support providers that allow native tools but reject forced-function `tool_choice` objects by retaining strict post-response tool validation in automatic mode.
+
 ## 3.16.0
 
 - Add scoped lifecycle Hooks with timeout isolation, idempotent replay,

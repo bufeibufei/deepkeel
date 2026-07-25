@@ -632,7 +632,7 @@ class NativeChatProviderAdapter:
                 }
             )
         provider_messages = provider_messages_from_agent(messages, system_prompt=system_prompt)
-        tool_choice = _tool_choice(step_context)
+        tool_choice = _tool_choice(step_context, self.info.capabilities)
         forced_tool_name = str(
             step_context.forced_tool_name if step_context is not None else ""
         ).strip()
@@ -961,6 +961,7 @@ class RoutedModelGateway:
                 },
                 "required_capabilities": {
                     "native_tools": bool(tools or step_context.forced_tool_name),
+                    "forced_tool_choice": bool(step_context.forced_tool_name),
                     "streaming": on_text_delta is not None,
                 },
                 "provider_capabilities": provider_capabilities.model_dump(mode="json"),
@@ -1024,7 +1025,7 @@ class RoutedModelGateway:
                 invocation = ModelInvocation(
                     messages=provider_messages,
                     tools=tools,
-                    tool_choice=_tool_choice(step_context),
+                    tool_choice=_tool_choice(step_context, provider_capabilities),
                     request_timeout=request_timeout,
                     max_output_tokens=route_payload["max_output_tokens"],
                     reasoning_effort=route_payload["reasoning_effort"],
@@ -1369,11 +1370,18 @@ async def _ainvoke_provider(
     )
 
 
-def _tool_choice(step_context: ModelStepContext | None) -> str | dict[str, Any]:
+def _tool_choice(
+    step_context: ModelStepContext | None,
+    capabilities: ModelCapabilities | None = None,
+) -> str | dict[str, Any]:
     forced_tool_name = str(
         step_context.forced_tool_name if step_context is not None else ""
     ).strip()
     if not forced_tool_name:
+        return "auto"
+    if capabilities is not None and capabilities.supports_forced_tool_choice is False:
+        # Preserve the semantic contract through prompt instructions and
+        # response validation when a provider only accepts automatic tools.
         return "auto"
     return {
         "type": "function",

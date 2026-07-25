@@ -23,6 +23,7 @@ class ModelCapabilities(BaseModel):
 
     supports_streaming: bool | None = None
     supports_native_tools: bool | None = None
+    supports_forced_tool_choice: bool | None = None
     supports_reasoning: bool | None = None
     supports_reasoning_effort: bool | None = None
     context_window_tokens: int | None = Field(default=None, ge=1)
@@ -217,7 +218,12 @@ def model_capabilities_for_provider(provider: Any) -> ModelCapabilities:
         return declared.model_copy(deep=True)
     if isinstance(declared, dict):
         try:
-            return ModelCapabilities.model_validate(declared)
+            known = {
+                key: value
+                for key, value in declared.items()
+                if key in ModelCapabilities.model_fields
+            }
+            return ModelCapabilities.model_validate(known)
         except (TypeError, ValueError):
             pass
     return ModelCapabilities(source="runtime_unknown")

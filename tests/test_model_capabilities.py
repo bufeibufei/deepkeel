@@ -2,6 +2,7 @@ import json
 
 import pytest
 
+from harness_core.contracts import AgentMessage
 from harness_core.model_capabilities import (
     InMemoryModelCapabilityRegistry,
     ModelCapabilities,
@@ -11,6 +12,7 @@ from harness_core.model_capabilities import (
     negotiate_structured_output,
 )
 from harness_core.model import ModelInvocation, NativeChatProviderAdapter
+from harness_core.model_routing import ModelStepContext
 from harness_core.subagents.execution_support import _invoke_provider
 
 
@@ -135,3 +137,74 @@ def test_native_provider_adapter_negotiates_response_contract() -> None:
     assert provider.formats == ["json_object"]
     assert turn.raw["structured_output"]["effective_format"] == "json_object"
     assert adapter.info.capabilities.source == "runtime_observation"
+
+
+class AutoOnlyToolProvider:
+    model = "auto-only-tools"
+    base_url = "https://provider.example/v1"
+    model_capabilities = {
+        "supports_native_tools": True,
+        "supports_forced_tool_choice": False,
+        "supported_response_formats": {"text"},
+        "source": "provider_catalog",
+        # Provider adapters may expose transport hints alongside Core fields.
+        "requires_tool_name_sanitization": True,
+    }
+
+    def __init__(self) -> None:
+        self.tool_choices = []
+
+    def complete_chat(self, _messages, **kwargs):
+        self.tool_choices.append(kwargs.get("tool_choice"))
+        return {
+            "message": {
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call-required",
+                        "type": "function",
+                        "function": {
+                            "name": "report.build",
+                            "arguments": "{}",
+                        },
+                    }
+                ],
+            },
+            "finish_reason": "tool_calls",
+        }
+
+
+def test_native_provider_adapter_emulates_forced_tool_contract_with_auto_mode() -> None:
+    provider = AutoOnlyToolProvider()
+    adapter = NativeChatProviderAdapter(provider)
+
+    turn = adapter.run_turn(
+        [AgentMessage(id="message-1", role="user", content="Build the report")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "report.build",
+                    "description": "Build a report",
+                    "parameters": {"type": "object", "properties": {}},
+                },
+            }
+        ],
+        step_context=ModelStepContext(
+            run_id="run-1",
+            user_id="user-1",
+            thread_id="thread-1",
+            turn_id="turn-1",
+            step_index=0,
+            message_count=1,
+            observation_count=0,
+            tool_result_count=0,
+            available_roles=("reasoning",),
+            forced_tool_name="report.build",
+        ),
+    )
+
+    assert provider.tool_choices == ["auto"]
+    assert [call.name for call in turn.tool_calls] == ["report.build"]
+    assert adapter.info.capabilities.supports_forced_tool_choice is False
+    assert adapter.info.capabilities.source == "provider_catalog"
