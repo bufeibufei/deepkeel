@@ -46,6 +46,13 @@ from harness_core.graph import (
     HarnessGraph,
     create_harness_graph,
 )
+from harness_core.hooks import (
+    HookAction,
+    HookAudit,
+    HookInvocation,
+    HookPoint,
+    HookRunner,
+)
 from harness_core.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     checkpointer_supports_async,
@@ -69,6 +76,7 @@ from harness_core.persistence import (
     resume_payload_from_context,
 )
 from harness_core.capabilities import CapabilityCatalog, CapabilityContribution
+from harness_core.capability_manifest import RuntimeGeneration
 from harness_core.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from harness_core.prompts import harness_system_prompt
 from harness_core.policy import DefaultPolicyEngine, PolicyEngine
@@ -92,7 +100,7 @@ from harness_core.state_store import (
 from harness_core.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from harness_core.type_narrowing import as_dict
 from harness_core.tool_registry import ToolRegistry
-from harness_core.tool_disclosure import install_tool_discovery
+from harness_core.tool_disclosure import ToolDiscoveryPort, install_tool_discovery
 from harness_core.tools import ToolExecutionContext, ToolExecutor
 from harness_core.turn_context import ToolViewMode, TurnExecutionContext
 from harness_core.ui import project_run_ui_state
@@ -147,6 +155,36 @@ def _optional_int(value: Any) -> int | None:
         return None
 
 
+def _hook_audit_dict(audit: HookAudit) -> dict[str, Any]:
+    return {
+        "hook_id": audit.hook_id,
+        "hook_point": audit.point.value,
+        "operation_id": audit.operation_id,
+        "status": audit.status,
+        "duration_ms": audit.duration_ms,
+        "replayed": audit.replayed,
+        "required": audit.required,
+        "error": audit.error,
+        "diagnostics": dict(audit.diagnostics),
+    }
+
+
+def _emit_runtime_hook_audits(
+    emit: EventSink,
+    audits: tuple[HookAudit, ...],
+) -> None:
+    for audit in audits:
+        emit(
+            {
+                "event_type": "hook.executed",
+                "title": "Lifecycle hook",
+                "summary": f"{audit.point.value}: {audit.status}",
+                "payload": {**_hook_audit_dict(audit), "visible": False},
+                "visibility": "debug",
+            }
+        )
+
+
 class HarnessRuntime:
     """Product-neutral execution loop composed with explicit runtime ports."""
 
@@ -183,6 +221,9 @@ class HarnessRuntime:
         reuse_compiled_graph: bool = True,
         graph_durability: GraphDurability = "exit",
         tool_view_mode: ToolViewMode = "legacy",
+        hook_runner: HookRunner | None = None,
+        tool_discovery_port: ToolDiscoveryPort | None = None,
+        runtime_generation: RuntimeGeneration | None = None,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
@@ -216,13 +257,20 @@ class HarnessRuntime:
         self.reuse_compiled_graph = bool(reuse_compiled_graph)
         self.graph_durability = graph_durability
         self.tool_view_mode = tool_view_mode
+        self.hook_runner = hook_runner or HookRunner()
+        self.runtime_generation = runtime_generation
         if self.tool_view_mode != "legacy":
-            install_tool_discovery(self.tool_registry, self.tool_executor)
+            install_tool_discovery(
+                self.tool_registry,
+                self.tool_executor,
+                discovery_port=tool_discovery_port,
+            )
         self._compiled_graph: HarnessGraph | None = None
         self._graph_compile_count = 0
         self._graph_compile_lock = Lock()
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
+        self.tool_executor.hook_runner = self.hook_runner
 
     @property
     def graph_compile_count(self) -> int:
@@ -680,6 +728,67 @@ class HarnessRuntime:
             if event_sink is not None:
                 event_sink(projected)
 
+        lifecycle_audits: list[HookAudit] = []
+        lifecycle_points = [
+            HookPoint.RUN_RESUMED if short.get("resume") else HookPoint.RUN_STARTED,
+            HookPoint.TURN_STARTED,
+            HookPoint.CONTEXT_PREPARED,
+        ]
+        context_changed = False
+        for point in lifecycle_points:
+            hook_result = await self.hook_runner.arun(
+                HookInvocation(
+                    point=point,
+                    operation_id=(
+                        f"{run_id}:{point.value}"
+                        if point is HookPoint.RUN_STARTED
+                        else f"{run_id}:{turn_id}:{point.value}"
+                    ),
+                    run_id=run_id,
+                    thread_id=conversation_thread_id,
+                    turn_id=turn_id,
+                    package_ids=tuple(
+                        contribution.package_id
+                        for contribution in self.capability_contributions
+                    ),
+                    skill_id=str(skill.get("skill_id") or ""),
+                    payload={
+                        "question": question,
+                        "context_window": dict(context_window_diagnostics),
+                    },
+                    metadata={"user_id": str(user_id or "local-device")},
+                )
+            )
+            lifecycle_audits.extend(hook_result.audits)
+            _emit_runtime_hook_audits(emit, hook_result.audits)
+            if hook_result.decision.context_patch:
+                bundle.update(dict(hook_result.decision.context_patch))
+                context_changed = True
+            if hook_result.decision.action != HookAction.CONTINUE:
+                return self._context_setup_failure(
+                    question,
+                    RuntimeError(
+                        hook_result.decision.reason
+                        or f"runtime lifecycle hook stopped at {point.value}"
+                    ),
+                    short_context=short,
+                    context_bundle=bundle,
+                    user_id=user_id,
+                    skill_activation=skill_activation,
+                    model_policy=model_policy,
+                    session=session,
+                    event_sink=event_sink,
+                    execution_fence=execution_fence,
+                )
+        if context_changed:
+            prepared_context = self.context_window_manager.prepare(
+                question,
+                short,
+                bundle,
+            )
+            bundle = prepared_context.context_bundle
+            context_window_diagnostics = dict(prepared_context.diagnostics)
+
         model_providers = _model_providers(provider, providers, resolved_model_policy)
         model_gateway = RoutedModelGateway(
             model_providers,
@@ -727,6 +836,10 @@ class HarnessRuntime:
                 "model_policy": resolved_model_policy,
                 "event_sink": emit,
                 "budget_ledger": self.budget_ledger,
+                "capability_package_ids": [
+                    contribution.package_id
+                    for contribution in self.capability_contributions
+                ],
             },
             budget_limits=budget_limits,
             deadline_monotonic=deadline_monotonic,
@@ -740,6 +853,7 @@ class HarnessRuntime:
             event_sink=emit,
             deadline_monotonic=deadline_monotonic,
             tool_view_mode=self.tool_view_mode,
+            hook_runner=self.hook_runner,
         )
 
         recovery_source = ""
@@ -928,6 +1042,9 @@ class HarnessRuntime:
             diagnostics["recovery"] = recovery
         diagnostics = result.diagnostics
         diagnostics["context_window"] = context_window_diagnostics
+        diagnostics["hooks"] = {
+            "executions": [_hook_audit_dict(audit) for audit in lifecycle_audits],
+        }
         execution_contract = {
             "graph_contract_version": HARNESS_GRAPH_CONTRACT_VERSION,
             "graph_reused": self.reuse_compiled_graph,
@@ -939,6 +1056,11 @@ class HarnessRuntime:
             "checkpoint_authority": checkpoint_authority,
             "checkpoint_policy": "runtime_boundaries",
             "graph_checkpoint_role": "engine_recovery_only",
+            "runtime_generation_id": (
+                self.runtime_generation.generation_id
+                if self.runtime_generation is not None
+                else ""
+            ),
         }
         if checkpoint_load_errors:
             execution_contract["checkpoint_load_errors"] = list(checkpoint_load_errors)
@@ -959,6 +1081,37 @@ class HarnessRuntime:
             "snapshot": self.budget_ledger.snapshot(run_id).as_dict(),
         }
         result.checkpoint["budget_state"] = self.budget_ledger.snapshot(run_id).as_dict()
+        settlement_point = (
+            HookPoint.RUN_SUSPENDING
+            if result.status.value
+            in {"waiting_user_action", "waiting_user_input", "task_running"}
+            else HookPoint.RUN_SETTLED
+        )
+        settlement_hooks = await self.hook_runner.arun(
+            HookInvocation(
+                point=settlement_point,
+                operation_id=f"{run_id}:{turn_id}:{settlement_point.value}",
+                run_id=run_id,
+                thread_id=conversation_thread_id,
+                turn_id=turn_id,
+                package_ids=tuple(
+                    contribution.package_id
+                    for contribution in self.capability_contributions
+                ),
+                skill_id=str(skill.get("skill_id") or ""),
+                payload={
+                    "status": result.status.value,
+                    "stop_reason": result.stop_reason,
+                    "artifact_ids": [artifact.id for artifact in result.artifacts],
+                },
+                metadata={"user_id": str(user_id or "local-device")},
+            )
+        )
+        lifecycle_audits.extend(settlement_hooks.audits)
+        _emit_runtime_hook_audits(emit, settlement_hooks.audits)
+        diagnostics["hooks"]["executions"] = [
+            _hook_audit_dict(audit) for audit in lifecycle_audits
+        ]
         try:
             self.telemetry.record(
                 TelemetryRecord(
@@ -1298,7 +1451,7 @@ class HarnessRuntime:
         return result
 
     def _capability_manifest(self) -> dict[str, Any]:
-        return {
+        result = {
             "packages": [
                 {
                     "package_id": contribution.package_id,
@@ -1320,8 +1473,12 @@ class HarnessRuntime:
                     self.capability_catalog.context_contributors
                 ),
                 "resources": len(self.capability_catalog.resources),
+                "hooks": len(self.capability_catalog.hooks),
             },
         }
+        if self.runtime_generation is not None:
+            result["generation"] = self.runtime_generation.model_dump(mode="json")
+        return result
 
     def _persist_runtime_snapshot(
         self,

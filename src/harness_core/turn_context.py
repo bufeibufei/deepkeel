@@ -5,6 +5,7 @@ from threading import Lock
 from typing import Any, Callable, Literal
 
 from harness_core.model import ModelGateway
+from harness_core.hooks import HookRunner
 from harness_core.tools import ToolExecutionContext
 
 
@@ -22,6 +23,7 @@ class TurnExecutionContext:
     event_sink: EventSink | None = None
     deadline_monotonic: float | None = None
     tool_view_mode: ToolViewMode = "legacy"
+    hook_runner: HookRunner | None = None
 
 
 class TurnContextRegistry:

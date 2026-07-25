@@ -114,6 +114,28 @@ def _child_tool_context(
     spec: SubAgentSpec,
 ) -> tuple[ToolExecutionContext, Any | None]:
     owned_session = context.session_factory() if context.session_factory is not None else None
+    parent_scope = dict(context.metadata.get("governance_scope") or {})
+    parent_scopes = {
+        str(value)
+        for value in parent_scope.get("scopes", [])
+        if str(value).strip()
+    }
+    declared_scopes = {
+        str(value) for value in spec.permission_scopes if str(value).strip()
+    }
+    effective_scopes = (
+        sorted(parent_scopes & declared_scopes)
+        if declared_scopes
+        else sorted(parent_scopes)
+    )
+    budget_limits = dict(context.budget_limits)
+    for metric, limit in spec.budget_limits.items():
+        parent_limit = budget_limits.get(metric)
+        budget_limits[metric] = (
+            min(float(parent_limit), float(limit))
+            if parent_limit is not None
+            else float(limit)
+        )
     child = ToolExecutionContext(
         run_id=child_run_id,
         user_id=context.user_id,
@@ -128,9 +150,16 @@ def _child_tool_context(
                 "agent_id": spec.id,
                 "read_only": True,
                 "tool_allowlist": list(spec.tool_allowlist),
+                "permission_scopes": effective_scopes,
+                "budget_limits": dict(budget_limits),
+            },
+            "governance_scope": {
+                **parent_scope,
+                "scopes": effective_scopes,
+                "subagent_id": spec.id,
             },
         },
-        budget_limits=dict(context.budget_limits),
+        budget_limits=budget_limits,
         deadline_monotonic=context.deadline_monotonic,
         run_control=context.run_control,
     )

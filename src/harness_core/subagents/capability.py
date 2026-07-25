@@ -52,6 +52,7 @@ class DelegationToolHandler:
                     "parent_run_id": context.run_id,
                     "depth": 1,
                     "max_concurrency": call.arguments.get("max_concurrency") or 3,
+                    "execution_mode": call.arguments.get("execution_mode") or "auto",
                     "tasks": call.arguments.get("tasks") or [],
                 }
             )
@@ -71,7 +72,21 @@ class DelegationToolHandler:
             if not isinstance(providers, dict) or not providers:
                 raise RuntimeError("model providers are unavailable for delegation")
             event_sink = context.metadata.get("event_sink")
-            if self.dispatcher is not None and context.session_factory is not None:
+            can_dispatch_background = (
+                self.dispatcher is not None and context.session_factory is not None
+            )
+            should_dispatch_background = (
+                request.execution_mode == "background"
+                or (
+                    request.execution_mode == "auto"
+                    and can_dispatch_background
+                )
+            )
+            if should_dispatch_background and not can_dispatch_background:
+                raise RuntimeError(
+                    "background subagent execution is unavailable in this host"
+                )
+            if should_dispatch_background and self.dispatcher is not None:
                 dispatched = self.dispatcher.dispatch(
                     request,
                     context=context,
@@ -117,10 +132,11 @@ class DelegationToolHandler:
                 f"Completed {len(batch.successful_results)}/{len(batch.results)} "
                 "specialist tasks."
             ),
-            data=batch.model_dump(mode="json"),
+            data=batch.parent_payload(),
             metadata={
                 "visible_label": "Parallel specialist analysis",
                 "completed_inline": True,
+                "parent_projection": True,
             },
         )
 

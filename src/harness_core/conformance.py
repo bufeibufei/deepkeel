@@ -180,6 +180,7 @@ def _declared_capabilities(pack_spec) -> dict[str, list[str]]:
         "handoffs": list(pack_spec.declared_handoffs),
         "tool_providers": list(pack_spec.declared_tool_providers),
         "subagents": list(pack_spec.declared_subagents),
+        "hooks": list(pack_spec.declared_hooks),
         "context_contributors": list(pack_spec.declared_context_contributors),
         "resources": list(pack_spec.declared_resources),
     }
@@ -193,6 +194,7 @@ def _installed_capabilities(contribution) -> dict[str, list[str]]:
             "handoffs": [],
             "tool_providers": [],
             "subagents": [],
+            "hooks": [],
             "context_contributors": [],
             "resources": [],
         }
@@ -204,6 +206,7 @@ def _installed_capabilities(contribution) -> dict[str, list[str]]:
             "handoffs",
             "tool_providers",
             "subagents",
+            "hooks",
             "context_contributors",
             "resources",
         )

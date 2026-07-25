@@ -7,6 +7,7 @@ from typing import Any, Callable, Mapping, Protocol
 from jsonschema import Draft202012Validator
 
 from harness_core.handoffs import HandoffSpec
+from harness_core.hooks import HookSpec
 from harness_core.subagents.contracts import SubAgentSpec
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tool_providers import ToolProvider, ToolProviderSpec, verify_tool_provider
@@ -45,6 +46,7 @@ class CapabilityPackSpec:
     declared_handoffs: tuple[str, ...] = ()
     declared_tool_providers: tuple[str, ...] = ()
     declared_subagents: tuple[str, ...] = ()
+    declared_hooks: tuple[str, ...] = ()
     declared_context_contributors: tuple[str, ...] = ()
     declared_resources: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = ()
@@ -80,6 +82,7 @@ class CapabilityContribution:
     handoffs: tuple[str, ...] = ()
     tool_providers: tuple[str, ...] = ()
     subagents: tuple[str, ...] = ()
+    hooks: tuple[str, ...] = ()
     context_contributors: tuple[str, ...] = ()
     resources: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -107,6 +110,7 @@ class CapabilityCatalog:
         self.handoffs: dict[str, HandoffSpec] = {}
         self.tool_providers: dict[str, ToolProvider] = {}
         self.subagents: dict[str, SubAgentSpec] = {}
+        self.hooks: dict[str, HookSpec] = {}
         self.context_contributors: dict[str, ContextContributor] = {}
         self.resources: dict[str, object] = {}
 
@@ -126,6 +130,9 @@ class CapabilityCatalog:
 
     def register_subagent(self, spec: SubAgentSpec) -> None:
         self._register(self.subagents, spec.id, spec, "subagent")
+
+    def register_hook(self, spec: HookSpec) -> None:
+        self._register(self.hooks, spec.id, spec, "hook")
 
     def register_context_contributor(
         self,
@@ -229,6 +236,9 @@ class CapabilityInstallContext:
     def register_subagent(self, spec: SubAgentSpec) -> None:
         self.catalog.register_subagent(spec)
 
+    def register_hook(self, spec: HookSpec) -> None:
+        self.catalog.register_hook(spec)
+
     def register_context_contributor(
         self,
         contributor_id: str,
@@ -273,6 +283,7 @@ def assert_capability_contribution(
         "handoffs": set(spec.declared_handoffs),
         "tool_providers": set(spec.declared_tool_providers),
         "subagents": set(spec.declared_subagents),
+        "hooks": set(spec.declared_hooks),
         "context_contributors": set(spec.declared_context_contributors),
         "resources": set(spec.declared_resources),
     }
@@ -311,6 +322,9 @@ def assert_capability_contribution(
             issues.append(
                 f"subagent {subagent.id} references unknown tools: {', '.join(unknown)}"
             )
+    missing_hooks = sorted(declared["hooks"] - set(catalog.hooks))
+    if missing_hooks:
+        issues.append(f"missing hooks: {', '.join(missing_hooks)}")
     if issues:
         raise ValueError(
             f"capability pack {spec.package_id} failed conformance: " + "; ".join(issues)
@@ -324,6 +338,7 @@ _DECLARATION_FIELDS = (
     "declared_handoffs",
     "declared_tool_providers",
     "declared_subagents",
+    "declared_hooks",
     "declared_context_contributors",
     "declared_resources",
     "required_scopes",
@@ -335,6 +350,7 @@ _CONTRIBUTION_FIELDS = (
     "handoffs",
     "tool_providers",
     "subagents",
+    "hooks",
     "context_contributors",
     "resources",
 )
@@ -344,6 +360,7 @@ _CATALOG_FIELDS = (
     "handoffs",
     "tool_providers",
     "subagents",
+    "hooks",
     "context_contributors",
     "resources",
 )

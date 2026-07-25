@@ -6,7 +6,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from harness_core.type_narrowing import as_dict
 
@@ -44,7 +44,27 @@ class ContextWindowPolicy:
         "memories",
     )
     required_sections: tuple[str, ...] = ("current_time", "subject")
-    policy_id: str = "deterministic-context-window-v1"
+    protected_sections: tuple[str, ...] = (
+        "current_goal",
+        "skill_activation",
+        "pending_action",
+        "business_object",
+        "confirmed_facts",
+        "pending_tools",
+        "artifact_refs",
+        "policy_constraints",
+        "budget_constraints",
+    )
+    policy_id: str = "deterministic-context-window-v2"
+
+
+ContextLayer = Literal[
+    "runtime_constitution",
+    "turn_context",
+    "working_memory",
+    "retrieved_context",
+]
+ContextRetention = Literal["protected", "normal", "ephemeral"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -61,6 +81,8 @@ class ContextSegment:
     cache_key: str = ""
     source_fingerprint: str = ""
     max_tokens: int = 0
+    layer: ContextLayer = "turn_context"
+    retention: ContextRetention = "normal"
 
 
 @dataclass(frozen=True, slots=True)
@@ -185,7 +207,7 @@ class DeterministicContextWindowManager:
             int(policy.max_input_tokens) - int(policy.reserved_output_tokens),
         )
         diagnostics = {
-            "schema_version": "harness-context-window-v1",
+            "schema_version": "harness-context-window-v2",
             "policy_id": policy.policy_id,
             "estimator_id": self.estimator.estimator_id,
             "max_input_tokens": int(policy.max_input_tokens),
@@ -196,6 +218,23 @@ class DeterministicContextWindowManager:
             "final_tokens": final_tokens,
             "context_budget_tokens": context_budget,
             "over_budget": final_tokens > input_budget_tokens,
+            "layers": self._layer_diagnostics(
+                segments,
+                bounded_context,
+                history_tokens=history_tokens,
+            ),
+            "injection_sources": sorted(
+                {
+                    segment.source
+                    for segment in segments
+                    if segment.source and segment.key in bounded_context
+                }
+            ),
+            "summary_versions": {
+                segment.key: segment.summary_version
+                for segment in segments
+                if segment.summary_version and segment.key in bounded_context
+            },
             **history_diagnostics,
             **context_diagnostics,
         }
@@ -260,12 +299,20 @@ class DeterministicContextWindowManager:
                 "required_sections_retained": [
                     segment.key for segment in segments if segment.required
                 ],
+                "protected_sections_retained": [
+                    segment.key
+                    for segment in segments
+                    if segment.retention == "protected"
+                ],
             }
 
         ordered_segments = sorted(
             enumerate(segments),
             key=lambda item: (
-                not item[1].required,
+                not (
+                    item[1].required
+                    or item[1].retention == "protected"
+                ),
                 -int(item[1].priority),
                 item[0],
             ),
@@ -277,6 +324,7 @@ class DeterministicContextWindowManager:
         summary_cache_hits: list[str] = []
         summary_cache_misses: list[str] = []
         retained_required: list[str] = []
+        retained_protected: list[str] = []
         remaining = max(0, int(budget))
         for index, (_, segment) in enumerate(ordered_segments):
             key = segment.key
@@ -290,11 +338,14 @@ class DeterministicContextWindowManager:
             required_left = sum(
                 1
                 for _, candidate in ordered_segments[index:]
-                if candidate.required
+                if candidate.required or candidate.retention == "protected"
+            )
+            segment_required = (
+                segment.required or segment.retention == "protected"
             )
             allocation_cap = (
                 max(1, remaining // max(1, required_left))
-                if segment.required
+                if segment_required
                 else fair_share
             )
             allowance = min(
@@ -304,9 +355,20 @@ class DeterministicContextWindowManager:
                 allocation_cap,
             )
             if allowance <= 0 or (
-                not segment.required
+                not segment_required
                 and allowance < int(self.policy.minimum_section_tokens)
             ):
+                if segment.retention == "protected":
+                    fallback = (
+                        copy.deepcopy(segment.summary)
+                        if segment.summary not in (None, "", [], {})
+                        else copy.deepcopy(value)
+                    )
+                    bounded[key] = fallback
+                    retained_required.append(key)
+                    retained_protected.append(key)
+                    truncated.append(key)
+                    continue
                 dropped.append(key)
                 continue
             compacted = None
@@ -347,15 +409,21 @@ class DeterministicContextWindowManager:
             remaining -= compacted_tokens
             if segment.required:
                 retained_required.append(key)
+            if segment.retention == "protected":
+                retained_protected.append(key)
             if compacted_tokens < value_tokens:
                 truncated.append(key)
         while bounded and self.estimator.estimate(bounded) > budget:
             removable = [
                 segment.key
                 for _, segment in reversed(ordered_segments)
-                if segment.key in bounded and not segment.required
+                if segment.key in bounded
+                and not segment.required
+                and segment.retention != "protected"
             ]
-            removed_key = removable[0] if removable else next(reversed(bounded))
+            if not removable:
+                break
+            removed_key = removable[0]
             bounded.pop(removed_key)
             if removed_key not in dropped:
                 dropped.append(removed_key)
@@ -372,6 +440,11 @@ class DeterministicContextWindowManager:
             "truncated_sections": truncated,
             "summarized_sections": summarized,
             "required_sections_retained": retained_required,
+            "protected_sections_retained": retained_protected,
+            "protected_over_budget": (
+                self.estimator.estimate(bounded) > budget
+                and bool(retained_protected)
+            ),
             "summary_cache_hits": summary_cache_hits,
             "summary_cache_misses": summary_cache_misses,
         }
@@ -390,8 +463,17 @@ class DeterministicContextWindowManager:
                 key=key,
                 value=value,
                 priority=priority.get(key, 0),
-                required=key in self.policy.required_sections,
+                required=(
+                    key in self.policy.required_sections
+                    or key in self.policy.protected_sections
+                ),
                 source="runtime_context",
+                layer=_default_context_layer(key),
+                retention=(
+                    "protected"
+                    if key in self.policy.protected_sections
+                    else "normal"
+                ),
             )
             for key, value in runtime_context.items()
         }
@@ -424,12 +506,62 @@ class DeterministicContextWindowManager:
                         cache_key=str(raw.get("cache_key") or ""),
                         source_fingerprint=str(raw.get("source_fingerprint") or ""),
                         max_tokens=max(0, _safe_int(raw.get("max_tokens"), 0)),
+                        layer=_context_layer(
+                            raw.get("layer"),
+                            inherited.layer
+                            if inherited is not None
+                            else _default_context_layer(key),
+                        ),
+                        retention=_context_retention(
+                            raw.get("retention"),
+                            inherited.retention
+                            if inherited is not None
+                            else (
+                                "protected"
+                                if key in self.policy.protected_sections
+                                else "normal"
+                            ),
+                        ),
                     )
                 else:
                     continue
                 if segment.key and segment.value not in (None, "", [], {}):
                     segments[segment.key] = segment
         return list(segments.values())
+
+    def _layer_diagnostics(
+        self,
+        segments: list[ContextSegment],
+        bounded_context: dict[str, Any],
+        *,
+        history_tokens: int,
+    ) -> dict[str, dict[str, Any]]:
+        layers: dict[str, dict[str, Any]] = {
+            name: {"tokens": 0, "sections": [], "sources": []}
+            for name in (
+                "runtime_constitution",
+                "turn_context",
+                "working_memory",
+                "retrieved_context",
+            )
+        }
+        for segment in segments:
+            if segment.key not in bounded_context:
+                continue
+            item = layers[segment.layer]
+            item["tokens"] = int(item["tokens"]) + self.estimator.estimate(
+                bounded_context[segment.key]
+            )
+            item["sections"].append(segment.key)
+            if segment.source and segment.source not in item["sources"]:
+                item["sources"].append(segment.source)
+        layers["working_memory"]["tokens"] = (
+            int(layers["working_memory"]["tokens"]) + history_tokens
+        )
+        if history_tokens:
+            layers["working_memory"]["sections"].append("recent_messages")
+            layers["working_memory"]["sources"].append("conversation_history")
+        return layers
 
     def _compact_value(self, value: Any, budget: int) -> Any:
         if budget <= 0:
@@ -490,6 +622,46 @@ def _safe_int(value: Any, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _default_context_layer(key: str) -> ContextLayer:
+    if key in {"runtime_constitution", "policy_constraints", "budget_constraints"}:
+        return "runtime_constitution"
+    if key in {
+        "recent_messages",
+        "observations",
+        "tool_summaries",
+        "working_memory",
+    }:
+        return "working_memory"
+    if key in {
+        "memories",
+        "retrieved_context",
+        "references",
+        "artifact_refs",
+        "search_results",
+    }:
+        return "retrieved_context"
+    return "turn_context"
+
+
+def _context_layer(value: Any, default: ContextLayer) -> ContextLayer:
+    normalized = str(value or "").strip()
+    if normalized in {
+        "runtime_constitution",
+        "turn_context",
+        "working_memory",
+        "retrieved_context",
+    }:
+        return normalized  # type: ignore[return-value]
+    return default
+
+
+def _context_retention(value: Any, default: ContextRetention) -> ContextRetention:
+    normalized = str(value or "").strip()
+    if normalized in {"protected", "normal", "ephemeral"}:
+        return normalized  # type: ignore[return-value]
+    return default
 
 
 def context_fingerprint(value: Any) -> str:

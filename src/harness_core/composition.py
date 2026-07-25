@@ -13,11 +13,16 @@ from harness_core.capabilities import (
     capability_pack_spec,
     assert_capability_contribution,
 )
+from harness_core.capability_manifest import (
+    CapabilityManifest,
+    RuntimeGenerationManager,
+)
 from harness_core.control import RunControl
 from harness_core.event_journal import RuntimeEventJournal
 from harness_core.context_window import ContextWindowManager
 from harness_core.governance import GovernanceBundle, SecretProvider
 from harness_core.graph import GraphDurability
+from harness_core.hooks import HookRunner
 from harness_core.model_routing import ModelRouter
 from harness_core.model import ModelInvocationRecorder, ModelInvocationStore
 from harness_core.leases import RunLeaseStore
@@ -30,6 +35,7 @@ from harness_core.runtime import HarnessRuntime, SystemPromptFactory
 from harness_core.state_store import RuntimeStateStore
 from harness_core.telemetry import TelemetryPort
 from harness_core.tool_registry import ToolRegistry, ToolSpec
+from harness_core.tool_disclosure import ToolDiscoveryPort
 from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolHandler, ToolPreflight
 from harness_core.turn_context import ToolViewMode
 
@@ -63,6 +69,8 @@ class RuntimePortChanges(TypedDict, total=False):
     reuse_compiled_graph: bool
     graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
+    hook_runner: HookRunner | None
+    tool_discovery_port: ToolDiscoveryPort | None
     capability_services: Mapping[str, object]
 
 
@@ -92,6 +100,8 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     reuse_compiled_graph: bool
     graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
+    hook_runner: HookRunner | None
+    tool_discovery_port: ToolDiscoveryPort | None
     capability_services: Mapping[str, object]
 
 
@@ -127,6 +137,8 @@ class RuntimePorts:
     reuse_compiled_graph: bool = True
     graph_durability: GraphDurability = "exit"
     tool_view_mode: ToolViewMode = "legacy"
+    hook_runner: HookRunner | None = None
+    tool_discovery_port: ToolDiscoveryPort | None = None
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -158,6 +170,7 @@ class HarnessRuntimeBuilder:
         self._executor = executor
         self._ports = RuntimePorts()
         self._capability_packs: list[CapabilityPack] = []
+        self._capability_manifests: dict[str, CapabilityManifest] = {}
         self._capability_catalog = CapabilityCatalog()
         self._installed_contributions: tuple[CapabilityContribution, ...] = ()
         self._max_steps = 12
@@ -180,7 +193,12 @@ class HarnessRuntimeBuilder:
         self._ports = replace(self._ports, **changes)
         return self
 
-    def add_capability_pack(self, pack: CapabilityPack) -> Self:
+    def add_capability_pack(
+        self,
+        pack: CapabilityPack,
+        *,
+        manifest: CapabilityManifest | None = None,
+    ) -> Self:
         self._ensure_mutable()
         from harness_core.version import HARNESS_CORE_CONTRACT_VERSION
 
@@ -195,7 +213,10 @@ class HarnessRuntimeBuilder:
             for existing in self._capability_packs
         ):
             raise ValueError(f"capability pack is already registered: {spec.package_id}")
+        resolved_manifest = manifest or _manifest_from_pack(pack, spec)
+        _validate_pack_manifest(spec, resolved_manifest)
         self._capability_packs.append(pack)
+        self._capability_manifests[spec.package_id] = resolved_manifest
         return self
 
     @property
@@ -237,11 +258,19 @@ class HarnessRuntimeBuilder:
             self._install_pack(pack, executor) for pack in self._capability_packs
         ]
         self._installed_contributions = tuple(contributions)
+        hook_runner = self._ports.hook_runner or HookRunner()
+        for hook in self._capability_catalog.hooks.values():
+            if hook.id not in hook_runner.registered_hooks:
+                hook_runner.register(hook)
         executor.configure_artifact_schemas(
             {
                 name: spec.schema
                 for name, spec in self._capability_catalog.artifact_types.items()
             }
+        )
+        runtime_generation = RuntimeGenerationManager().activate(
+            tuple(self._capability_manifests.values()),
+            catalog_version=self._registry.catalog_version(),
         )
         self._built = True
         return HarnessRuntime(
@@ -275,6 +304,9 @@ class HarnessRuntimeBuilder:
             reuse_compiled_graph=self._ports.reuse_compiled_graph,
             graph_durability=self._ports.graph_durability,
             tool_view_mode=self._ports.tool_view_mode,
+            hook_runner=hook_runner,
+            tool_discovery_port=self._ports.tool_discovery_port,
+            runtime_generation=runtime_generation,
         )
 
     def _install_pack(
@@ -337,6 +369,7 @@ class HarnessRuntimeBuilder:
                 catalog_before, catalog_after, "tool_providers"
             ),
             subagents=_catalog_delta(catalog_before, catalog_after, "subagents"),
+            hooks=_catalog_delta(catalog_before, catalog_after, "hooks"),
             context_contributors=_catalog_delta(
                 catalog_before, catalog_after, "context_contributors"
             ),
@@ -392,3 +425,52 @@ def _catalog_delta(
     field_name: str,
 ) -> tuple[str, ...]:
     return tuple(sorted(set(after.get(field_name, ())) - set(before.get(field_name, ()))))
+
+
+def _manifest_from_pack(
+    pack: CapabilityPack,
+    spec: CapabilityPackSpec,
+) -> CapabilityManifest:
+    return CapabilityManifest(
+        id=spec.package_id,
+        version=spec.package_version,
+        core_contract=spec.contract_version,
+        core_version="*",
+        entrypoint=f"{type(pack).__module__}:{type(pack).__qualname__}",
+        skills=spec.declared_skills,
+        tools=spec.declared_tools,
+        subagents=spec.declared_subagents,
+        handoffs=spec.declared_handoffs,
+        hooks=spec.declared_hooks,
+        mcp_servers=spec.declared_tool_providers,
+        permissions=spec.required_scopes,
+        metadata=dict(spec.metadata),
+    )
+
+
+def _validate_pack_manifest(
+    spec: CapabilityPackSpec,
+    manifest: CapabilityManifest,
+) -> None:
+    if manifest.id != spec.package_id:
+        raise ValueError(
+            f"capability manifest id {manifest.id!r} does not match "
+            f"package id {spec.package_id!r}"
+        )
+    comparisons = {
+        "tools": (set(spec.declared_tools), set(manifest.tools)),
+        "skills": (set(spec.declared_skills), set(manifest.skills)),
+        "subagents": (set(spec.declared_subagents), set(manifest.subagents)),
+        "handoffs": (set(spec.declared_handoffs), set(manifest.handoffs)),
+        "hooks": (set(spec.declared_hooks), set(manifest.hooks)),
+    }
+    mismatches = [
+        name
+        for name, (declared, manifested) in comparisons.items()
+        if declared != manifested
+    ]
+    if mismatches:
+        raise ValueError(
+            f"capability manifest {manifest.id} diverges from pack declaration: "
+            + ", ".join(mismatches)
+        )

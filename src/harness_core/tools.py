@@ -26,6 +26,13 @@ from harness_core.contracts import Observation, PendingAction, ToolCall, ToolRes
 from harness_core.control import NoopRunControl, RunControl
 from harness_core.deadlines import ensure_time_remaining
 from harness_core.failures import RunCanceledError, RunDeadlineExceededError
+from harness_core.hooks import (
+    HookAction,
+    HookAudit,
+    HookInvocation,
+    HookPoint,
+    HookRunner,
+)
 from harness_core.leases import ExecutionFence
 from harness_core.policy import (
     DefaultPolicyEngine,
@@ -248,6 +255,100 @@ def _memory_claim(
     )
 
 
+def _tool_hook_invocation(
+    point: HookPoint,
+    call: ToolCall,
+    context: ToolExecutionContext,
+    *,
+    payload: Mapping[str, Any],
+) -> HookInvocation:
+    skill = as_dict(context.metadata.get("skill_activation"))
+    package_ids = tuple(
+        str(value)
+        for value in context.metadata.get("capability_package_ids", ())
+        if str(value).strip()
+    )
+    return HookInvocation(
+        point=point,
+        operation_id=(
+            f"{context.run_id}:{context.turn_id}:tool:{call.id}:{point.value}"
+        ),
+        run_id=context.run_id,
+        thread_id=context.thread_id,
+        turn_id=context.turn_id,
+        package_ids=package_ids,
+        skill_id=str(skill.get("skill_id") or ""),
+        payload={
+            "tool_call_id": call.id,
+            "tool_name": call.name,
+            **dict(payload),
+        },
+        metadata={
+            "tenant_id": str(context.metadata.get("tenant_id") or ""),
+            "user_id": context.user_id,
+        },
+    )
+
+
+def _emit_hook_audits(
+    context: ToolExecutionContext,
+    audits: tuple[HookAudit, ...],
+) -> None:
+    sink = context.metadata.get("event_sink")
+    if not callable(sink):
+        return
+    for audit in audits:
+        sink(
+            {
+                "event_type": "hook.executed",
+                "title": "Lifecycle hook",
+                "summary": f"{audit.point.value}: {audit.status}",
+                "payload": {
+                    "hook_id": audit.hook_id,
+                    "hook_point": audit.point.value,
+                    "operation_id": audit.operation_id,
+                    "status": audit.status,
+                    "duration_ms": audit.duration_ms,
+                    "replayed": audit.replayed,
+                    "required": audit.required,
+                    "error": audit.error,
+                    "diagnostics": dict(audit.diagnostics),
+                },
+                "visibility": "debug",
+            }
+        )
+
+
+def _hook_confirmation_result(
+    call: ToolCall,
+    context: ToolExecutionContext,
+    *,
+    title: str,
+    message: str,
+) -> ToolResult:
+    pending = PendingAction(
+        id=f"hook-confirmation:{call.id}",
+        run_id=context.run_id,
+        tool_call_id=call.id,
+        action_type="confirm_tool_invocation",
+        title=title or "Confirm action",
+        prompt=message or "Please confirm this action before it continues.",
+        payload={
+            "tool_name": call.name,
+            "arguments": dict(call.arguments),
+            "source": "lifecycle_hook",
+        },
+    )
+    return ToolResult(
+        call=call,
+        status="requires_user_action",
+        outcome="partial",
+        summary=pending.prompt,
+        pending_action=pending,
+        metadata={"hook_confirmation": True, "executed": False},
+    )
+
+
 class ToolExecutor:
     def __init__(
         self,
@@ -258,6 +359,7 @@ class ToolExecutor:
         execution_store: ToolExecutionStore | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
+        hook_runner: HookRunner | None = None,
         claim_lease_seconds: float = 300,
         max_idempotent_attempts: int = 2,
     ):
@@ -267,6 +369,7 @@ class ToolExecutor:
         self.execution_store = execution_store or InMemoryToolExecutionStore()
         self.policy_engine = policy_engine or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or InMemoryBudgetLedger()
+        self.hook_runner = hook_runner
         self.claim_lease_seconds = max(0.001, float(claim_lease_seconds))
         self.max_idempotent_attempts = max(1, int(max_idempotent_attempts))
         self._handlers: dict[str, ToolHandler] = {}
@@ -307,6 +410,66 @@ class ToolExecutor:
         return asyncio.run(self.aexecute(call, context))
 
     async def aexecute(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        active_call = call
+        if self.hook_runner is not None:
+            before = await self.hook_runner.arun(
+                _tool_hook_invocation(
+                    HookPoint.TOOL_BEFORE,
+                    call,
+                    context,
+                    payload={"arguments": dict(call.arguments)},
+                )
+            )
+            _emit_hook_audits(context, before.audits)
+            if before.decision.tool_arguments is not None:
+                active_call = call.model_copy(
+                    update={"arguments": dict(before.decision.tool_arguments)}
+                )
+            if before.decision.action == HookAction.DENY:
+                denied = _failed_result(
+                    active_call,
+                    before.decision.reason or "tool invocation denied by lifecycle hook",
+                )
+                denied.metadata["hook_denied"] = True
+                return denied
+            if before.decision.action == HookAction.WAIT_FOR_CONFIRMATION:
+                return _hook_confirmation_result(
+                    active_call,
+                    context,
+                    title=before.decision.confirmation_title,
+                    message=before.decision.confirmation_message
+                    or before.decision.reason,
+                )
+
+        result = await self._aexecute_core(active_call, context)
+        if self.hook_runner is None:
+            return result
+        point = HookPoint.TOOL_FAILED if result.status == "failed" else HookPoint.TOOL_AFTER
+        after = await self.hook_runner.arun(
+            _tool_hook_invocation(
+                point,
+                active_call,
+                context,
+                payload={
+                    "arguments": dict(active_call.arguments),
+                    "status": result.status,
+                    "outcome": result.outcome,
+                    "summary": result.summary,
+                    "error": result.error,
+                    "artifact_ids": [artifact.id for artifact in result.artifacts],
+                },
+            )
+        )
+        _emit_hook_audits(context, after.audits)
+        result.metadata.setdefault("hooks", {})
+        result.metadata["hooks"].update(dict(after.decision.diagnostics))
+        return result
+
+    async def _aexecute_core(
+        self,
+        call: ToolCall,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
         context.raise_if_fence_lost()
         context.run_control.raise_if_cancelled(context.run_id)
         ensure_time_remaining(context.deadline_monotonic)

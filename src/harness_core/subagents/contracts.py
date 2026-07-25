@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 SubAgentModelRole = Literal["auto", "fast", "reasoning"]
 SubAgentStatus = Literal["completed", "failed", "canceled"]
+SubAgentExecutionMode = Literal["auto", "foreground", "background"]
 
 
 class SubAgentSpec(BaseModel):
@@ -31,6 +32,8 @@ class SubAgentSpec(BaseModel):
     max_tool_calls: int = Field(default=4, ge=0, le=8)
     timeout_seconds: int = Field(default=90, ge=5, le=300)
     max_tokens: int = Field(default=1200, ge=128, le=8000)
+    permission_scopes: list[str] = Field(default_factory=list)
+    budget_limits: dict[str, float] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def enforce_bounded_execution(self) -> "SubAgentSpec":
@@ -59,6 +62,7 @@ class DelegationRequest(BaseModel):
     parent_run_id: str = ""
     depth: int = Field(default=1, ge=1, le=1)
     max_concurrency: int = Field(default=3, ge=1, le=3)
+    execution_mode: SubAgentExecutionMode = "auto"
     tasks: list[DelegationTask] = Field(min_length=1, max_length=3)
 
     @model_validator(mode="after")
@@ -92,6 +96,27 @@ class SubAgentResult(BaseModel):
     raw_text: str = ""
     metadata: dict[str, Any] = Field(default_factory=dict)
 
+    def parent_projection(self) -> dict[str, Any]:
+        """Bounded result injected into the lead agent context."""
+
+        return {
+            "task_id": self.task_id,
+            "agent_id": self.agent_id,
+            "child_run_id": self.child_run_id,
+            "status": self.status,
+            "outcome": self.outcome,
+            "conclusion": self.conclusion,
+            "evidence": list(self.evidence),
+            "evidence_refs": list(self.evidence_refs),
+            "risks": list(self.risks),
+            "recommendations": list(self.recommendations),
+            "warnings": list(self.warnings),
+            "confidence": self.confidence,
+            "abstained": self.abstained,
+            "artifact_refs": list(self.metadata.get("artifact_refs") or []),
+            "error": self.error,
+        }
+
 
 class DelegationBatchResult(BaseModel):
     delegation_id: str
@@ -104,6 +129,16 @@ class DelegationBatchResult(BaseModel):
     @property
     def successful_results(self) -> list[SubAgentResult]:
         return [result for result in self.results if result.status == "completed"]
+
+    def parent_payload(self) -> dict[str, Any]:
+        return {
+            "delegation_id": self.delegation_id,
+            "root_run_id": self.root_run_id,
+            "parent_run_id": self.parent_run_id,
+            "status": self.status,
+            "duration_ms": self.duration_ms,
+            "results": [result.parent_projection() for result in self.results],
+        }
 
 
 def delegation_tool_parameters_schema(
@@ -141,6 +176,15 @@ def delegation_tool_parameters_schema(
                 "minimum": 1,
                 "maximum": 3,
                 "default": 3,
+            },
+            "execution_mode": {
+                "type": "string",
+                "enum": ["auto", "foreground", "background"],
+                "default": "auto",
+                "description": (
+                    "Use background for long independent tasks and foreground for "
+                    "short tasks whose result is needed immediately."
+                ),
             },
             "tasks": {
                 "type": "array",

@@ -10,10 +10,11 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
 from harness_core.budget import BudgetLedger
-from harness_core.contracts import AgentMessage, FinalAnswer
+from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction
 from harness_core.control import RunControl
 from harness_core.deadlines import ensure_time_remaining
 from harness_core.events import AgentEventPersistenceError
+from harness_core.hooks import HookAction, HookAudit, HookInvocation, HookPoint
 from harness_core.model import ModelGateway, model_tools_from_registry
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
@@ -38,6 +39,68 @@ from harness_core.graph_workflow import (
     _retry_or_fail_empty_model_response, _set_policy_state,
     _wait_for_workflow_input, _workflow_can_wait_for_user_input,
 )
+
+
+def _model_hook_invocation(
+    point: HookPoint,
+    state: Mapping[str, Any],
+    turn_context: TurnExecutionContext,
+    *,
+    payload: Mapping[str, Any],
+) -> HookInvocation:
+    skill = as_dict(state.get("skill_activation"))
+    metadata = as_dict(state.get("metadata"))
+    package_ids = tuple(
+        str(value)
+        for value in turn_context.tool_context.metadata.get(
+            "capability_package_ids", ()
+        )
+        if str(value).strip()
+    )
+    return HookInvocation(
+        point=point,
+        operation_id=(
+            f"{state.get('run_id')}:{state.get('turn_id')}:"
+            f"model:{int(state.get('step_count') or 0)}:{point.value}"
+        ),
+        run_id=str(state.get("run_id") or ""),
+        thread_id=str(state.get("thread_id") or ""),
+        turn_id=str(state.get("turn_id") or ""),
+        package_ids=package_ids,
+        skill_id=str(skill.get("skill_id") or ""),
+        payload=dict(payload),
+        metadata={
+            "governance_scope": dict(metadata.get("governance_scope") or {}),
+        },
+    )
+
+
+def _emit_hook_audits(
+    state: dict[str, Any],
+    config: RunnableConfig,
+    audits: tuple[HookAudit, ...],
+) -> None:
+    for audit in audits:
+        _emit(
+            state,
+            config,
+            "hook.executed",
+            "Lifecycle hook",
+            f"{audit.point.value}: {audit.status}",
+            {
+                "hook_id": audit.hook_id,
+                "hook_point": audit.point.value,
+                "operation_id": audit.operation_id,
+                "status": audit.status,
+                "duration_ms": audit.duration_ms,
+                "replayed": audit.replayed,
+                "required": audit.required,
+                "error": audit.error,
+                "diagnostics": dict(audit.diagnostics),
+                "visible": False,
+            },
+        )
+
 
 class GraphNodes:
     def __init__(
@@ -168,6 +231,65 @@ class GraphNodes:
             parameter_overrides=_skill_tool_parameter_overrides(current, tool_registry),
         )
         forced_tool_name = _forced_workflow_tool_name(current, tools)
+        hook_runner = turn_context.hook_runner if turn_context is not None else None
+        if hook_runner is not None and turn_context is not None:
+            before_model = await hook_runner.arun(
+                _model_hook_invocation(
+                    HookPoint.MODEL_BEFORE,
+                    current,
+                    turn_context,
+                    payload={
+                        "message_count": len(current.get("messages") or []),
+                        "tool_names": [
+                            str(item.get("function", {}).get("name") or "")
+                            for item in tools
+                            if isinstance(item, dict)
+                        ],
+                        "system_prompt": prompt,
+                    },
+                )
+            )
+            _emit_hook_audits(current, config, before_model.audits)
+            if before_model.decision.action == HookAction.DENY:
+                return _finish_failed(
+                    current,
+                    before_model.decision.reason
+                    or "model invocation denied by lifecycle hook",
+                    config,
+                )
+            if before_model.decision.action == HookAction.WAIT_FOR_CONFIRMATION:
+                pending = PendingAction(
+                    id=f"hook-model:{current.get('run_id')}:{current.get('step_count')}",
+                    run_id=str(current.get("run_id") or ""),
+                    action_type="confirm_model_invocation",
+                    title=before_model.decision.confirmation_title or "Confirm continuation",
+                    prompt=(
+                        before_model.decision.confirmation_message
+                        or before_model.decision.reason
+                        or "Please confirm before the agent continues."
+                    ),
+                    payload={"source": "lifecycle_hook"},
+                )
+                current["pending_action"] = pending.model_dump(mode="json")
+                current["status"] = "waiting_user"
+                _emit(
+                    current,
+                    config,
+                    "agent.waiting_user",
+                    pending.title,
+                    pending.prompt,
+                    {"pending_action": current["pending_action"]},
+                )
+                return current
+            model_patch = dict(before_model.decision.model_input_patch)
+            prompt = str(model_patch.get("system_prompt") or prompt)
+            appended_messages = model_patch.get("append_messages")
+            if isinstance(appended_messages, list):
+                for item in appended_messages:
+                    message = AgentMessage.model_validate(item)
+                    current.setdefault("messages", []).append(
+                        message.model_dump(mode="json")
+                    )
         delta_index = 0
         delta_chars = 0
         model_started_at = time.perf_counter()
@@ -305,6 +427,22 @@ class GraphNodes:
                 },
             )
             raise
+        if hook_runner is not None and turn_context is not None:
+            after_model = await hook_runner.arun(
+                _model_hook_invocation(
+                    HookPoint.MODEL_AFTER,
+                    current,
+                    turn_context,
+                    payload={
+                        "model_id": turn.model_id,
+                        "model_role": turn.model_role,
+                        "finish_reason": turn.finish_reason,
+                        "content_chars": len(turn.content),
+                        "tool_call_count": len(turn.tool_calls),
+                    },
+                )
+            )
+            _emit_hook_audits(current, config, after_model.audits)
         current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
         model_latency_ms = int((time.perf_counter() - model_started_at) * 1000)
         model_metrics: dict[str, Any] = {
@@ -419,6 +557,35 @@ class GraphNodes:
             current.setdefault("metadata", {}),
             turn.content,
         )
+        if hook_runner is not None and turn_context is not None:
+            before_answer = await hook_runner.arun(
+                _model_hook_invocation(
+                    HookPoint.ANSWER_BEFORE_FINALIZE,
+                    current,
+                    turn_context,
+                    payload={
+                        "markdown": final_content,
+                        "model_id": turn.model_id,
+                        "artifact_ids": [
+                            str(item.get("id") or "")
+                            for item in current.get("artifacts", [])
+                            if item.get("id")
+                        ],
+                    },
+                )
+            )
+            _emit_hook_audits(current, config, before_answer.audits)
+            if before_answer.decision.action == HookAction.DENY:
+                return _finish_failed(
+                    current,
+                    before_answer.decision.reason
+                    or "answer finalization denied by lifecycle hook",
+                    config,
+                )
+            final_content = str(
+                before_answer.decision.model_input_patch.get("answer_markdown")
+                or final_content
+            )
         answer = FinalAnswer(
             markdown=final_content,
             summary=_answer_summary(final_content),

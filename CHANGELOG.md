@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.16.0
+
+- Add scoped lifecycle Hooks with timeout isolation, idempotent replay,
+  governance auditing, context enrichment, argument rewriting, denial, and
+  user-confirmation decisions.
+- Add fail-closed progressive tool disclosure with baseline, Skill entry,
+  discoverable, Skill-only, and internal exposure classes plus a replaceable
+  semantic discovery Port.
+- Upgrade context management to four explicit layers with protected runtime
+  state, source and token diagnostics, summary provenance, and safe
+  over-budget reporting.
+- Add versioned Capability Manifests and immutable Runtime Generations with
+  dependency, compatibility, conflict, and rollback validation.
+- Taskize SubAgent delegation with execution modes, scoped permissions and
+  budgets, cancellation propagation, structured parent projections, and
+  Artifact references.
+
 ## 3.15.0
 
 - Add `RuntimeScope` and scoped state/trace contracts with fail-closed legacy

@@ -147,7 +147,8 @@ dropped section names and truncation counts through diagnostics. Products can
 replace the estimator or policy without changing the React loop.
 
 Hosts may additionally provide `ContextSegment` entries for important sections.
-A segment can declare retention priority, whether it is required, provenance,
+A segment belongs to `runtime_constitution`, `turn_context`, `working_memory`,
+or `retrieved_context`. It can declare retention priority, whether it is required, provenance,
 a per-section ceiling and a precomputed summary. Under pressure, required
 segments receive budget first and an eligible cached summary is preferred over
 blind truncation. Core never generates or persists that summary itself, so its
@@ -156,6 +157,22 @@ content and invalidation policy remain explicit Host responsibilities.
 Host-provided source fingerprint, and a source change becomes a cache miss
 rather than silently reusing stale context. The default in-memory adapter is
 process-local; durable Hosts may implement the same Port.
+
+Capability Packs can publish a versioned `CapabilityManifest`. A build freezes
+validated manifests into an immutable `RuntimeGeneration`, so every Run can
+explain the exact package, tool catalog and Skill versions it used. Tool
+definitions are disclosed progressively: a small baseline is always available,
+Skill entry tools appear after activation, and discoverable tools are selected
+through the replaceable `ToolDiscoveryPort`. Internal and Skill-only tools never
+fail open into the model context.
+
+Cross-cutting behavior is registered through scoped lifecycle Hooks rather
+than embedded in business handlers. Hooks may enrich context, rewrite model or
+tool inputs, deny an operation, or request user confirmation, but Policy and
+Budget remain authoritative. Timeouts, failures, replay and audit records are
+handled by Core. SubAgent delegation returns a compact parent projection with
+conclusions, evidence, risks, recommendations and Artifact references instead
+of copying the child trace into the parent prompt.
 
 Model and tool execution share one `BudgetLedger`. Besides model/tool call
 counts, Core accounts for estimated input and output tokens, retry attempts,

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import re
-from typing import Any
+from typing import Any, Protocol
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
 from harness_core.skills import SkillPolicy
@@ -42,6 +42,8 @@ class ToolView:
     exposed_names: frozenset[str]
     proposed_names: frozenset[str]
     fail_open: bool = False
+    direct_injection: bool = False
+    filtered_names: frozenset[str] = frozenset()
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -51,7 +53,54 @@ class ToolView:
             "exposed_names": sorted(self.exposed_names),
             "proposed_names": sorted(self.proposed_names),
             "fail_open": self.fail_open,
+            "direct_injection": self.direct_injection,
+            "filtered_names": sorted(self.filtered_names),
         }
+
+
+class ToolDiscoveryPort(Protocol):
+    """Host-replaceable semantic or hybrid ranking boundary."""
+
+    def discover(
+        self,
+        *,
+        query: str,
+        candidates: tuple[ToolDescriptor, ...],
+        limit: int,
+    ) -> tuple[ToolDescriptor, ...]: ...
+
+
+class LexicalToolDiscovery:
+    """Portable deterministic fallback that does not require an embedding provider."""
+
+    def discover(
+        self,
+        *,
+        query: str,
+        candidates: tuple[ToolDescriptor, ...],
+        limit: int,
+    ) -> tuple[ToolDescriptor, ...]:
+        tokens = _search_tokens(query)
+        ranked: list[tuple[int, str, ToolDescriptor]] = []
+        for descriptor in candidates:
+            haystack = " ".join(
+                [
+                    descriptor.name.replace(".", " "),
+                    descriptor.description,
+                    *descriptor.tags,
+                ]
+            ).lower()
+            score = sum(
+                3 if token in descriptor.tags else 1
+                for token in tokens
+                if token in haystack
+            )
+            if query.strip() and query.strip().lower() in haystack:
+                score += 4
+            if score > 0:
+                ranked.append((score, descriptor.name, descriptor))
+        ranked.sort(key=lambda item: (-item[0], item[1]))
+        return tuple(item[2] for item in ranked[: max(1, min(int(limit), 5))])
 
 
 def resolve_tool_view(
@@ -61,9 +110,20 @@ def resolve_tool_view(
     skill: SkillPolicy,
     mode: ToolViewMode,
     discovered_names: set[str] | None = None,
+    direct_injection_max_tools: int = 10,
 ) -> ToolView:
     installed = {spec.name for spec in registry.list_tools()}
     allowed = installed if allowed_names is None else installed & set(allowed_names)
+    eligible = {
+        spec.name
+        for spec in registry.list_tools()
+        if spec.name in allowed
+        and ToolDescriptor.from_spec(spec).exposure_mode != "internal"
+        and (
+            ToolDescriptor.from_spec(spec).exposure_mode != "skill_only"
+            or skill.active
+        )
+    }
     proposed: set[str] = set()
     for spec in registry.list_tools():
         if spec.name not in allowed:
@@ -79,17 +139,17 @@ def resolve_tool_view(
     proposed.update(set(discovered_names or ()) & allowed)
 
     fail_open = False
+    direct_injection = False
     if mode == "legacy":
         exposed = allowed
     elif mode == "shadow":
         exposed = allowed
     else:
-        exposed = proposed
-        # Until semantic discovery is configured, never strand a turn that has
-        # executable tools but no discoverable entry point.
-        if allowed and not exposed:
-            exposed = allowed
-            fail_open = True
+        if len(eligible) <= max(0, int(direct_injection_max_tools)):
+            exposed = eligible
+            direct_injection = True
+        else:
+            exposed = proposed & eligible
     return ToolView(
         mode=mode,
         catalog_version=registry.catalog_version(),
@@ -97,6 +157,8 @@ def resolve_tool_view(
         exposed_names=frozenset(exposed),
         proposed_names=frozenset(proposed),
         fail_open=fail_open,
+        direct_injection=direct_injection,
+        filtered_names=frozenset(allowed - exposed),
     )
 
 
@@ -119,7 +181,7 @@ def tool_discovery_spec() -> ToolSpec:
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 8,
+                    "maximum": 5,
                     "default": 5,
                 },
             },
@@ -136,7 +198,12 @@ def tool_discovery_spec() -> ToolSpec:
     )
 
 
-def install_tool_discovery(registry: ToolRegistry, executor: ToolExecutor) -> None:
+def install_tool_discovery(
+    registry: ToolRegistry,
+    executor: ToolExecutor,
+    *,
+    discovery_port: ToolDiscoveryPort | None = None,
+) -> None:
     """Install the portable discovery entrypoint without coupling it to a product pack."""
 
     if TOOL_DISCOVERY_NAME not in {spec.name for spec in registry.list_tools()}:
@@ -145,7 +212,7 @@ def install_tool_discovery(registry: ToolRegistry, executor: ToolExecutor) -> No
     def discover(call: ToolCall, context: ToolExecutionContext) -> ToolResult:
         query = str(call.arguments.get("query") or "").strip()
         try:
-            limit = max(1, min(int(call.arguments.get("limit") or 5), 8))
+            limit = max(1, min(int(call.arguments.get("limit") or 5), 5))
         except (TypeError, ValueError):
             limit = 5
         descriptors = discover_tools(
@@ -153,6 +220,7 @@ def install_tool_discovery(registry: ToolRegistry, executor: ToolExecutor) -> No
             query=query,
             limit=limit,
             allowed_names=_context_allowed_names(registry, context),
+            discovery_port=discovery_port,
         )
         names = [item.name for item in descriptors]
         summary = (
@@ -172,6 +240,11 @@ def install_tool_discovery(registry: ToolRegistry, executor: ToolExecutor) -> No
                 for item in descriptors
             ],
             "catalog_version": registry.catalog_version(),
+            "retry_allowed": not names,
+            "permission_filtered_count": max(
+                0,
+                len(registry.list_tools()) - len(_context_allowed_names(registry, context)),
+            ),
         }
         return ToolResult(
             call=call,
@@ -200,11 +273,11 @@ def discover_tools(
     query: str,
     limit: int = 5,
     allowed_names: set[str] | None = None,
+    discovery_port: ToolDiscoveryPort | None = None,
 ) -> tuple[ToolDescriptor, ...]:
-    """Deterministically rank discoverable tools by description, tags, and name."""
+    """Rank discoverable tools through a host adapter or the lexical fallback."""
 
-    tokens = _search_tokens(query)
-    ranked: list[tuple[int, str, ToolDescriptor]] = []
+    candidates: list[ToolDescriptor] = []
     for spec in registry.list_tools():
         if allowed_names is not None and spec.name not in allowed_names:
             continue
@@ -214,16 +287,21 @@ def discover_tools(
             "skill_entry",
         }:
             continue
-        haystack = " ".join(
-            [descriptor.name.replace(".", " "), descriptor.description, *descriptor.tags]
-        ).lower()
-        score = sum(3 if token in descriptor.tags else 1 for token in tokens if token in haystack)
-        if query.strip() and query.strip().lower() in haystack:
-            score += 4
-        if score > 0:
-            ranked.append((score, descriptor.name, descriptor))
-    ranked.sort(key=lambda item: (-item[0], item[1]))
-    return tuple(item[2] for item in ranked[: max(1, min(int(limit), 8))])
+        candidates.append(descriptor)
+    port = discovery_port or LexicalToolDiscovery()
+    discovered = port.discover(
+        query=query,
+        candidates=tuple(candidates),
+        limit=max(1, min(int(limit), 5)),
+    )
+    candidate_names = {item.name for item in candidates}
+    unique: dict[str, ToolDescriptor] = {}
+    for descriptor in discovered:
+        if descriptor.name in candidate_names and descriptor.name not in unique:
+            unique[descriptor.name] = descriptor
+        if len(unique) >= 5:
+            break
+    return tuple(unique.values())
 
 
 def _context_allowed_names(
@@ -250,3 +328,16 @@ def _search_tokens(value: str) -> set[str]:
     compact = "".join(char for char in normalized if "\u4e00" <= char <= "\u9fff")
     tokens.update(compact[index : index + 2] for index in range(max(0, len(compact) - 1)))
     return tokens
+
+
+__all__ = [
+    "LexicalToolDiscovery",
+    "TOOL_DISCOVERY_NAME",
+    "ToolDescriptor",
+    "ToolDiscoveryPort",
+    "ToolView",
+    "discover_tools",
+    "install_tool_discovery",
+    "resolve_tool_view",
+    "tool_discovery_spec",
+]
