@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.16.2
+
+- Merge repeated observations of the same Artifact identity instead of
+  producing invalid duplicate state during multi-step Workflow execution.
+- Preserve the original creation timestamp while allowing later tool results
+  to enrich Artifact data, metadata, summary, and completion state.
+
 ## 3.16.1
 
 - Preserve known model capabilities when provider adapters also declare transport-specific hints.

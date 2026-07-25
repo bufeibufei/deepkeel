@@ -370,6 +370,44 @@ def _parallel_suspension_rejected(call: ToolCall, run_id: str) -> ToolResult:
     )
 
 
+def _upsert_artifact(current: dict[str, Any], artifact: dict[str, Any]) -> None:
+    """Merge repeated observations of one durable artifact by identity."""
+
+    artifact_id = str(artifact.get("id") or "")
+    artifacts = current.setdefault("artifacts", [])
+    existing = next(
+        (
+            item
+            for item in artifacts
+            if isinstance(item, dict) and str(item.get("id") or "") == artifact_id
+        ),
+        None,
+    )
+    if existing is None:
+        artifacts.append(artifact)
+        return
+    if (
+        str(existing.get("run_id") or "") != str(artifact.get("run_id") or "")
+        or str(existing.get("artifact_type") or "")
+        != str(artifact.get("artifact_type") or "")
+    ):
+        raise ValueError(f"artifact identity conflict for {artifact_id}")
+    existing.update(
+        {
+            **artifact,
+            "created_at": existing.get("created_at") or artifact.get("created_at"),
+            "data": {
+                **as_dict(existing.get("data")),
+                **as_dict(artifact.get("data")),
+            },
+            "metadata": {
+                **as_dict(existing.get("metadata")),
+                **as_dict(artifact.get("metadata")),
+            },
+        }
+    )
+
+
 def _apply_tool_result(
     current: dict[str, Any],
     result: ToolResult,
@@ -389,7 +427,7 @@ def _apply_tool_result(
     if result.observation is not None:
         current.setdefault("observations", []).append(result.observation.model_dump(mode="json"))
     for artifact in result.artifacts:
-        current.setdefault("artifacts", []).append(artifact.model_dump(mode="json"))
+        _upsert_artifact(current, artifact.model_dump(mode="json"))
     if result.status == "requires_user_action" and result.pending_action is not None:
         current["pending_action"] = result.pending_action.model_dump(mode="json")
         waiting_for_input = result.pending_action.action_type == "clarification"

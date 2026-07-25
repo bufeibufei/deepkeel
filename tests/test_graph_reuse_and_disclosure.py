@@ -14,6 +14,7 @@ from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
 from harness_core.policy import DefaultPolicyEngine, PolicyRequest
 from harness_core.runtime_sdk import RuntimeRequest
 from harness_core.skills import SkillPolicy
+from harness_core.graph_state import _upsert_artifact
 from harness_core.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
     install_tool_discovery,
@@ -49,6 +50,43 @@ class CountingSaver(InMemorySaver):
     def put(self, config, checkpoint, metadata, new_versions):
         self.put_count += 1
         return super().put(config, checkpoint, metadata, new_versions)
+
+
+def test_repeated_artifact_observations_update_one_durable_identity() -> None:
+    state = {"artifacts": []}
+    _upsert_artifact(
+        state,
+        {
+            "id": "artifact-1",
+            "run_id": "run-1",
+            "artifact_type": "report",
+            "summary": "生成中",
+            "data": {"status": "running"},
+            "metadata": {"source": "first"},
+            "created_at": "2026-07-25T00:00:00Z",
+        },
+    )
+    _upsert_artifact(
+        state,
+        {
+            "id": "artifact-1",
+            "run_id": "run-1",
+            "artifact_type": "report",
+            "summary": "已完成",
+            "data": {"status": "completed", "result_id": "result-1"},
+            "metadata": {"source": "second"},
+            "created_at": "2026-07-25T00:01:00Z",
+        },
+    )
+
+    assert len(state["artifacts"]) == 1
+    assert state["artifacts"][0]["summary"] == "已完成"
+    assert state["artifacts"][0]["data"] == {
+        "status": "completed",
+        "result_id": "result-1",
+    }
+    assert state["artifacts"][0]["metadata"] == {"source": "second"}
+    assert state["artifacts"][0]["created_at"] == "2026-07-25T00:00:00Z"
 
 
 def test_default_graph_durability_checkpoints_only_at_runtime_exit() -> None:
