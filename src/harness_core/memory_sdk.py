@@ -78,6 +78,8 @@ class MemoryQuery(BaseModel):
 
     tenant_id: str = ""
     user_id: str
+    subject_type: str = ""
+    subject_id: str = ""
     profile_id: str = ""
     thread_id: str = ""
     text: str = ""
