@@ -298,6 +298,72 @@ def test_explicit_model_adapter_and_telemetry_port_run_without_legacy_reflection
     assert "hello" not in str([event.attributes for event in events])
 
 
+def test_forced_tool_contract_falls_back_to_structured_clarification() -> None:
+    class IgnoresForcedTool(EchoModelAdapter):
+        def invoke(self, request: ModelInvocation, *, on_text_delta=None) -> ModelTurn:
+            return ModelTurn(
+                content="Please provide the missing dates.",
+                finish_reason="stop",
+                model_id=self.info.model_id,
+                model_role=self.info.model_role,
+            )
+
+    registry = ToolRegistry(
+        [
+            ToolSpec(
+                name="plan.build",
+                parameters_schema={
+                    "type": "object",
+                    "properties": {
+                        "objective": {"type": "string"},
+                        "start_date": {"type": "string"},
+                        "end_date": {"type": "string"},
+                    },
+                    "required": ["objective", "start_date", "end_date"],
+                    "additionalProperties": False,
+                },
+                required_args=["objective", "start_date", "end_date"],
+                argument_contract={
+                    "clarification": {
+                        "prompt": "Please provide the objective, start date, and end date."
+                    }
+                },
+                read_only=False,
+            )
+        ]
+    )
+    runtime = runtime_sdk.HarnessRuntime(registry, ToolExecutor(registry))
+
+    result = run_runtime(
+        runtime,
+        "Interview",
+        provider=IgnoresForcedTool(),
+        context_bundle={"agent_session_id": "run-forced-tool-clarification"},
+        skill_activation={
+            "skill_id": "planning",
+            "kind": "workflow",
+            "allowed_tools": ["plan.build"],
+            "required_tools": ["plan.build"],
+            "completion_policy": {
+                "required_transition": "plan.build",
+                "allow_model_clarification": False,
+                "clarification_strategy": "tool_contract",
+                "waiting_statuses": ["waiting_user_input"],
+            },
+        },
+    )
+
+    assert result.status.value == "waiting_user_input"
+    assert result.pending_action is not None
+    assert result.pending_action.action_type == "clarification"
+    assert result.pending_action.payload["clarification"]["missing_fields"] == [
+        "objective",
+        "start_date",
+        "end_date",
+    ]
+    assert result.error is None
+
+
 def test_telemetry_failure_is_fail_open_and_visible_in_diagnostics() -> None:
     class BrokenTelemetry:
         def record(self, _event: TelemetryRecord) -> None:

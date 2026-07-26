@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.17.1
+
+- Recover ignored forced tool calls as structured clarification only when the
+  tool declares required arguments and a clarification contract.
+- Preserve strict contract failures for tools that cannot safely suspend for
+  missing input.
+
 ## 3.17.0
 
 - Add a canonical `TaskLifecycle` projection while preserving engine execution

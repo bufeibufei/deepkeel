@@ -10,12 +10,13 @@ from langchain_core.runnables import RunnableConfig
 from langgraph.types import interrupt
 
 from harness_core.budget import BudgetLedger
-from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction
+from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction, ToolCall
 from harness_core.control import RunControl
 from harness_core.deadlines import ensure_time_remaining
 from harness_core.events import AgentEventPersistenceError
 from harness_core.hooks import HookAction, HookAudit, HookInvocation, HookPoint
-from harness_core.model import ModelGateway, model_tools_from_registry
+from harness_core.model import ModelGateway, ModelTurn, model_tools_from_registry
+from harness_core.model_failures import ModelToolContractError
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
 from harness_core.tool_registry import ToolRegistry
@@ -71,6 +72,36 @@ def _model_hook_invocation(
         payload=dict(payload),
         metadata={
             "governance_scope": dict(metadata.get("governance_scope") or {}),
+        },
+    )
+
+
+def _forced_tool_clarification_fallback(
+    registry: ToolRegistry,
+    forced_tool_name: str,
+    error: ModelToolContractError,
+) -> ModelTurn | None:
+    try:
+        spec = registry.get(forced_tool_name)
+    except KeyError:
+        return None
+    clarification = as_dict(as_dict(spec.argument_contract).get("clarification"))
+    if not clarification or not (spec.required_args or spec.required_arg_groups):
+        return None
+    return ModelTurn(
+        content="",
+        tool_calls=[
+            ToolCall(
+                id=f"contract-clarification-{uuid4()}",
+                name=forced_tool_name,
+                arguments={},
+            )
+        ],
+        finish_reason="tool_calls",
+        raw={
+            "synthetic": True,
+            "recovery": "forced_tool_clarification",
+            "error": str(error),
         },
     )
 
@@ -411,24 +442,45 @@ class GraphNodes:
                     deadline_monotonic=deadline_monotonic,
                 )
             async_run_turn = getattr(model, "arun_turn", None)
-            if callable(async_run_turn):
-                turn = await async_run_turn(
-                    _messages(current),
-                    tools=tools,
-                    system_prompt=prompt,
-                    on_text_delta=None if forced_tool_name else on_delta,
-                    step_context=model_step_context,
-                    on_route=on_route,
+            try:
+                if callable(async_run_turn):
+                    turn = await async_run_turn(
+                        _messages(current),
+                        tools=tools,
+                        system_prompt=prompt,
+                        on_text_delta=None if forced_tool_name else on_delta,
+                        step_context=model_step_context,
+                        on_route=on_route,
+                    )
+                else:
+                    turn = await asyncio.to_thread(
+                        model.run_turn,
+                        _messages(current),
+                        tools=tools,
+                        system_prompt=prompt,
+                        on_text_delta=None if forced_tool_name else on_delta,
+                        step_context=model_step_context,
+                        on_route=on_route,
+                    )
+            except ModelToolContractError as exc:
+                turn = _forced_tool_clarification_fallback(
+                    tool_registry,
+                    forced_tool_name,
+                    exc,
                 )
-            else:
-                turn = await asyncio.to_thread(
-                    model.run_turn,
-                    _messages(current),
-                    tools=tools,
-                    system_prompt=prompt,
-                    on_text_delta=None if forced_tool_name else on_delta,
-                    step_context=model_step_context,
-                    on_route=on_route,
+                if turn is None:
+                    raise
+                _emit(
+                    current,
+                    config,
+                    "model.tool_contract.recovered",
+                    "Required tool clarification recovered",
+                    forced_tool_name,
+                    {
+                        "tool_name": forced_tool_name,
+                        "recovery": "forced_tool_clarification",
+                        "visible": False,
+                    },
                 )
             self.ensure_active(current, config, force=True)
         except AgentEventPersistenceError:
