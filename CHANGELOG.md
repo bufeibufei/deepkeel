@@ -1,9 +1,14 @@
 # Changelog
 
+## 3.16.7
+
+- Scope undisclosed-tool rejection to answer-only Workflow finalization so
+  ordinary tool and handoff execution remains governed by PolicyEngine.
+
 ## 3.16.6
 
-- Enforce the resolved Tool View at execution time and reject model calls to
-  tools that were not disclosed for the current step.
+- Enforce the answer-only Tool View after a Workflow contract is complete and
+  reject stale model calls to suppressed tools during finalization.
 - Inject an answer-only Workflow finalization guard and recover once when a
   provider still emits a stale tool call after the contract is satisfied.
 

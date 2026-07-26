@@ -539,13 +539,15 @@ class GraphNodes:
         tool_calls = [
             call
             for call in reported_tool_calls
-            if call.name in exposed_tool_names
+            if not workflow_is_finalizing
+            or call.name in exposed_tool_names
             or call.name not in registered_tool_names
         ]
         rejected_tool_calls = [
             call
             for call in reported_tool_calls
-            if call.name in registered_tool_names
+            if workflow_is_finalizing
+            and call.name in registered_tool_names
             and call.name not in exposed_tool_names
         ]
         if rejected_tool_calls:
