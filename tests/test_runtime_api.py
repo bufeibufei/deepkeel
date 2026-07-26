@@ -73,8 +73,9 @@ def _runtime_result(
         context_snapshot={"schema_version": "runtime-context-v2"},
         skill_activation={"skill_id": "inventory-assistant"},
         ui_state={
-            "schema_version": "harness-run-ui-v1",
+            "schema_version": "harness-run-ui-v2",
             "lifecycle": "completed",
+            "execution_status": "completed",
             "composer_mode": "ready",
             "can_send": True,
             "input_strategy": "follow_up",
@@ -101,6 +102,8 @@ def test_runtime_result_is_a_direct_typed_contract():
     assert result.final_answer.metadata["answer_mode"] == "bubble"
     assert result.observations[0].source == "inventory.lookup"
     assert result.artifacts[0].artifact_type == "inventory.record"
+    assert result.artifact_views == []
+    assert result.evidence_bundle.schema_version == "evidence-bundle-v1"
     assert result.events[0].event_type == "answer.delta"
     assert "compatibility_payload" not in RuntimeResult.model_fields
 

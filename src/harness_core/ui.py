@@ -2,21 +2,19 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_core.contracts import TaskLifecycle
 
-TERMINAL_RUNTIME_STATUSES = frozenset({"completed", "failed", "canceled"})
-ACTIVE_RUNTIME_STATUSES = frozenset(
+TERMINAL_RUNTIME_STATUSES = frozenset(
     {
-        "queued",
-        "preparing",
-        "reasoning",
-        "executing_tools",
-        "streaming_answer",
-        "settling",
-        "waiting_user_input",
-        "waiting_user_action",
-        "task_running",
-        "running",
+        TaskLifecycle.COMPLETED.value,
+        TaskLifecycle.FAILED.value,
+        TaskLifecycle.CANCELED.value,
     }
+)
+ACTIVE_RUNTIME_STATUSES = frozenset(
+    lifecycle.value
+    for lifecycle in TaskLifecycle
+    if lifecycle.value not in TERMINAL_RUNTIME_STATUSES
 )
 
 
@@ -25,45 +23,73 @@ def project_run_ui_state(
     *,
     pending_action: dict[str, Any] | None = None,
     active_task: dict[str, Any] | None = None,
-    schema_version: str = "harness-run-ui-v1",
+    schema_version: str = "harness-run-ui-v2",
 ) -> dict[str, Any]:
-    lifecycle = _canonical_status(status)
-    terminal = lifecycle in TERMINAL_RUNTIME_STATUSES
-    waiting_input = lifecycle == "waiting_user_input"
-    waiting_action = lifecycle == "waiting_user_action"
-    waiting_async = lifecycle == "task_running"
-    active = lifecycle in ACTIVE_RUNTIME_STATUSES
+    execution_status = _canonical_execution_status(status)
+    lifecycle = task_lifecycle(execution_status)
+    lifecycle_value = lifecycle.value
+    terminal = lifecycle_value in TERMINAL_RUNTIME_STATUSES
+    collecting_input = lifecycle is TaskLifecycle.COLLECTING_INPUT
+    waiting_action = lifecycle is TaskLifecycle.WAITING_USER_ACTION
+    active = lifecycle_value in ACTIVE_RUNTIME_STATUSES
     if terminal or not active:
         composer_mode, can_send, reason = "ready", True, "run_terminal"
         if not terminal:
             reason = "run_inactive"
-    elif waiting_input:
-        composer_mode, can_send, reason = "ready", True, "waiting_user_input"
+    elif collecting_input:
+        composer_mode, can_send, reason = "ready", True, "collecting_input"
     elif waiting_action:
         composer_mode, can_send, reason = "blocked", False, "waiting_user_action"
-    elif waiting_async:
-        composer_mode, can_send, reason = "blocked", False, "waiting_async"
     else:
-        composer_mode, can_send, reason = "busy", False, f"run_{lifecycle}"
+        composer_mode, can_send, reason = "busy", False, f"run_{lifecycle_value}"
     return {
         "schema_version": schema_version,
-        "lifecycle": lifecycle,
+        "lifecycle": lifecycle_value,
+        "execution_status": execution_status,
         "composer_mode": composer_mode,
         "can_send": can_send,
         "input_strategy": "follow_up" if can_send else "hard_interrupt",
         "requires_user_action": waiting_action and pending_action is not None,
-        "is_resumable": active and (waiting_input or waiting_action or waiting_async),
-        "show_progress": active and not (waiting_input or waiting_action),
-        "can_cancel": active and not waiting_input and lifecycle != "settling",
+        "is_resumable": active and waiting_action,
+        "show_progress": lifecycle in {
+            TaskLifecycle.QUEUED,
+            TaskLifecycle.RUNNING,
+            TaskLifecycle.SYNTHESIZING,
+        },
+        "can_cancel": lifecycle in {
+            TaskLifecycle.QUEUED,
+            TaskLifecycle.RUNNING,
+            TaskLifecycle.SYNTHESIZING,
+        },
         "active_task": None if terminal else active_task,
         "reason": reason,
     }
 
 
-def _canonical_status(status: str) -> str:
+def task_lifecycle(status: str) -> TaskLifecycle:
+    value = _canonical_execution_status(status)
+    if value in {"waiting_user_input", "waiting_input", "collecting_input"}:
+        return TaskLifecycle.COLLECTING_INPUT
+    if value in {
+        "waiting_user",
+        "waiting_user_action",
+        "waiting_action",
+        "requires_user_action",
+    }:
+        return TaskLifecycle.WAITING_USER_ACTION
+    if value in {"queued", "preparing", "starting", "configuring"}:
+        return TaskLifecycle.QUEUED
+    if value in {"streaming_answer", "synthesizing", "settling"}:
+        return TaskLifecycle.SYNTHESIZING
+    if value in {"completed", "success", "succeeded"}:
+        return TaskLifecycle.COMPLETED
+    if value in {"failed", "error"}:
+        return TaskLifecycle.FAILED
+    if value in {"canceled", "cancelled"}:
+        return TaskLifecycle.CANCELED
+    return TaskLifecycle.RUNNING
+
+
+def _canonical_execution_status(status: str) -> str:
     value = str(status or "running").strip().lower()
-    return {
-        "waiting_user": "waiting_user_action",
-        "waiting_async": "task_running",
-        "cancelled": "canceled",
-    }.get(value, value)
+    return "canceled" if value == "cancelled" else value

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from harness_core.ui import task_lifecycle
+
 
 TERMINAL_WORKFLOW_STATES = frozenset({"completed", "partial", "failed", "canceled"})
 
@@ -85,8 +87,14 @@ def workflow_projection(
     else:
         state = "running"
     projected_progress = _progress_value(progress, durable_phase, terminal)
+    lifecycle_source = durable_status
+    if not terminal:
+        if state in {"queued", "waiting_user_action", "waiting_user_input"}:
+            lifecycle_source = state
+        elif durable_phase in {"synthesizing", "settling"}:
+            lifecycle_source = durable_phase
     return {
-        "schema_version": "workflow-instance-v1",
+        "schema_version": "workflow-instance-v2",
         "instance_id": str(instance_id),
         "kind": str(kind),
         "revision": _non_negative_int(revision),
@@ -94,6 +102,8 @@ def workflow_projection(
         "updated_at": str(updated_at or ""),
         "state": state,
         "status": durable_status,
+        "lifecycle": task_lifecycle(lifecycle_source).value,
+        "execution_status": durable_status,
         "phase": durable_phase,
         "terminal": terminal,
         "recoverable": bool(instance_id),

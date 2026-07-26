@@ -11,6 +11,7 @@ from harness_core.budget import (
     TOOL_CALLS,
     TOOL_CONCURRENCY,
 )
+from harness_core.artifact_views import project_artifact_views
 from harness_core.contracts import (
     AgentMessage,
     Artifact,
@@ -102,6 +103,7 @@ def project_harness_result(
     references = reference_projection.references
     final_answer["references"] = references
     evidence = reference_projection.evidence
+    evidence_bundle = reference_projection.bundle()
     if evidence and not final_answer.get("evidence"):
         final_answer["evidence"] = evidence
     checkpoint_observations = [
@@ -272,6 +274,15 @@ def project_harness_result(
         metadata=dict(checkpoint["metadata"]),
         step_count=int(checkpoint["step_count"]),
     )
+    typed_artifacts = [
+        Artifact.model_validate(item) for item in checkpoint["artifacts"]
+    ]
+    output_contract = as_dict(skill.get("output_contract"))
+    artifact_presentation = output_contract.get("artifact_presentation")
+    artifact_views = project_artifact_views(
+        typed_artifacts,
+        artifact_presentation if isinstance(artifact_presentation, dict) else None,
+    )
     return RuntimeResult(
         question=question,
         run_id=checkpoint["run_id"],
@@ -293,7 +304,8 @@ def project_harness_result(
         ],
         tool_results=[ToolResult.model_validate(item) for item in typed_tool_results],
         pending_action=typed_pending_action,
-        artifacts=[Artifact.model_validate(item) for item in checkpoint["artifacts"]],
+        artifacts=typed_artifacts,
+        artifact_views=artifact_views,
         events=[RuntimeStreamEvent.model_validate(item) for item in streamed_events],
         checkpoint=checkpoint,
         trace=trace,
@@ -304,6 +316,7 @@ def project_harness_result(
         ui_state=cast(RuntimeUIState, as_dict(runtime.get("ui_state"))),
         references=cast(list[RuntimeReference], references),
         evidence=cast(list[RuntimeReference], evidence),
+        evidence_bundle=evidence_bundle,
         needs_user_input=runtime_status in {"waiting_user_action", "waiting_user_input"},
         answer_delta_streamed=answer_delta_streamed,
         error=error,

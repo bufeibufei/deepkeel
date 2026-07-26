@@ -12,9 +12,12 @@ from harness_core.contracts import (
     Observation,
     PendingAction,
     RunContext,
+    TaskLifecycle,
     ToolResult,
 )
 from harness_core.scope import RuntimeScope, resolve_runtime_scope
+from harness_core.artifact_views import ArtifactView
+from harness_core.references import EvidenceBundle
 
 
 class RuntimeActiveTask(TypedDict):
@@ -27,7 +30,8 @@ class RuntimeActiveTask(TypedDict):
 
 class RuntimeUIState(TypedDict):
     schema_version: str
-    lifecycle: str
+    lifecycle: TaskLifecycle
+    execution_status: str
     composer_mode: str
     can_send: bool
     input_strategy: str
@@ -161,6 +165,7 @@ class RuntimeResult(BaseModel):
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
+    artifact_views: list[ArtifactView] = Field(default_factory=list)
     events: list[RuntimeStreamEvent] = Field(default_factory=list)
     checkpoint: dict[str, Any] = Field(default_factory=dict)
     trace: list[dict[str, Any]] = Field(default_factory=list)
@@ -171,6 +176,7 @@ class RuntimeResult(BaseModel):
     ui_state: RuntimeUIState
     references: list[RuntimeReference] = Field(default_factory=list)
     evidence: list[RuntimeReference] = Field(default_factory=list)
+    evidence_bundle: EvidenceBundle = Field(default_factory=EvidenceBundle)
     needs_user_input: bool = False
     answer_delta_streamed: bool = False
     error: RuntimeErrorPayload | None = None

@@ -33,6 +33,19 @@ class RunStatus(StrEnum):
     CANCELED = "canceled"
 
 
+class TaskLifecycle(StrEnum):
+    """Product-neutral lifecycle exposed to hosts and user interfaces."""
+
+    COLLECTING_INPUT = "collecting_input"
+    WAITING_USER_ACTION = "waiting_user_action"
+    QUEUED = "queued"
+    RUNNING = "running"
+    SYNTHESIZING = "synthesizing"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+
 class AgentMessage(ContractModel):
     id: str = Field(min_length=1)
     role: Literal["system", "user", "assistant", "tool"]

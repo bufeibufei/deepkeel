@@ -1,5 +1,12 @@
 """Versioned Extension SDK for tools, Skills, Capability Packs, and artifacts."""
 
+from harness_core.artifact_views import (
+    ArtifactView,
+    ArtifactViewAction,
+    ArtifactViewField,
+    project_artifact_view,
+    project_artifact_views,
+)
 from harness_core.capabilities import (
     ArtifactTypeSpec,
     CapabilityCatalog,
@@ -26,6 +33,7 @@ from harness_core.handoffs import (
 from harness_core.prompts import harness_system_prompt
 from harness_core.references import (
     DefaultReferenceProjector,
+    EvidenceBundle,
     ReferenceProjection,
     ReferenceProjector,
 )
@@ -86,6 +94,9 @@ EXTENSION_SDK_API = (
     "ArtifactPresentationFieldSpec",
     "ArtifactPresentationSpec",
     "ArtifactTypeSpec",
+    "ArtifactView",
+    "ArtifactViewAction",
+    "ArtifactViewField",
     "CapabilityCatalog",
     "CapabilityContribution",
     "CapabilityInstallContext",
@@ -96,6 +107,7 @@ EXTENSION_SDK_API = (
     "ClarificationRequest",
     "CompiledSkillSpec",
     "DefaultReferenceProjector",
+    "EvidenceBundle",
     "HandoffRegistry",
     "HandoffSpec",
     "HookAction",
@@ -139,6 +151,8 @@ EXTENSION_SDK_API = (
     "load_skill_packages",
     "load_capability_manifest",
     "standardize_pending_action_payload",
+    "project_artifact_view",
+    "project_artifact_views",
     "resolve_tool_view",
     "tool_discovery_spec",
     "validate_capability_pack",

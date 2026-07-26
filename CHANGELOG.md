@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.17.0
+
+- Add a canonical `TaskLifecycle` projection while preserving engine execution
+  status for recovery and diagnostics.
+- Unify composer blocking, progress, cancellation, and terminal settlement
+  semantics across ordinary runs and durable workflows.
+- Add portable `EvidenceBundle` and `ArtifactView` contracts so Capability
+  Packs can expose evidence and result surfaces without Host-specific renderers.
+
 ## 3.16.7
 
 - Scope undisclosed-tool rejection to answer-only Workflow finalization so

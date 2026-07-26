@@ -1,5 +1,12 @@
 """Versioned Runtime SDK for executing, observing, and recovering runs."""
 
+from harness_core.artifact_views import (
+    ArtifactView,
+    ArtifactViewAction,
+    ArtifactViewField,
+    project_artifact_view,
+    project_artifact_views,
+)
 from harness_core.contracts import (
     AgentMessage,
     Artifact,
@@ -8,6 +15,7 @@ from harness_core.contracts import (
     PendingAction,
     RunContext,
     RunStatus,
+    TaskLifecycle,
     RuntimeEvent,
     ToolCall,
     ToolResult,
@@ -89,7 +97,12 @@ from harness_core.state_store import (
     TERMINAL_RUN_STATUSES,
     normalize_runtime_status,
 )
-from harness_core.ui import TERMINAL_RUNTIME_STATUSES, project_run_ui_state
+from harness_core.ui import (
+    TERMINAL_RUNTIME_STATUSES,
+    project_run_ui_state,
+    task_lifecycle,
+)
+from harness_core.references import EvidenceBundle
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
 from harness_core.workflows import TERMINAL_WORKFLOW_STATES, workflow_projection
 
@@ -97,6 +110,9 @@ RUNTIME_SDK_API = (
     "AgentEventPersistenceError",
     "AgentMessage",
     "Artifact",
+    "ArtifactView",
+    "ArtifactViewAction",
+    "ArtifactViewField",
     "CancellableRunControl",
     "DurableCheckpointStore",
     "EvalCase",
@@ -105,6 +121,7 @@ RUNTIME_SDK_API = (
     "EvalSuiteReport",
     "EvalSuiteRunner",
     "EvalViolation",
+    "EvidenceBundle",
     "EventJournalConflict",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",
@@ -135,6 +152,7 @@ RUNTIME_SDK_API = (
     "RunContext",
     "RunControl",
     "RunStatus",
+    "TaskLifecycle",
     "RunStateSnapshot",
     "RuntimeEvent",
     "RuntimeActiveTask",
@@ -172,6 +190,9 @@ RUNTIME_SDK_API = (
     "normalize_runtime_event",
     "normalize_runtime_status",
     "project_run_ui_state",
+    "project_artifact_view",
+    "project_artifact_views",
+    "task_lifecycle",
     "resolve_runtime_scope",
     "workflow_projection",
 )

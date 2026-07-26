@@ -3,13 +3,37 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from pydantic import BaseModel, ConfigDict, Field
+
 from harness_core.type_narrowing import as_dict
+
+
+class EvidenceBundle(BaseModel):
+    """Portable evidence projection attached to every runtime result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    schema_version: str = "evidence-bundle-v1"
+    references: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[dict[str, Any]] = Field(default_factory=list)
+    queries: list[str] = Field(default_factory=list)
+    source_tools: list[str] = Field(default_factory=list)
 
 
 @dataclass(frozen=True, slots=True)
 class ReferenceProjection:
     references: list[dict[str, Any]]
     evidence: list[dict[str, Any]]
+
+    def bundle(self) -> EvidenceBundle:
+        return EvidenceBundle(
+            references=self.references,
+            evidence=self.evidence,
+            queries=_unique_non_blank(item.get("query") for item in self.references),
+            source_tools=_unique_non_blank(
+                item.get("source_tool") for item in self.references
+            ),
+        )
 
 
 class ReferenceProjector(Protocol):
@@ -171,3 +195,13 @@ def _normalize_reference(
     }
     normalized.update({key: item for key, item in optional.items() if item})
     return normalized
+
+
+def _unique_non_blank(values: Any) -> list[str]:
+    return list(
+        dict.fromkeys(
+            normalized
+            for value in values
+            if (normalized := str(value or "").strip())
+        )
+    )

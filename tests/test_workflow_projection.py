@@ -26,13 +26,17 @@ def test_workflow_projection_normalizes_lifecycle_and_progress() -> None:
     )
 
     assert queued["state"] == "queued"
+    assert queued["lifecycle"] == "queued"
+    assert queued["execution_status"] == "running"
     assert queued["status"] == "running"
     assert queued["revision"] == queued["event_sequence"] == 0
     assert queued["can_stop"] is True
     assert waiting["state"] == "waiting_user_input"
+    assert waiting["lifecycle"] == "collecting_input"
     assert waiting["input_blocked"] is False
     assert waiting["progress"] == 1.0
     assert completed["state"] == "completed"
+    assert completed["lifecycle"] == "completed"
     assert completed["terminal"] is True
     assert completed["progress"] == 1.0
 

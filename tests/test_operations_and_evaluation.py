@@ -66,8 +66,9 @@ def _result() -> RuntimeResult:
             )
         ],
         ui_state={
-            "schema_version": "harness-run-ui-v1",
+            "schema_version": "harness-run-ui-v2",
             "lifecycle": "completed",
+            "execution_status": "completed",
             "composer_mode": "ready",
             "can_send": True,
             "input_strategy": "follow_up",
