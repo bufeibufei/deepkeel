@@ -378,7 +378,10 @@ def _diagnostic_class(searchable: str, code: str) -> tuple[FailureClass, str]:
         return "model_transport", code or "MODEL_INVOCATION_FAILED"
     if "tool" in searchable or code.startswith(("TOOL_", "MCP_")):
         return "tool_execution", code or "TOOL_EXECUTION_FAILED"
-    return "internal", code or "RUNTIME_INTERNAL_ERROR"
+    return (
+        "internal",
+        code if code not in {"", "RUN_FAILED", "RUNTIME_INTERNAL_ERROR"} else "RUNTIME_INTERNAL_ERROR",
+    )
 
 
 def _diagnostic_source(failure_class: FailureClass) -> str:
