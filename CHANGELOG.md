@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.21.0
+
+- Treat user handoffs and asynchronous starts as completed Skill workflow transitions.
+- Isolate tool lifecycle classification from graph orchestration.
+
 ## 3.20.0
 
 - Add a host-provided `ModelHealthStore` port and a process-local default so

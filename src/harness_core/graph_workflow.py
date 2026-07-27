@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 
 from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction, ToolResult, utc_now
 from harness_core.skills import SkillPolicy
+from harness_core.tool_lifecycle import completes_workflow_transition
 from harness_core.tools import ToolExecutionContext
 from harness_core.turn_context import TurnExecutionContext
 from harness_core.type_narrowing import as_dict
@@ -443,7 +444,7 @@ def _set_policy_state(
 
 
 def _record_completed_tool(current: dict[str, Any], result: ToolResult) -> None:
-    if result.status != "succeeded":
+    if not completes_workflow_transition(result):
         return
     _record_completed_tool_name(current, result.name)
 
