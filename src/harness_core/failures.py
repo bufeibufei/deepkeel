@@ -348,7 +348,7 @@ def _diagnostic_class(searchable: str, code: str) -> tuple[FailureClass, str]:
         (
             "tool_execution",
             "TOOL_EXECUTION_FAILED",
-            ("tool_execution", "tool execution", "mcp", "run_failed", "tool timed out"),
+            ("tool_execution", "tool execution", "mcp", "tool timed out"),
         ),
         (
             "artifact_contract",
@@ -438,7 +438,9 @@ def _diagnostic_recommended_action(failure_class: FailureClass) -> str:
 def _flatten_failure_evidence(value: Any) -> str:
     if isinstance(value, Mapping):
         return " ".join(
-            f"{key} {_flatten_failure_evidence(item)}" for key, item in value.items()
+            f"{key} {_flatten_failure_evidence(item)}"
+            for key, item in value.items()
+            if item not in (None, "", [], {}, ())
         )
     if isinstance(value, (list, tuple, set)):
         return " ".join(_flatten_failure_evidence(item) for item in value)

@@ -46,3 +46,15 @@ def test_failure_diagnosis_preserves_specific_tool_code() -> None:
     assert diagnosis.failure_class == "tool_execution"
     assert diagnosis.source == "date_selection_worker"
     assert diagnosis.as_dict()["evidence"]["tool"]["tool_name"] == "date_selection.generate"
+
+
+def test_failure_diagnosis_does_not_infer_from_empty_evidence_keys() -> None:
+    diagnosis = diagnose_failure(
+        code="RUN_FAILED",
+        stage="failed",
+        evidence={"model": None, "tool": None, "event": None},
+    )
+
+    assert diagnosis.error_code == "RUNTIME_INTERNAL_ERROR"
+    assert diagnosis.failure_class == "internal"
+    assert diagnosis.source == "runtime"
