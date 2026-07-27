@@ -19,6 +19,7 @@ from harness_core.model import ModelGateway, ModelTurn, model_tools_from_registr
 from harness_core.model_failures import ModelToolContractError
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
+from harness_core.skill_activation import EntryToolActivationRequest
 from harness_core.tool_registry import ToolRegistry
 from harness_core.tool_disclosure import resolve_tool_view
 from harness_core.tools import ToolExecutionContext, ToolExecutor
@@ -40,6 +41,15 @@ from harness_core.graph_workflow import (
     _retry_or_fail_empty_model_response, _set_policy_state,
     _wait_for_workflow_input, _workflow_can_wait_for_user_input,
 )
+
+
+def _latest_user_question(messages: list[Any]) -> str:
+    for item in reversed(messages):
+        if not isinstance(item, Mapping):
+            continue
+        if str(item.get("role") or "") == "user":
+            return str(item.get("content") or "").strip()
+    return ""
 
 
 def _model_hook_invocation(
@@ -623,6 +633,89 @@ class GraphNodes:
                     "visible": False,
                 },
             )
+        if tool_calls and not SkillPolicy.from_snapshot(
+            current.get("skill_activation")
+        ).active:
+            active_turn_context = turn_context
+            activator = (
+                active_turn_context.entry_tool_skill_activator
+                if active_turn_context is not None
+                else None
+            )
+            if activator is not None and active_turn_context is not None:
+                activation_request = EntryToolActivationRequest(
+                    tool_calls=tuple(tool_calls),
+                    current_activation=dict(current.get("skill_activation") or {}),
+                    run_id=str(current.get("run_id") or ""),
+                    user_id=str(current.get("user_id") or ""),
+                    thread_id=str(current.get("thread_id") or ""),
+                    turn_id=str(current.get("turn_id") or ""),
+                    question=_latest_user_question(current.get("messages") or []),
+                    messages=tuple(
+                        item
+                        for item in current.get("messages") or []
+                        if isinstance(item, dict)
+                    ),
+                    context_bundle=dict(
+                        active_turn_context.tool_context.context_bundle
+                        if isinstance(
+                            active_turn_context.tool_context.context_bundle,
+                            dict,
+                        )
+                        else {}
+                    ),
+                )
+                decision = activator.activate(activation_request)
+                if decision is not None:
+                    activation = dict(decision.skill_activation)
+                    if not str(activation.get("skill_id") or "").strip():
+                        return _finish_failed(
+                            current,
+                            "Entry-tool Skill activation returned an invalid snapshot.",
+                            config,
+                        )
+                    replacement_calls = list(decision.tool_calls or tuple(tool_calls))
+                    if {
+                        (call.id, call.name) for call in replacement_calls
+                    } != {
+                        (call.id, call.name) for call in tool_calls
+                    }:
+                        return _finish_failed(
+                            current,
+                            "Entry-tool Skill activation changed the selected tool calls.",
+                            config,
+                        )
+                    tool_calls = replacement_calls
+                    current["skill_activation"] = activation
+                    activation_metadata = current.setdefault("metadata", {})
+                    activation_metadata["entry_tool_skill_activation"] = {
+                        "skill_id": str(activation.get("skill_id") or ""),
+                        "source": str(activation.get("source") or "model"),
+                        "reason": str(decision.reason or "entry_tool_selected"),
+                        "tool_names": [call.name for call in tool_calls],
+                    }
+                    active_turn_context.tool_context.metadata["skill_activation"] = activation
+                    governance_scope = as_dict(
+                        active_turn_context.tool_context.metadata.get("governance_scope")
+                    )
+                    active_turn_context.tool_context.metadata["governance_scope"] = {
+                        **governance_scope,
+                        "skill_id": str(activation.get("skill_id") or ""),
+                    }
+                    _emit(
+                        current,
+                        config,
+                        "skill.activated",
+                        "Skill activated",
+                        str(activation.get("label") or activation.get("skill_id") or ""),
+                        {
+                            "skill_id": str(activation.get("skill_id") or ""),
+                            "source": str(activation.get("source") or "model"),
+                            "reason": str(decision.reason or "entry_tool_selected"),
+                            "entry_tool_names": [call.name for call in tool_calls],
+                            "visible": False,
+                        },
+                    )
         assistant = AgentMessage(
             id=f"assistant-{uuid4()}",
             role="assistant",

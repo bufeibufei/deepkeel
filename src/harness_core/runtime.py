@@ -91,6 +91,7 @@ from harness_core.runtime_api import (
     RuntimeStreamEvent,
 )
 from harness_core.skills import SkillPolicy
+from harness_core.skill_activation import EntryToolSkillActivator
 from harness_core.scope import RuntimeScope, require_legacy_compatible_scope
 from harness_core.state_store import (
     RuntimeStateMutation,
@@ -225,6 +226,7 @@ class HarnessRuntime:
         tool_view_mode: ToolViewMode = "legacy",
         hook_runner: HookRunner | None = None,
         tool_discovery_port: ToolDiscoveryPort | None = None,
+        entry_tool_skill_activator: EntryToolSkillActivator | None = None,
         runtime_generation: RuntimeGeneration | None = None,
     ) -> None:
         self.tool_registry = tool_registry
@@ -261,6 +263,7 @@ class HarnessRuntime:
         self.graph_durability = graph_durability
         self.tool_view_mode = tool_view_mode
         self.hook_runner = hook_runner or HookRunner()
+        self.entry_tool_skill_activator = entry_tool_skill_activator
         self.runtime_generation = runtime_generation
         if self.tool_view_mode != "legacy":
             install_tool_discovery(
@@ -858,6 +861,7 @@ class HarnessRuntime:
             deadline_monotonic=deadline_monotonic,
             tool_view_mode=self.tool_view_mode,
             hook_runner=self.hook_runner,
+            entry_tool_skill_activator=self.entry_tool_skill_activator,
         )
 
         recovery_source = ""

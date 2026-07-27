@@ -46,6 +46,11 @@ from harness_core.skill_packages import (
     load_skill_packages,
     validate_skill_packages,
 )
+from harness_core.skill_activation import (
+    EntryToolActivationDecision,
+    EntryToolActivationRequest,
+    EntryToolSkillActivator,
+)
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
@@ -108,6 +113,9 @@ EXTENSION_SDK_API = (
     "CompiledSkillSpec",
     "DefaultReferenceProjector",
     "EvidenceBundle",
+    "EntryToolActivationDecision",
+    "EntryToolActivationRequest",
+    "EntryToolSkillActivator",
     "HandoffRegistry",
     "HandoffSpec",
     "HookAction",

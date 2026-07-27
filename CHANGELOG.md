@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.21.0
+
+- Add a host-provided entry-tool Skill activation port so a Skill can be
+  promoted inside the first ReAct tool-selection step without a separate
+  model pre-router.
+- Preserve explicit Skill activation while allowing trusted package entry
+  tools to freeze Skill context and normalize their arguments before
+  execution.
+- Emit an auditable hidden `skill.activated` runtime event for model-selected
+  entry tools.
+
 ## 3.20.0
 
 - Add a host-provided `ModelHealthStore` port and a process-local default so

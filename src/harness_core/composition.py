@@ -38,6 +38,7 @@ from harness_core.telemetry import TelemetryPort
 from harness_core.tool_registry import ToolRegistry, ToolSpec
 from harness_core.tool_disclosure import ToolDiscoveryPort
 from harness_core.tools import ToolExecutionStore, ToolExecutor, ToolHandler, ToolPreflight
+from harness_core.skill_activation import EntryToolSkillActivator
 from harness_core.turn_context import ToolViewMode
 
 
@@ -73,6 +74,7 @@ class RuntimePortChanges(TypedDict, total=False):
     tool_view_mode: ToolViewMode
     hook_runner: HookRunner | None
     tool_discovery_port: ToolDiscoveryPort | None
+    entry_tool_skill_activator: EntryToolSkillActivator | None
     capability_services: Mapping[str, object]
 
 
@@ -105,6 +107,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     tool_view_mode: ToolViewMode
     hook_runner: HookRunner | None
     tool_discovery_port: ToolDiscoveryPort | None
+    entry_tool_skill_activator: EntryToolSkillActivator | None
     capability_services: Mapping[str, object]
 
 
@@ -143,6 +146,7 @@ class RuntimePorts:
     tool_view_mode: ToolViewMode = "legacy"
     hook_runner: HookRunner | None = None
     tool_discovery_port: ToolDiscoveryPort | None = None
+    entry_tool_skill_activator: EntryToolSkillActivator | None = None
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -311,6 +315,7 @@ class HarnessRuntimeBuilder:
             tool_view_mode=self._ports.tool_view_mode,
             hook_runner=hook_runner,
             tool_discovery_port=self._ports.tool_discovery_port,
+            entry_tool_skill_activator=self._ports.entry_tool_skill_activator,
             runtime_generation=runtime_generation,
         )
 

@@ -1,7 +1,7 @@
-PACKAGE_VERSION = "3.20.1"
+PACKAGE_VERSION = "3.21.0"
 RUNTIME_CONTRACT_VERSION = "harness-core-v3"
 EVENT_SCHEMA_VERSION = "harness-runtime-event-v1"
-SDK_API_VERSION = "3.8.0"
+SDK_API_VERSION = "3.9.0"
 
 # Compatibility aliases retained for existing capability packs and hosts.
 HARNESS_CORE_CONTRACT_VERSION = RUNTIME_CONTRACT_VERSION
