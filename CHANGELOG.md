@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.21.0
+## 3.21.1
 
 - Add a host-provided entry-tool Skill activation port so a Skill can be
   promoted inside the first ReAct tool-selection step without a separate
