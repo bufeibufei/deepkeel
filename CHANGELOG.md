@@ -1,6 +1,6 @@
 # Changelog
 
-## 3.21.1
+## 3.21.2
 
 - Add a host-provided entry-tool Skill activation port so a Skill can be
   promoted inside the first ReAct tool-selection step without a separate
@@ -10,6 +10,8 @@
   execution.
 - Emit an auditable hidden `skill.activated` runtime event for model-selected
   entry tools.
+- Treat user handoffs and asynchronous starts as completed Skill workflow transitions.
+- Isolate tool lifecycle classification from graph orchestration.
 
 ## 3.20.0
 

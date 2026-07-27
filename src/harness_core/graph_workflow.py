@@ -9,6 +9,7 @@ from langchain_core.runnables import RunnableConfig
 
 from harness_core.contracts import AgentMessage, FinalAnswer, PendingAction, ToolResult, utc_now
 from harness_core.skills import SkillPolicy
+from harness_core.tool_lifecycle import completes_workflow_transition
 from harness_core.tools import ToolExecutionContext
 from harness_core.turn_context import TurnExecutionContext
 from harness_core.type_narrowing import as_dict
@@ -443,9 +444,7 @@ def _set_policy_state(
 
 
 def _record_completed_tool(current: dict[str, Any], result: ToolResult) -> None:
-    # A durable handoff or async start is a completed workflow transition even
-    # though the business result will arrive later through resume.
-    if result.status not in {"succeeded", "requires_user_action", "waiting_async"}:
+    if not completes_workflow_transition(result):
         return
     _record_completed_tool_name(current, result.name)
 
