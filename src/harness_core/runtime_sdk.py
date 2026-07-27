@@ -53,7 +53,12 @@ from harness_core.model import (
     ModelInvocationStore,
     ModelInvocationUnavailable,
 )
-from harness_core.failures import RunCanceledError, failure_from_code
+from harness_core.failures import (
+    FailureDiagnosis,
+    RunCanceledError,
+    diagnose_failure,
+    failure_from_code,
+)
 from harness_core.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from harness_core.recovery import RecoveryOutcome, RecoveryState, classify_recovery_outcome
 from harness_core.operations import (
@@ -123,6 +128,7 @@ RUNTIME_SDK_API = (
     "EvalViolation",
     "EvidenceBundle",
     "EventJournalConflict",
+    "FailureDiagnosis",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",
     "HARNESS_CORE_VERSION",
@@ -184,6 +190,7 @@ RUNTIME_SDK_API = (
     "ToolResult",
     "context_snapshot_subject",
     "classify_recovery_outcome",
+    "diagnose_failure",
     "failure_from_code",
     "evaluate_runtime_result",
     "normalize_agent_context_snapshot",
