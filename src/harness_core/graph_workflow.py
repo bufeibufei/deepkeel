@@ -443,7 +443,9 @@ def _set_policy_state(
 
 
 def _record_completed_tool(current: dict[str, Any], result: ToolResult) -> None:
-    if result.status != "succeeded":
+    # A durable handoff or async start is a completed workflow transition even
+    # though the business result will arrive later through resume.
+    if result.status not in {"succeeded", "requires_user_action", "waiting_async"}:
         return
     _record_completed_tool_name(current, result.name)
 

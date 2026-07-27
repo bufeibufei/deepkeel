@@ -1071,6 +1071,16 @@ def test_runtime_waiting_action_is_committed_through_atomic_state_store() -> Non
         "start workflow",
         provider=HandoffModelAdapter(),
         context_bundle={"agent_session_id": "run-handoff"},
+        skill_activation={
+            "skill_id": "handoff_workflow",
+            "kind": "workflow",
+            "allowed_tools": ["workflow.handoff"],
+            "required_tools": ["workflow.handoff"],
+            "completed_tools": [],
+            "completion_policy": {
+                "waiting_statuses": ["waiting_user_action"],
+            },
+        },
     )
     snapshot = store.snapshot("run-handoff")
 
@@ -1080,6 +1090,7 @@ def test_runtime_waiting_action_is_committed_through_atomic_state_store() -> Non
     assert recovery["state_receipt"]["status"] == "waiting_user_action"
     assert snapshot["status"] == "waiting_user_action"
     assert len(snapshot["events"]) == len(snapshot["checkpoints"]) == 1
+    assert result.skill_activation["completed_tools"] == ["workflow.handoff"]
 
 
 def test_runtime_hides_tools_skipped_after_user_action_suspension() -> None:
