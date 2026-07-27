@@ -1,8 +1,6 @@
 name: Harness Core Release
 
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -15,10 +13,10 @@ permissions:
 
 jobs:
   host-contract:
-    uses: bufeibufei/kuitianjiandi/.github/workflows/harness-core.yml@codex/harness-agent-workspace
+    uses: bufeibufei/kuitianjiandi/.github/workflows/harness-core.yml@codex/dev-unified-20260727
     with:
       core_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      host_ref: codex/harness-agent-workspace
+      host_ref: codex/dev-unified-20260727
     secrets:
       HARNESS_CORE_DEPLOY_KEY: ${{ secrets.HARNESS_CORE_DEPLOY_KEY }}
       PRODUCT_HOST_DEPLOY_KEY: ${{ secrets.PRODUCT_HOST_DEPLOY_KEY }}
