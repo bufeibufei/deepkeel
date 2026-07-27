@@ -107,6 +107,11 @@ from harness_core.model_failures import (
     classify_model_failure,
     provider_fingerprint,
 )
+from harness_core.model_health import (
+    InMemoryModelHealthStore,
+    ModelHealthSnapshot,
+    ModelHealthStore,
+)
 from harness_core.model_capabilities import (
     InMemoryModelCapabilityRegistry,
     ModelCapabilities,
@@ -187,6 +192,7 @@ ADAPTER_SDK_API = (
     "InMemoryTelemetry",
     "InMemoryModelInvocationRecorder",
     "InMemoryModelInvocationStore",
+    "InMemoryModelHealthStore",
     "InMemoryModelCapabilityRegistry",
     "InMemoryRuntimeEventJournal",
     "InMemoryRunLeaseStore",
@@ -207,6 +213,8 @@ ADAPTER_SDK_API = (
     "ModelInvocationRecord",
     "ModelInvocationStore",
     "ModelInvocationUnavailable",
+    "ModelHealthSnapshot",
+    "ModelHealthStore",
     "ModelProviderAdapter",
     "ModelProviderInfo",
     "ModelRouter",

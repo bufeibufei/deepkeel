@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.20.0
+
+- Add a host-provided `ModelHealthStore` port and a process-local default so
+  model fallback can share circuit state across runtime steps and workers.
+- Separate governed model-pipeline composition from the orchestration runtime.
+- Split package, runtime-contract, event-schema, and SDK API versions.
+- Declare Skill execution modes for inline, background, and user-handoff
+  background workflows.
+
 ## 3.17.1
 
 - Recover ignored forced tool calls as structured clarification only when the

@@ -6,8 +6,9 @@ from harness_core.mcp_sdk import MCP_SDK_API
 from harness_core.memory_sdk import MEMORY_SDK_API
 from harness_core.orchestration_sdk import ORCHESTRATION_SDK_API
 from harness_core.runtime_sdk import RUNTIME_SDK_API
+from harness_core.version import SDK_API_VERSION
 
-PUBLIC_API_VERSION = "3.7.0"
+PUBLIC_API_VERSION = SDK_API_VERSION
 PUBLIC_API_BY_LAYER = {
     "runtime": RUNTIME_SDK_API,
     "extension": EXTENSION_SDK_API,

@@ -25,6 +25,7 @@ from harness_core.graph import GraphDurability
 from harness_core.hooks import HookRunner
 from harness_core.model_routing import ModelRouter
 from harness_core.model import ModelInvocationRecorder, ModelInvocationStore
+from harness_core.model_health import ModelHealthStore
 from harness_core.leases import RunLeaseStore
 from harness_core.migrations import StateMigrationRegistry
 from harness_core.persistence import DurableCheckpointStore
@@ -48,6 +49,7 @@ class RuntimePortChanges(TypedDict, total=False):
     model_router: ModelRouter | None
     model_invocation_recorder: ModelInvocationRecorder | None
     model_invocation_store: ModelInvocationStore | None
+    model_health_store: ModelHealthStore | None
     policy_engine: PolicyEngine | None
     budget_ledger: BudgetLedger | None
     run_control: RunControl | None
@@ -82,6 +84,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     model_router: ModelRouter | None
     model_invocation_recorder: ModelInvocationRecorder | None
     model_invocation_store: ModelInvocationStore | None
+    model_health_store: ModelHealthStore | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
     tool_preflight: ToolPreflight | None
@@ -116,6 +119,7 @@ class RuntimePorts:
     model_router: ModelRouter | None = None
     model_invocation_recorder: ModelInvocationRecorder | None = None
     model_invocation_store: ModelInvocationStore | None = None
+    model_health_store: ModelHealthStore | None = None
     policy_engine: PolicyEngine | None = None
     budget_ledger: BudgetLedger | None = None
     run_control: RunControl | None = None
@@ -284,6 +288,7 @@ class HarnessRuntimeBuilder:
             model_router=self._ports.model_router,
             model_invocation_recorder=self._ports.model_invocation_recorder,
             model_invocation_store=self._ports.model_invocation_store,
+            model_health_store=self._ports.model_health_store,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
             run_control=self._ports.run_control,

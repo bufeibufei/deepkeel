@@ -80,6 +80,15 @@ def test_skill_package_normalizes_runtime_contract_and_digest() -> None:
     assert presentation.fields[0].format == "count"
 
 
+def test_skill_package_preserves_background_execution_mode() -> None:
+    payload = _manifest_payload()
+    payload["skill_spec"]["completion_policy"]["execution_mode"] = "background"
+
+    manifest = SkillPackageManifest.model_validate(payload)
+
+    assert manifest.compile().completion_policy["execution_mode"] == "background"
+
+
 def test_skill_package_rejects_artifact_presentation_type_drift() -> None:
     payload = _manifest_payload()
     payload["skill_spec"]["output_contract"]["artifact_presentation"]["artifact_type"] = "other"

@@ -62,8 +62,8 @@ from harness_core.model import (
     ModelInvocationRecorder,
     ModelInvocationStore,
     ModelProviderAdapter,
-    RoutedModelGateway,
 )
+from harness_core.model_health import InMemoryModelHealthStore, ModelHealthStore
 from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.leases import ExecutionFence, RunLeaseGuard, RunLeaseStore
 from harness_core.migrations import StateMigrationRegistry, default_state_migrations
@@ -120,6 +120,7 @@ from harness_core.runtime_results import (
     _skill_precondition_tool_calls,
     project_harness_result,
 )
+from harness_core.runtime_model_pipeline import build_runtime_model_gateway
 
 
 EventSink = Callable[[dict[str, Any]], None]
@@ -201,6 +202,7 @@ class HarnessRuntime:
         model_router: ModelRouter | None = None,
         model_invocation_recorder: ModelInvocationRecorder | None = None,
         model_invocation_store: ModelInvocationStore | None = None,
+        model_health_store: ModelHealthStore | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         run_control: RunControl | None = None,
@@ -235,6 +237,7 @@ class HarnessRuntime:
         self.model_router = model_router or AdaptiveStepModelRouter()
         self.model_invocation_recorder = model_invocation_recorder
         self.model_invocation_store = model_invocation_store
+        self.model_health_store = model_health_store or InMemoryModelHealthStore()
         self.policy_engine = policy_engine or getattr(tool_executor, "policy_engine", None) or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or getattr(tool_executor, "budget_ledger", None) or InMemoryBudgetLedger()
         self.run_control = run_control or NoopRunControl()
@@ -790,13 +793,14 @@ class HarnessRuntime:
             context_window_diagnostics = dict(prepared_context.diagnostics)
 
         model_providers = _model_providers(provider, providers, resolved_model_policy)
-        model_gateway = RoutedModelGateway(
+        model_gateway = build_runtime_model_gateway(
             model_providers,
             router=self.model_router,
             policy_engine=self.policy_engine,
             budget_ledger=self.budget_ledger,
             invocation_recorder=self.model_invocation_recorder,
             invocation_store=self.model_invocation_store,
+            model_health_store=self.model_health_store,
         )
         if self.reuse_compiled_graph:
             graph = self._shared_compiled_graph()

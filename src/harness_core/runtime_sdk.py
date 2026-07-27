@@ -108,7 +108,14 @@ from harness_core.ui import (
     task_lifecycle,
 )
 from harness_core.references import EvidenceBundle
-from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
+from harness_core.version import (
+    EVENT_SCHEMA_VERSION,
+    HARNESS_CORE_CONTRACT_VERSION,
+    HARNESS_CORE_VERSION,
+    PACKAGE_VERSION,
+    RUNTIME_CONTRACT_VERSION,
+    SDK_API_VERSION,
+)
 from harness_core.workflows import TERMINAL_WORKFLOW_STATES, workflow_projection
 
 RUNTIME_SDK_API = (
@@ -127,11 +134,13 @@ RUNTIME_SDK_API = (
     "EvalSuiteRunner",
     "EvalViolation",
     "EvidenceBundle",
+    "EVENT_SCHEMA_VERSION",
     "EventJournalConflict",
     "FailureDiagnosis",
     "FinalAnswer",
     "HARNESS_CORE_CONTRACT_VERSION",
     "HARNESS_CORE_VERSION",
+    "PACKAGE_VERSION",
     "HarnessRuntime",
     "InMemoryRunControl",
     "InMemoryRunRecoveryExecutor",
@@ -174,6 +183,7 @@ RUNTIME_SDK_API = (
     "RuntimeRequest",
     "RuntimeResult",
     "RuntimeResultStatus",
+    "RUNTIME_CONTRACT_VERSION",
     "RuntimeScope",
     "RuntimeScopeUnsupported",
     "RuntimeStateConflict",
@@ -183,6 +193,7 @@ RUNTIME_SDK_API = (
     "ScopedRuntimeStateStore",
     "RuntimeStreamEvent",
     "RuntimeUIState",
+    "SDK_API_VERSION",
     "TERMINAL_RUNTIME_STATUSES",
     "TERMINAL_RUN_STATUSES",
     "TERMINAL_WORKFLOW_STATES",

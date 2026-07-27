@@ -33,6 +33,7 @@ from harness_core.model_failures import (
     classify_model_failure,
     provider_fingerprint,
 )
+from harness_core.model_health import InMemoryModelHealthStore, ModelHealthStore
 from harness_core.model_capabilities import (
     InMemoryModelCapabilityRegistry,
     ModelCapabilities,
@@ -723,6 +724,7 @@ class RoutedModelGateway:
         budget_ledger: BudgetLedger,
         invocation_recorder: ModelInvocationRecorder | None = None,
         invocation_store: ModelInvocationStore | None = None,
+        model_health_store: ModelHealthStore | None = None,
         request_timeout: int = 300,
     ) -> None:
         self.providers = {
@@ -735,6 +737,7 @@ class RoutedModelGateway:
         self.budget_ledger = budget_ledger
         self.invocation_recorder = invocation_recorder
         self.invocation_store = invocation_store
+        self.model_health_store = model_health_store or InMemoryModelHealthStore()
         self.request_timeout = request_timeout
 
     def run_turn(
@@ -816,6 +819,27 @@ class RoutedModelGateway:
         )
 
         for attempt_index, (route, provider, retry_kind) in enumerate(attempts, start=1):
+            health = self.model_health_store.snapshot(
+                provider.info.provider_id,
+                provider.info.model_id,
+            )
+            if not health.is_available():
+                route_payload = {
+                    **route.as_dict(),
+                    "model_id": provider.info.model_id,
+                    "provider_id": provider.info.provider_id,
+                    "attempt_index": attempt_index,
+                    "retry_kind": retry_kind,
+                    "health": health.as_dict(),
+                    "skipped": "model_circuit_open",
+                }
+                previous_failure = {
+                    "fallback_from": route.role,
+                    "failure_category": "model_circuit_open",
+                }
+                if on_route is not None:
+                    on_route(route_payload)
+                continue
             request_timeout = remaining_timeout_ceiling(
                 step_context.deadline_monotonic,
                 maximum=self.request_timeout,
@@ -1093,6 +1117,10 @@ class RoutedModelGateway:
                     )
                 _validate_forced_tool_turn(turn, step_context)
                 ensure_time_remaining(step_context.deadline_monotonic)
+                self.model_health_store.record_success(
+                    provider.info.provider_id,
+                    provider.info.model_id,
+                )
                 if (
                     self.invocation_store is not None
                     and envelope is not None
@@ -1174,6 +1202,14 @@ class RoutedModelGateway:
                         on_route(route_payload)
                     raise BudgetExceededError(failed_output_budget) from exc
                 failure = classify_model_failure(exc)
+                if failure.retryable:
+                    route_payload["health"] = self.model_health_store.record_failure(
+                        provider.info.provider_id,
+                        provider.info.model_id,
+                        category=failure.category,
+                        immediate=failure.category == "rate_limited",
+                        retry_after_seconds=failure.retry_after_seconds,
+                    ).as_dict()
                 can_retry = (
                     failure.retryable
                     and not visible_delta_emitted

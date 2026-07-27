@@ -32,6 +32,11 @@ class WorkflowCompletionPolicySpec(BaseModel):
     allow_model_clarification: bool = False
     clarification_strategy: Literal["model", "tool_contract"] = "model"
     policy_repair_attempts: int = Field(default=1, ge=0, le=1)
+    execution_mode: Literal[
+        "inline",
+        "background",
+        "user_handoff_background",
+    ] = "inline"
 
     @field_validator(
         "required_transition_any",

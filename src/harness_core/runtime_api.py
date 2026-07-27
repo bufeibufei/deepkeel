@@ -18,6 +18,7 @@ from harness_core.contracts import (
 from harness_core.scope import RuntimeScope, resolve_runtime_scope
 from harness_core.artifact_views import ArtifactView
 from harness_core.references import EvidenceBundle
+from harness_core.version import EVENT_SCHEMA_VERSION
 
 
 class RuntimeActiveTask(TypedDict):
@@ -113,7 +114,7 @@ class RuntimeEventEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    schema_version: str = "harness-runtime-event-v1"
+    schema_version: str = EVENT_SCHEMA_VERSION
     event_id: str = ""
     sequence: int = Field(default=0, ge=0)
     run_version: int = Field(default=0, ge=0)
