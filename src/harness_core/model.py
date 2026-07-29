@@ -796,6 +796,8 @@ class RoutedModelGateway:
                 observation_count=step_context.observation_count,
                 tool_result_count=step_context.tool_result_count,
                 available_roles=tuple(self.providers),
+                observation_sources=step_context.observation_sources,
+                tool_result_names=step_context.tool_result_names,
                 model_policy=step_context.model_policy,
                 skill_activation=step_context.skill_activation,
                 policy_phase=step_context.policy_phase,

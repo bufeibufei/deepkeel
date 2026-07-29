@@ -442,6 +442,16 @@ class GraphNodes:
                     observation_count=len(current.get("observations") or []),
                     tool_result_count=len(current.get("tool_results") or []),
                     available_roles=_model_available_roles(model),
+                    observation_sources=tuple(
+                        str(item.get("source") or "")
+                        for item in (current.get("observations") or [])
+                        if isinstance(item, dict)
+                    ),
+                    tool_result_names=tuple(
+                        str(item.get("name") or "")
+                        for item in (current.get("tool_results") or [])
+                        if isinstance(item, dict)
+                    ),
                     model_policy=dict(current.get("model_policy") or {}),
                     skill_activation=dict(current.get("skill_activation") or {}),
                     policy_phase=str(current.get("policy_phase") or ""),

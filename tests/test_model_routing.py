@@ -53,5 +53,45 @@ def test_workflow_observation_synthesis_uses_reasoning_model():
     assert decision.role == "reasoning"
 
 
+def test_tool_discovery_only_continuation_stays_on_fast_model():
+    decision = AdaptiveStepModelRouter().route(
+        _context(
+            step_index=1,
+            observation_count=1,
+            tool_result_count=1,
+            observation_sources=("runtime.discover_tools",),
+            tool_result_names=("runtime.discover_tools",),
+        )
+    )
+    assert decision.role == "fast"
+    assert decision.reason == "tool discovery continuation uses fast model"
+
+
+def test_business_tool_observation_uses_reasoning_model():
+    decision = AdaptiveStepModelRouter().route(
+        _context(
+            step_index=1,
+            observation_count=1,
+            tool_result_count=1,
+            observation_sources=("profile.read_current",),
+            tool_result_names=("profile.read_current",),
+        )
+    )
+    assert decision.role == "reasoning"
+    assert decision.reason == "tool observations require synthesis"
+
+
+def test_incomplete_observation_identity_does_not_downgrade_to_fast_model():
+    decision = AdaptiveStepModelRouter().route(
+        _context(
+            step_index=1,
+            observation_count=1,
+            tool_result_count=1,
+            observation_sources=("runtime.discover_tools",),
+        )
+    )
+    assert decision.role == "reasoning"
+
+
 def test_contract_repair_always_uses_reasoning_model():
     assert AdaptiveStepModelRouter().route(_context(policy_phase="repair")).role == "reasoning"

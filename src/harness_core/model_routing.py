@@ -15,6 +15,8 @@ class ModelStepContext:
     observation_count: int
     tool_result_count: int
     available_roles: tuple[str, ...]
+    observation_sources: tuple[str, ...] = ()
+    tool_result_names: tuple[str, ...] = ()
     model_policy: dict[str, Any] = field(default_factory=dict)
     skill_activation: dict[str, Any] = field(default_factory=dict)
     policy_phase: str = ""
@@ -70,6 +72,12 @@ class AdaptiveStepModelRouter:
                 "workflow contract repair requires reasoning",
                 context,
             )
+        if _is_tool_discovery_continuation(context) and "fast" in available:
+            return self._decision(
+                "fast",
+                "tool discovery continuation uses fast model",
+                context,
+            )
         is_workflow = str(skill.get("kind") or "") == "workflow"
         if (
             is_workflow
@@ -117,10 +125,22 @@ class AdaptiveStepModelRouter:
                 "step_index": context.step_index,
                 "observation_count": context.observation_count,
                 "tool_result_count": context.tool_result_count,
+                "observation_sources": list(context.observation_sources),
+                "tool_result_names": list(context.tool_result_names),
                 "policy_phase": context.policy_phase,
                 "skill_id": str(context.skill_activation.get("skill_id") or ""),
             },
         )
+
+
+def _is_tool_discovery_continuation(context: ModelStepContext) -> bool:
+    if context.observation_count <= 0 and context.tool_result_count <= 0:
+        return False
+    sources = tuple(source for source in context.observation_sources if source)
+    result_names = tuple(name for name in context.tool_result_names if name)
+    if len(sources) != context.observation_count or len(result_names) != context.tool_result_count:
+        return False
+    return all(name == "runtime.discover_tools" for name in (*sources, *result_names))
 
 
 def _available_role(preferred: str, available: tuple[str, ...]) -> str:
