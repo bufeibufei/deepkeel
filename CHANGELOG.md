@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.22.0
+
+- Add a persistent-port-backed Capability Package control plane with
+  optimistic concurrency.
+- Support validated package install, enable, disable, upgrade, rollback, and
+  uninstall operations.
+- Produce immutable Runtime Generations from the enabled package catalog while
+  failing closed on missing dependencies and capability ownership conflicts.
+
 ## 3.21.2
 
 - Add a host-provided entry-tool Skill activation port so a Skill can be

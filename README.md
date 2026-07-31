@@ -51,6 +51,27 @@ class InventoryPack:
 runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
 ```
 
+Capability Package lifecycle is managed separately from process-local runtime
+composition. A Host persists the catalog through `CapabilityPackageStore`,
+applies install/enable/disable/upgrade/rollback operations through
+`CapabilityPackageManager`, and builds workers from the resulting immutable
+`RuntimeGeneration`. Existing runs retain the generation captured when they
+started.
+
+```python
+from harness_core.extension_sdk import (
+    CapabilityPackageManager,
+    InMemoryCapabilityPackageStore,
+)
+
+packages = CapabilityPackageManager(InMemoryCapabilityPackageStore())
+packages.install(inventory_manifest)
+generation = packages.generation()
+```
+
+The in-memory store is for tests and single-process embedding only. Production
+Hosts must provide a durable, optimistic-concurrency implementation.
+
 The execution boundary is exclusively typed. Providers and sessions remain
 injected runtime ports, while request and result data are serializable Core
 contracts. Product hosts project `RuntimeResult` into their own API, event and

@@ -18,6 +18,7 @@ durable implementations for:
 - `TraceStore`
 - `ContextSummaryCache`
 - `CancellableRunControl`
+- `CapabilityPackageStore` when packages can be changed at runtime
 
 Run every applicable verifier in `harness_core.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
@@ -29,6 +30,18 @@ Core fails closed when a tenant or non-default namespace is used with an
 adapter that does not implement the scoped extension. Trace adapters should
 declare `supports_runtime_scope = True` only after they persist and filter all
 three scope dimensions.
+
+## Capability Package lifecycle
+
+Persist package installation state outside process memory and update it with
+optimistic concurrency. Package enable, disable, upgrade, rollback, and
+uninstall operations must pass `CapabilityPackageManager` validation before a
+new worker generation is activated.
+
+Runs capture an immutable `RuntimeGeneration`. Do not mutate the Tool Registry
+or Capability Catalog of a running generation. Start new work on the new
+generation, allow old work to resume on its captured generation, and retire an
+old generation only after no recoverable run references it.
 
 ## Operational control
 

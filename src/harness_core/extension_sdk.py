@@ -70,6 +70,14 @@ from harness_core.capability_manifest import (
     load_capability_manifest,
     validate_manifest_set,
 )
+from harness_core.capability_control import (
+    CapabilityPackageConflict,
+    CapabilityPackageManager,
+    CapabilityPackageRecord,
+    CapabilityPackageSnapshot,
+    CapabilityPackageStore,
+    InMemoryCapabilityPackageStore,
+)
 from harness_core.hooks import (
     HookAction,
     HookAudit,
@@ -109,6 +117,11 @@ EXTENSION_SDK_API = (
     "CapabilityPack",
     "CapabilityPackConformanceReport",
     "CapabilityPackSpec",
+    "CapabilityPackageConflict",
+    "CapabilityPackageManager",
+    "CapabilityPackageRecord",
+    "CapabilityPackageSnapshot",
+    "CapabilityPackageStore",
     "ClarificationRequest",
     "CompiledSkillSpec",
     "DefaultReferenceProjector",
@@ -130,6 +143,7 @@ EXTENSION_SDK_API = (
     "HookScope",
     "HookSpec",
     "InMemoryHookExecutionStore",
+    "InMemoryCapabilityPackageStore",
     "ReferenceProjection",
     "ReferenceProjector",
     "RuntimeGeneration",
