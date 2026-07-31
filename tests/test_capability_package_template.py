@@ -213,3 +213,31 @@ def test_certification_fails_when_required_behavior_is_not_covered() -> None:
         "recovery",
         "task_completion",
     ]
+
+
+def test_conformance_installs_declared_dependency_manifests_first() -> None:
+    foundation = CapabilityManifest(
+        id="example.foundation",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="example.foundation:Pack",
+    )
+    dependent_manifest = MANIFEST.model_copy(
+        update={
+            "id": "example.inventory-dependent",
+            "dependencies": {"example.foundation": ">=1.0.0"},
+        }
+    )
+
+    @dataclass
+    class DependentInventoryPack(InventoryPack):
+        spec = capability_pack_spec_from_manifest(dependent_manifest)
+
+    report = validate_capability_pack(
+        DependentInventoryPack(),
+        manifest=dependent_manifest,
+        dependency_manifests=(foundation,),
+    )
+
+    assert report.passed is True
+    assert report.runtime_generation_id.startswith("generation-")

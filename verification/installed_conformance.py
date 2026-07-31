@@ -575,7 +575,7 @@ def verify_installation_isolation() -> None:
     package_path = Path(harness_core.__file__).resolve()
     assert "packages/harness_core/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert harness_core.HARNESS_CORE_VERSION == "3.26.0"
+    assert harness_core.HARNESS_CORE_VERSION == "3.26.1"
     assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",

@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.26.1
+
+- Allow package conformance and certification to install declared dependency
+  manifests before validating a dependent Capability Package.
+- Report missing, cyclic, or incomplete dependency sets as structured
+  conformance issues instead of raising outside the report.
+
 ## 3.26.0
 
 - Make `CapabilityManifest` the single source for package declarations and

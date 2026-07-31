@@ -7,6 +7,8 @@ from jsonschema.exceptions import SchemaError
 from pydantic import BaseModel, ConfigDict, Field
 
 from harness_core.capabilities import (
+    CapabilityContribution,
+    CapabilityInstallContext,
     CapabilityPack,
     capability_pack_spec_from_manifest,
     capability_pack_spec,
@@ -130,10 +132,12 @@ def validate_capability_pack(
     registry: ToolRegistry | None = None,
     executor: ToolExecutor | None = None,
     manifest: CapabilityManifest | None = None,
+    dependency_manifests: Iterable[CapabilityManifest] = (),
 ) -> CapabilityPackConformanceReport:
     """Build a pack through the public SDK and verify its registration contract."""
 
     pack_spec = capability_pack_spec(pack)
+    materialized_dependencies = tuple(dependency_manifests)
     declared = pack_spec.declared_tools if declared_tools is None else declared_tools
     tool_names = list(
         dict.fromkeys(str(name).strip() for name in declared if str(name).strip())
@@ -148,15 +152,33 @@ def validate_capability_pack(
         expected_spec = capability_pack_spec_from_manifest(manifest)
         manifest_issues = _manifest_spec_issues(pack_spec, expected_spec)
         if not manifest_issues:
-            manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
-            generation_id = manager.install(manifest).active_generation_id
+            try:
+                manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
+                _install_dependencies(manager, manifest, materialized_dependencies)
+                generation_id = manager.install(manifest).active_generation_id
+            except Exception as exc:
+                manifest_issues.append(
+                    "manifest lifecycle validation failed: "
+                    f"{type(exc).__name__}: {exc}"
+                )
     try:
-        runtime = (
-            HarnessRuntimeBuilder(resolved_registry, executor)
-            .with_strict_capability_conformance(False)
-            .add_capability_pack(pack, manifest=manifest)
-            .build()
-        )
+        builder = HarnessRuntimeBuilder(
+            resolved_registry,
+            executor,
+        ).with_strict_capability_conformance(False)
+        if manifest is not None:
+            for dependency in _dependency_order(
+                manifest,
+                materialized_dependencies,
+            ):
+                builder.add_capability_pack(
+                    _ManifestOnlyPack(dependency),
+                    manifest=dependency,
+                )
+        runtime = builder.add_capability_pack(
+            pack,
+            manifest=manifest,
+        ).build()
     except Exception as exc:
         return CapabilityPackConformanceReport(
             package_id=pack_spec.package_id,
@@ -267,6 +289,7 @@ def certify_capability_package(
     execute: Callable[[RuntimeRequest], RuntimeResult],
     trace_loader: Callable[[str], Iterable[object]] | None = None,
     required_eval_tags: Iterable[str] = REQUIRED_CAPABILITY_EVAL_TAGS,
+    dependency_manifests: Iterable[CapabilityManifest] = (),
 ) -> CapabilityPackageCertificationReport:
     """Run the standard release gate for one independently installable package."""
 
@@ -280,8 +303,16 @@ def certify_capability_package(
         for tag in case.tags
         if str(tag).strip()
     }
-    conformance = validate_capability_pack(pack, manifest=manifest)
-    lifecycle = _validate_package_lifecycle(manifest)
+    materialized_dependencies = tuple(dependency_manifests)
+    conformance = validate_capability_pack(
+        pack,
+        manifest=manifest,
+        dependency_manifests=materialized_dependencies,
+    )
+    lifecycle = _validate_package_lifecycle(
+        manifest,
+        dependency_manifests=materialized_dependencies,
+    )
     evaluation = EvalSuiteRunner(
         execute,
         trace_loader=trace_loader,  # type: ignore[arg-type]
@@ -310,12 +341,15 @@ def certify_capability_package(
 
 def _validate_package_lifecycle(
     manifest: CapabilityManifest,
+    *,
+    dependency_manifests: Iterable[CapabilityManifest] = (),
 ) -> CapabilityLifecycleConformanceReport:
     manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
     generations: list[str] = []
     values: dict[str, bool] = {}
     issues: list[str] = []
     try:
+        _install_dependencies(manager, manifest, dependency_manifests)
         installed = manager.install(manifest)
         values["installed"] = True
         values["discovered"] = installed.get(manifest.id) is not None
@@ -365,6 +399,64 @@ def _validate_package_lifecycle(
         generations=list(dict.fromkeys(generations)),
         issues=issues,
     )
+
+
+def _install_dependencies(
+    manager: CapabilityPackageManager,
+    manifest: CapabilityManifest,
+    dependency_manifests: Iterable[CapabilityManifest],
+) -> None:
+    for item in _dependency_order(manifest, tuple(dependency_manifests)):
+        manager.install(item)
+
+
+def _dependency_order(
+    manifest: CapabilityManifest,
+    dependency_manifests: tuple[CapabilityManifest, ...],
+) -> tuple[CapabilityManifest, ...]:
+    pending = {
+        item.id: item
+        for item in dependency_manifests
+        if item.id != manifest.id
+    }
+    required_ids = set(manifest.dependencies)
+    missing = sorted(required_ids - set(pending))
+    if missing:
+        raise ValueError(
+            "dependency manifests are missing: " + ", ".join(missing)
+        )
+    ordered: list[CapabilityManifest] = []
+    installed: set[str] = set()
+    while pending:
+        ready = sorted(
+            (
+                item
+                for item in pending.values()
+                if set(item.dependencies).issubset(installed)
+            ),
+            key=lambda item: item.id,
+        )
+        if not ready:
+            raise ValueError(
+                "dependency manifests are cyclic or incomplete: "
+                + ", ".join(sorted(pending))
+            )
+        for item in ready:
+            ordered.append(item)
+            installed.add(item.id)
+            pending.pop(item.id)
+    return tuple(ordered)
+
+
+class _ManifestOnlyPack:
+    def __init__(self, manifest: CapabilityManifest) -> None:
+        self.spec = capability_pack_spec_from_manifest(manifest)
+
+    def install(
+        self,
+        _context: CapabilityInstallContext,
+    ) -> CapabilityContribution:
+        return CapabilityContribution(package_id=self.spec.package_id)
 
 
 def _next_patch_version(version: str) -> str:
