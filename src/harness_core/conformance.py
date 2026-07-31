@@ -133,11 +133,17 @@ def validate_capability_pack(
     executor: ToolExecutor | None = None,
     manifest: CapabilityManifest | None = None,
     dependency_manifests: Iterable[CapabilityManifest] = (),
+    dependency_packs: Iterable[CapabilityPack] = (),
 ) -> CapabilityPackConformanceReport:
     """Build a pack through the public SDK and verify its registration contract."""
 
     pack_spec = capability_pack_spec(pack)
     materialized_dependencies = tuple(dependency_manifests)
+    materialized_dependency_packs = tuple(dependency_packs)
+    dependency_pack_by_id = {
+        capability_pack_spec(item).package_id: item
+        for item in materialized_dependency_packs
+    }
     declared = pack_spec.declared_tools if declared_tools is None else declared_tools
     tool_names = list(
         dict.fromkeys(str(name).strip() for name in declared if str(name).strip())
@@ -172,7 +178,10 @@ def validate_capability_pack(
                 materialized_dependencies,
             ):
                 builder.add_capability_pack(
-                    _ManifestOnlyPack(dependency),
+                    dependency_pack_by_id.get(
+                        dependency.id,
+                        _ManifestOnlyPack(dependency),
+                    ),
                     manifest=dependency,
                 )
         runtime = builder.add_capability_pack(
@@ -290,6 +299,7 @@ def certify_capability_package(
     trace_loader: Callable[[str], Iterable[object]] | None = None,
     required_eval_tags: Iterable[str] = REQUIRED_CAPABILITY_EVAL_TAGS,
     dependency_manifests: Iterable[CapabilityManifest] = (),
+    dependency_packs: Iterable[CapabilityPack] = (),
 ) -> CapabilityPackageCertificationReport:
     """Run the standard release gate for one independently installable package."""
 
@@ -304,10 +314,12 @@ def certify_capability_package(
         if str(tag).strip()
     }
     materialized_dependencies = tuple(dependency_manifests)
+    materialized_dependency_packs = tuple(dependency_packs)
     conformance = validate_capability_pack(
         pack,
         manifest=manifest,
         dependency_manifests=materialized_dependencies,
+        dependency_packs=materialized_dependency_packs,
     )
     lifecycle = _validate_package_lifecycle(
         manifest,

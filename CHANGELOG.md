@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.26.3
+
+- Allow capability conformance and certification to compose real dependency
+  packs, so cross-package tools and handlers are exercised by the release gate.
+
 ## 3.26.2
 
 - Resolve only the target package's transitive dependency closure during

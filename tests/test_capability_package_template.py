@@ -252,3 +252,60 @@ def test_conformance_installs_declared_dependency_manifests_first() -> None:
 
     assert report.passed is True
     assert report.runtime_generation_id.startswith("generation-")
+
+
+def test_conformance_composes_real_dependency_packs_when_provided() -> None:
+    foundation_manifest = CapabilityManifest(
+        id="example.foundation",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="example.foundation:Pack",
+        tools=("foundation.lookup",),
+    )
+    dependent_manifest = MANIFEST.model_copy(
+        update={
+            "id": "example.inventory-dependent",
+            "dependencies": {"example.foundation": ">=1.0.0"},
+        }
+    )
+
+    @dataclass
+    class FoundationPack:
+        spec = capability_pack_spec_from_manifest(foundation_manifest)
+
+        def install(
+            self,
+            context: CapabilityInstallContext,
+        ) -> CapabilityContribution:
+            context.register_tool(
+                ToolSpec(name="foundation.lookup", read_only=True),
+                lambda *_args: {"status": "succeeded"},
+            )
+            return CapabilityContribution(
+                package_id=self.spec.package_id,
+                tools=("foundation.lookup",),
+            )
+
+    @dataclass
+    class DependentInventoryPack(InventoryPack):
+        spec = capability_pack_spec_from_manifest(dependent_manifest)
+
+        def install(
+            self,
+            context: CapabilityInstallContext,
+        ) -> CapabilityContribution:
+            context.registry.get("foundation.lookup")
+            return super().install(context)
+
+    report = validate_capability_pack(
+        DependentInventoryPack(),
+        manifest=dependent_manifest,
+        dependency_manifests=(foundation_manifest,),
+        dependency_packs=(FoundationPack(),),
+    )
+
+    assert report.passed is True
+    assert report.registered_handlers == [
+        "foundation.lookup",
+        "inventory.lookup",
+    ]

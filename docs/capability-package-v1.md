@@ -52,6 +52,11 @@ Every release runs `certify_capability_package`. Certification fails unless:
    `argument_generation`, `task_completion`, `recovery`, and `answer_quality`.
 4. Every evaluation passes through the public `HarnessRuntime` API.
 
+Packages that consume dependency tools must pass both `dependency_manifests`
+and `dependency_packs` to the certification API. Manifest-only dependencies
+validate lifecycle metadata, while real dependency packs provide the runtime
+tools, handlers, and other contributions used during composition.
+
 Semantic quality graders may be added by the Host, but deterministic contract
 checks remain mandatory and cannot be replaced by an LLM score.
 
