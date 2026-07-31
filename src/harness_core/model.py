@@ -1741,6 +1741,9 @@ def _json_arguments(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
+        repaired = _repair_truncated_json_object(text, exc)
+        if repaired is not None:
+            return repaired
         raise ModelToolArgumentsError(
             "invalid_json",
             character_count=len(text),
@@ -1751,6 +1754,57 @@ def _json_arguments(value: Any) -> dict[str, Any]:
             character_count=len(text),
         )
     return parsed
+
+
+def _repair_truncated_json_object(
+    text: str,
+    error: json.JSONDecodeError,
+) -> dict[str, Any] | None:
+    """Close only structurally incomplete JSON objects truncated at EOF."""
+
+    stripped = text.strip()
+    error_at_end = error.pos >= max(0, len(stripped) - 1)
+    if not stripped.startswith("{") or (
+        "unterminated string" not in error.msg.lower() and not error_at_end
+    ):
+        return None
+
+    expected_closers: list[str] = []
+    in_string = False
+    escaped = False
+    for character in stripped:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+            continue
+        if character == '"':
+            in_string = True
+        elif character == "{":
+            expected_closers.append("}")
+        elif character == "[":
+            expected_closers.append("]")
+        elif character in {"}", "]"}:
+            if not expected_closers or expected_closers.pop() != character:
+                return None
+
+    if escaped or not expected_closers:
+        return None
+
+    candidate = stripped
+    if in_string:
+        candidate += '"'
+    elif candidate.endswith(","):
+        candidate = candidate[:-1].rstrip()
+    candidate += "".join(reversed(expected_closers))
+    try:
+        parsed = json.loads(candidate)
+    except json.JSONDecodeError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _system_prompt_for_attempt(

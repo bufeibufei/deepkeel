@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.29.0
+
+- Repair only structurally incomplete native tool-call JSON truncated at the
+  end of provider output before consuming a model retry.
+- Keep semantic corruption, missing separators, and invalid value types on the
+  typed retry/failure path instead of applying permissive JSON coercion.
+
 ## 3.28.0
 
 - Classify malformed native tool-call arguments as a retryable model contract

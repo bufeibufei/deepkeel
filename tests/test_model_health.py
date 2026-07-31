@@ -4,7 +4,8 @@ import pytest
 
 from harness_core.budget import InMemoryBudgetLedger
 from harness_core.contracts import AgentMessage, MessageContentPart
-from harness_core.model import RoutedModelGateway
+from harness_core.model import RoutedModelGateway, _json_arguments
+from harness_core.model_failures import ModelToolArgumentsError
 from harness_core.model_health import InMemoryModelHealthStore
 from harness_core.model_routing import ModelStepContext
 from harness_core.policy import DefaultPolicyEngine
@@ -48,7 +49,7 @@ class MalformedThenValidToolProvider:
     def complete_chat(self, messages, *_args, **_kwargs):
         self.calls.append(messages)
         arguments = (
-            '{"subject_scope":"person"'
+            '{"subject_scope" "person"}'
             if len(self.calls) == 1
             else '{"subject_scope":"person"}'
         )
@@ -263,3 +264,30 @@ def test_routed_gateway_repairs_malformed_forced_tool_arguments_once() -> None:
         route.get("repair_strategy") == "native_tool_arguments_json"
         for route in routes
     )
+
+
+def test_json_arguments_repairs_structural_eof_truncation() -> None:
+    parsed = _json_arguments(
+        '{"quality":{"suitable":true},'
+        '"observations":[{"region":"entry","visible_feature":"clear path"}],'
+        '"conclusion":"keep the route unobstructed'
+    )
+
+    assert parsed == {
+        "quality": {"suitable": True},
+        "observations": [
+            {"region": "entry", "visible_feature": "clear path"}
+        ],
+        "conclusion": "keep the route unobstructed",
+    }
+
+
+def test_json_arguments_repairs_structural_trailing_comma() -> None:
+    assert _json_arguments('{"quality":{"suitable":true},') == {
+        "quality": {"suitable": True}
+    }
+
+
+def test_json_arguments_rejects_non_structural_json_corruption() -> None:
+    with pytest.raises(ModelToolArgumentsError):
+        _json_arguments('{"subject_scope" "person"}')
