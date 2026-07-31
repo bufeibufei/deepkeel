@@ -64,6 +64,7 @@ from harness_core.tool_disclosure import (
     tool_discovery_spec,
 )
 from harness_core.capability_manifest import (
+    CapabilityBudgetSpec,
     CapabilityManifest,
     RuntimeGeneration,
     RuntimeGenerationManager,
@@ -111,6 +112,7 @@ EXTENSION_SDK_API = (
     "ArtifactViewAction",
     "ArtifactViewField",
     "CapabilityCatalog",
+    "CapabilityBudgetSpec",
     "CapabilityContribution",
     "CapabilityInstallContext",
     "CapabilityManifest",

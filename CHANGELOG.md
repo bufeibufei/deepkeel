@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.23.0
+
+- Add typed Capability Package budgets, state schema versions, migration
+  declarations, and resume-compatible version contracts.
+- Retain immutable Runtime Generations in the package catalog so interrupted
+  runs can resolve the exact capability set they started with.
+- Expose deterministic compatibility diagnostics when an old generation must
+  migrate to the current package set.
+
 ## 3.22.0
 
 - Add a persistent-port-backed Capability Package control plane with

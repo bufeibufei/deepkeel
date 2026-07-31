@@ -15,6 +15,46 @@ from harness_core.version import (
 )
 
 
+class CapabilityBudgetSpec(BaseModel):
+    """Portable upper bounds contributed by one Capability Package."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    max_model_calls: int = Field(default=0, ge=0)
+    max_tool_calls: int = Field(default=0, ge=0)
+    max_input_tokens_total: int = Field(default=0, ge=0)
+    max_output_tokens_total: int = Field(default=0, ge=0)
+    max_model_retries: int = Field(default=0, ge=0)
+    max_parallel_tools: int = Field(default=0, ge=0)
+    max_elapsed_seconds: float = Field(default=0.0, ge=0)
+    roles: dict[str, dict[str, float]] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def normalize_roles(self) -> "CapabilityBudgetSpec":
+        normalized: dict[str, dict[str, float]] = {}
+        for role, limits in self.roles.items():
+            role_name = str(role or "").strip()
+            if not role_name:
+                raise ValueError("budget role names must not be blank")
+            normalized_limits: dict[str, float] = {}
+            for name, value in limits.items():
+                metric = str(name or "").strip()
+                numeric = float(value)
+                if not metric or numeric < 0:
+                    raise ValueError("budget role limits must be named and non-negative")
+                normalized_limits[metric] = numeric
+            normalized[role_name] = normalized_limits
+        object.__setattr__(self, "roles", normalized)
+        return self
+
+    def limits(self) -> dict[str, Any]:
+        return {
+            key: value
+            for key, value in self.model_dump(mode="json").items()
+            if value not in (0, 0.0, {}, None)
+        }
+
+
 class CapabilityManifest(BaseModel):
     """Declarative, versioned package boundary consumed by the runtime control plane."""
 
@@ -39,6 +79,10 @@ class CapabilityManifest(BaseModel):
     permissions: tuple[str, ...] = ()
     memory_namespaces: tuple[str, ...] = ()
     ui_surfaces: tuple[str, ...] = ()
+    budget: CapabilityBudgetSpec = Field(default_factory=CapabilityBudgetSpec)
+    state_schema_version: str = Field(default="1", min_length=1)
+    resume_compatible_versions: tuple[str, ...] = ()
+    state_migrations: dict[str, str] = Field(default_factory=dict)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
@@ -65,6 +109,7 @@ class CapabilityManifest(BaseModel):
             "permissions",
             "memory_namespaces",
             "ui_surfaces",
+            "resume_compatible_versions",
         ):
             values = tuple(
                 dict.fromkeys(
@@ -80,7 +125,33 @@ class CapabilityManifest(BaseModel):
             if str(package_id).strip()
         }
         object.__setattr__(self, "dependencies", normalized_dependencies)
+        compatible_versions = tuple(
+            dict.fromkeys((*self.resume_compatible_versions, self.version))
+        )
+        object.__setattr__(
+            self,
+            "resume_compatible_versions",
+            compatible_versions,
+        )
+        normalized_migrations = {
+            str(schema).strip(): str(migration).strip()
+            for schema, migration in self.state_migrations.items()
+            if str(schema).strip() and str(migration).strip()
+        }
+        if len(normalized_migrations) != len(self.state_migrations):
+            raise ValueError("state migration schema and handler ids must not be blank")
+        object.__setattr__(self, "state_migrations", normalized_migrations)
         return self
+
+    def can_resume_from(self, previous: "CapabilityManifest") -> bool:
+        if previous.id != self.id:
+            return False
+        if previous.version not in self.resume_compatible_versions:
+            return False
+        return (
+            previous.state_schema_version == self.state_schema_version
+            or previous.state_schema_version in self.state_migrations
+        )
 
 
 class RuntimeGeneration(BaseModel):
@@ -126,6 +197,27 @@ class RuntimeGeneration(BaseModel):
 
     def package_versions(self) -> dict[str, str]:
         return {manifest.id: manifest.version for manifest in self.packages}
+
+    def resume_compatibility_issues(
+        self,
+        previous: "RuntimeGeneration",
+    ) -> tuple[str, ...]:
+        current = {manifest.id: manifest for manifest in self.packages}
+        issues: list[str] = []
+        for old_manifest in previous.packages:
+            new_manifest = current.get(old_manifest.id)
+            if new_manifest is None:
+                issues.append(f"{old_manifest.id}: package is no longer active")
+            elif not new_manifest.can_resume_from(old_manifest):
+                issues.append(
+                    f"{old_manifest.id}: {old_manifest.version}/"
+                    f"{old_manifest.state_schema_version} cannot resume on "
+                    f"{new_manifest.version}/{new_manifest.state_schema_version}"
+                )
+        return tuple(issues)
+
+    def supports_resume_from(self, previous: "RuntimeGeneration") -> bool:
+        return not self.resume_compatibility_issues(previous)
 
 
 class RuntimeGenerationManager:
@@ -271,6 +363,7 @@ def _version_tuple(value: str) -> tuple[int, int, int]:
 
 
 __all__ = [
+    "CapabilityBudgetSpec",
     "CapabilityManifest",
     "RuntimeGeneration",
     "RuntimeGenerationManager",

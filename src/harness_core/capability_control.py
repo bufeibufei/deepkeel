@@ -37,6 +37,8 @@ class CapabilityPackageSnapshot(BaseModel):
 
     revision: int = Field(default=0, ge=0)
     packages: tuple[CapabilityPackageRecord, ...] = ()
+    generations: tuple[RuntimeGeneration, ...] = ()
+    active_generation_id: str = ""
 
     def get(self, package_id: str) -> CapabilityPackageRecord | None:
         normalized = str(package_id or "").strip()
@@ -60,9 +62,24 @@ class CapabilityPackageSnapshot(BaseModel):
         )
 
     def runtime_generation(self, *, catalog_version: str = "") -> RuntimeGeneration:
+        if not catalog_version and self.active_generation_id:
+            generation = self.get_generation(self.active_generation_id)
+            if generation is not None:
+                return generation
         return RuntimeGeneration.create(
             self.active_manifests(),
             catalog_version=catalog_version or f"package-revision-{self.revision}",
+        )
+
+    def get_generation(self, generation_id: str) -> RuntimeGeneration | None:
+        normalized = str(generation_id or "").strip()
+        return next(
+            (
+                generation
+                for generation in self.generations
+                if generation.generation_id == normalized
+            ),
+            None,
         )
 
 
@@ -200,8 +217,29 @@ class CapabilityPackageManager:
         )
         return self._save(snapshot, remaining)
 
-    def generation(self, *, catalog_version: str = "") -> RuntimeGeneration:
-        return self.store.load().runtime_generation(catalog_version=catalog_version)
+    def generation(
+        self,
+        generation_id: str = "",
+        *,
+        catalog_version: str = "",
+    ) -> RuntimeGeneration:
+        snapshot = self.store.load()
+        if generation_id:
+            generation = snapshot.get_generation(generation_id)
+            if generation is None:
+                raise KeyError(
+                    f"runtime generation is not available: {generation_id}"
+                )
+            return generation
+        return snapshot.runtime_generation(catalog_version=catalog_version)
+
+    def resume_compatibility_issues(
+        self,
+        previous_generation_id: str,
+    ) -> tuple[str, ...]:
+        previous = self.generation(previous_generation_id)
+        current = self.generation()
+        return current.resume_compatibility_issues(previous)
 
     def _replace_enabled(
         self,
@@ -229,7 +267,23 @@ class CapabilityPackageManager:
         validate_manifest_set(
             tuple(record.manifest for record in normalized if record.enabled)
         )
-        candidate = snapshot.model_copy(update={"packages": normalized})
+        next_revision = snapshot.revision + 1
+        generation = RuntimeGeneration.create(
+            tuple(record.manifest for record in normalized if record.enabled),
+            catalog_version=f"package-revision-{next_revision}",
+        )
+        generations = (
+            snapshot.generations
+            if snapshot.get_generation(generation.generation_id) is not None
+            else (*snapshot.generations, generation)
+        )
+        candidate = snapshot.model_copy(
+            update={
+                "packages": normalized,
+                "generations": generations,
+                "active_generation_id": generation.generation_id,
+            }
+        )
         return self.store.save(candidate, expected_revision=snapshot.revision)
 
     @staticmethod

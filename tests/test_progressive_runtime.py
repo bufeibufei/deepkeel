@@ -212,6 +212,16 @@ def test_runtime_generation_validates_dependencies_and_is_deterministic() -> Non
         validate_manifest_set((foundation, incompatible))
 
 
+def test_runtime_generation_reports_removed_package_resume_incompatibility() -> None:
+    previous = RuntimeGeneration.create((_manifest("demo.workflow"),))
+    current = RuntimeGeneration.create(())
+
+    assert current.supports_resume_from(previous) is False
+    assert current.resume_compatibility_issues(previous) == (
+        "demo.workflow: package is no longer active",
+    )
+
+
 def test_manifest_normalizes_and_owns_extended_capability_categories() -> None:
     manifest = CapabilityManifest(
         id="demo.extended",
