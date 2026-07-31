@@ -26,6 +26,7 @@ class ModelCapabilities(BaseModel):
     supports_forced_tool_choice: bool | None = None
     supports_reasoning: bool | None = None
     supports_reasoning_effort: bool | None = None
+    supports_image_input: bool | None = None
     context_window_tokens: int | None = Field(default=None, ge=1)
     max_output_tokens: int | None = Field(default=None, ge=1)
     completion_limit_parameter: Literal[

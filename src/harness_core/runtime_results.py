@@ -16,6 +16,7 @@ from harness_core.contracts import (
     AgentMessage,
     Artifact,
     FinalAnswer,
+    MessageContentPart,
     Observation,
     PendingAction,
     RunContext,
@@ -412,6 +413,7 @@ def _new_context(
     skill_activation: dict[str, Any],
     model_policy: dict[str, Any],
     budget_state: dict[str, Any],
+    input_parts: list[MessageContentPart] | None = None,
     pending_tool_calls: list[ToolCall] | None = None,
 ) -> RunContext:
     initial_calls = list(pending_tool_calls or [])
@@ -421,7 +423,12 @@ def _new_context(
         turn_id=turn_id,
         user_id=user_id,
         status=RunStatus.EXECUTING_TOOLS if initial_calls else RunStatus.PREPARING,
-        messages=build_initial_messages(question, short_context, context_bundle),
+        messages=build_initial_messages(
+            question,
+            short_context,
+            context_bundle,
+            input_parts=input_parts,
+        ),
         pending_tool_calls=initial_calls,
         skill_activation=skill_activation,
         model_policy=model_policy,

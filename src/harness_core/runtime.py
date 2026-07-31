@@ -607,6 +607,7 @@ class HarnessRuntime:
         context_bundle = request.context_bundle
         skill_activation = request.skill_activation
         model_policy = request.model_policy
+        input_parts = list(request.input_parts)
         run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
         bundle = context_bundle if isinstance(context_bundle, dict) else {}
@@ -938,6 +939,7 @@ class HarnessRuntime:
                         skill_activation=skill,
                         model_policy=resolved_model_policy,
                         budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                        input_parts=input_parts,
                     )
                     state = dict(await graph.ainvoke(
                         context,
@@ -1008,7 +1010,15 @@ class HarnessRuntime:
                         migrations=self.state_migrations,
                     )
                     if not any(message.role == "user" for message in recovered.messages):
-                        recovered.messages = [*build_initial_messages(question, short, bundle), *recovered.messages]
+                        recovered.messages = [
+                            *build_initial_messages(
+                                question,
+                                short,
+                                bundle,
+                                input_parts=input_parts,
+                            ),
+                            *recovered.messages,
+                        ]
                     active_graph_thread_id = recovered_thread_id
                     state = dict(await graph.ainvoke(
                         recovered,
@@ -1033,6 +1043,7 @@ class HarnessRuntime:
                     skill_activation=skill,
                     model_policy=resolved_model_policy,
                     budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                    input_parts=input_parts,
                     pending_tool_calls=precondition_calls,
                 )
                 state = dict(await graph.ainvoke(

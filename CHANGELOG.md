@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.27.0
+
+- Add provider-neutral text and image message parts backed by opaque media
+  references, with inline binary payloads rejected at the Core boundary.
+- Preserve multimodal references across history, checkpoint, replay, and
+  provider message projection while keeping host-owned media resolution out of
+  the runtime.
+- Declare image-input support in model capability evidence.
+
 ## 3.26.3
 
 - Allow capability conformance and certification to compose real dependency

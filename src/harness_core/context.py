@@ -5,7 +5,7 @@ from typing import Any
 from uuid import uuid4
 
 from harness_core.context_snapshot import normalize_agent_context_snapshot
-from harness_core.contracts import AgentMessage
+from harness_core.contracts import AgentMessage, MessageContentPart
 
 
 def build_initial_messages(
@@ -14,6 +14,7 @@ def build_initial_messages(
     context_bundle: dict[str, Any] | None,
     *,
     history_limit: int = 8,
+    input_parts: list[MessageContentPart] | None = None,
 ) -> list[AgentMessage]:
     short = short_context if isinstance(short_context, dict) else {}
     bundle = context_bundle if isinstance(context_bundle, dict) else {}
@@ -42,19 +43,48 @@ def build_initial_messages(
         if not isinstance(raw, dict) or raw.get("role") not in {"user", "assistant"}:
             continue
         content = str(raw.get("content") or "").strip()
-        if not content:
+        content_parts = _validated_content_parts(raw.get("content_parts"))
+        if not content and not content_parts:
             continue
         messages.append(
             AgentMessage(
                 id=str(raw.get("id") or f"history-{uuid4()}"),
                 role="user" if raw["role"] == "user" else "assistant",
                 content=content,
+                content_parts=content_parts,
                 metadata={"history": True, "created_at": raw.get("created_at")},
             )
         )
+    current_parts = list(input_parts or [])
     if not messages or messages[-1].role != "user" or messages[-1].content.strip() != question.strip():
-        messages.append(AgentMessage(id=f"user-{uuid4()}", role="user", content=question))
+        messages.append(
+            AgentMessage(
+                id=f"user-{uuid4()}",
+                role="user",
+                content=question,
+                content_parts=current_parts,
+            )
+        )
+    elif current_parts:
+        messages[-1] = messages[-1].model_copy(update={"content_parts": current_parts})
     return messages
+
+
+def _validated_content_parts(value: Any) -> list[MessageContentPart]:
+    if not isinstance(value, list):
+        return []
+    result: list[MessageContentPart] = []
+    for item in value:
+        if isinstance(item, MessageContentPart):
+            result.append(item)
+            continue
+        if not isinstance(item, dict):
+            continue
+        try:
+            result.append(MessageContentPart.model_validate(item))
+        except (TypeError, ValueError):
+            continue
+    return result
 
 
 def runtime_context_payload(

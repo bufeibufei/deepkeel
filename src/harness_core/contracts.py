@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -46,10 +47,51 @@ class TaskLifecycle(StrEnum):
     CANCELED = "canceled"
 
 
+class MessageContentPart(ContractModel):
+    """Provider-neutral text or media reference carried by one message.
+
+    Binary payloads are deliberately forbidden. Hosts persist and authorize the
+    media, then resolve the opaque URI only at the provider transport boundary.
+    """
+
+    type: Literal["text", "image"]
+    text: str = ""
+    uri: str = ""
+    reference_id: str = ""
+    media_type: str = ""
+    detail: Literal["auto", "low", "high"] = "auto"
+    width: int | None = Field(default=None, ge=1)
+    height: int | None = Field(default=None, ge=1)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_payload(self) -> MessageContentPart:
+        if self.type == "text":
+            if not self.text.strip():
+                raise ValueError("text content parts require non-empty text")
+            if self.uri:
+                raise ValueError("text content parts cannot carry a media URI")
+            return self
+
+        if not self.uri.strip():
+            raise ValueError("image content parts require a media URI")
+        scheme = urlsplit(self.uri).scheme.lower()
+        if not scheme:
+            raise ValueError("image content part URI must use an explicit scheme")
+        if scheme in {"data", "file"}:
+            raise ValueError("inline or local-file image payloads are not allowed")
+        if self.media_type and not self.media_type.lower().startswith("image/"):
+            raise ValueError("image content part media_type must start with image/")
+        if _contains_inline_binary(self.metadata):
+            raise ValueError("content part metadata cannot contain inline binary payloads")
+        return self
+
+
 class AgentMessage(ContractModel):
     id: str = Field(min_length=1)
     role: Literal["system", "user", "assistant", "tool"]
     content: str = ""
+    content_parts: list[MessageContentPart] = Field(default_factory=list)
     name: str = ""
     tool_call_id: str = ""
     tool_calls: list[ToolCall] = Field(default_factory=list)
@@ -233,3 +275,15 @@ def _require_unique_ids(items: list[Any], *, field_name: str) -> None:
     identifiers = [str(item.id) for item in items]
     if len(identifiers) != len(set(identifiers)):
         raise ValueError(f"{field_name} must have unique ids")
+
+
+def _contains_inline_binary(value: Any) -> bool:
+    if isinstance(value, (bytes, bytearray, memoryview)):
+        return True
+    if isinstance(value, str):
+        return value.lstrip().lower().startswith("data:")
+    if isinstance(value, dict):
+        return any(_contains_inline_binary(item) for item in value.values())
+    if isinstance(value, (list, tuple, set)):
+        return any(_contains_inline_binary(item) for item in value)
+    return False

@@ -805,6 +805,10 @@ class RoutedModelGateway:
                 governance_scope=step_context.governance_scope,
                 deadline_monotonic=step_context.deadline_monotonic,
             )
+        requires_image_input = any(
+            any(part.type == "image" for part in message.content_parts)
+            for message in messages
+        )
         primary_route = self.router.route(step_context)
         failure_policy = _model_failure_policy(step_context.model_policy)
         attempts = self._attempts(
@@ -812,6 +816,16 @@ class RoutedModelGateway:
             failure_policy=failure_policy,
             requires_native_tools=bool(tools or step_context.forced_tool_name),
         )
+        if requires_image_input:
+            attempts = [
+                attempt
+                for attempt in attempts
+                if attempt[1].info.capabilities.supports_image_input is True
+            ]
+            if not attempts:
+                raise RuntimeError(
+                    "no configured model provider declares image input support"
+                )
         previous_failure: dict[str, Any] = {}
         token_estimator = ConservativeTokenEstimator()
         budget_policy = BudgetPolicy.from_mapping(
@@ -989,6 +1003,7 @@ class RoutedModelGateway:
                     "native_tools": bool(tools or step_context.forced_tool_name),
                     "forced_tool_choice": bool(step_context.forced_tool_name),
                     "streaming": on_text_delta is not None,
+                    "image_input": requires_image_input,
                 },
                 "provider_capabilities": provider_capabilities.model_dump(mode="json"),
                 **previous_failure,
@@ -1548,7 +1563,25 @@ def provider_messages_from_agent(
     if system_prompt:
         result.append({"role": "system", "content": system_prompt})
     for message in messages:
-        payload: dict[str, Any] = {"role": message.role, "content": message.content}
+        content: str | list[dict[str, Any]] = message.content
+        if message.content_parts:
+            parts: list[dict[str, Any]] = []
+            has_equivalent_text = any(
+                part.type == "text" and part.text.strip() == message.content.strip()
+                for part in message.content_parts
+            )
+            if message.content.strip() and not has_equivalent_text:
+                parts.append({"type": "text", "text": message.content})
+            for part in message.content_parts:
+                if part.type == "text":
+                    parts.append({"type": "text", "text": part.text})
+                    continue
+                image_url: dict[str, Any] = {"url": part.uri}
+                if part.detail != "auto":
+                    image_url["detail"] = part.detail
+                parts.append({"type": "image_url", "image_url": image_url})
+            content = parts
+        payload: dict[str, Any] = {"role": message.role, "content": content}
         if message.name:
             payload["name"] = message.name
         if message.tool_call_id:

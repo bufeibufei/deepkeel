@@ -10,6 +10,7 @@ from harness_core.contracts import (
     Artifact,
     FinalAnswer,
     Observation,
+    MessageContentPart,
     PendingAction,
     RunContext,
     TaskLifecycle,
@@ -77,6 +78,7 @@ class RuntimeRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     question: str = Field(min_length=1)
+    input_parts: list[MessageContentPart] = Field(default_factory=list)
     user_id: str = "local-device"
     tenant_id: str = ""
     namespace: str = "default"
