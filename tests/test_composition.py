@@ -8,9 +8,12 @@ from harness_core.composition import HarnessRuntimeBuilder, RuntimePorts
 from harness_core.extension_sdk import (
     CapabilityContribution,
     CapabilityInstallContext,
+    CapabilityManifest,
     CapabilityPackSpec,
+    RuntimeGeneration,
 )
 from harness_core.runtime_sdk import RuntimeRequest
+from harness_core.runtime_sdk import InMemoryDurableCheckpointStore
 from harness_core.policy import DefaultPolicyEngine
 from harness_core.model import ModelTurn
 from harness_core.tool_registry import ToolRegistry, ToolSpec
@@ -110,6 +113,100 @@ def test_builder_rejects_duplicate_capability_package_identity():
 
     with pytest.raises(ValueError, match="already registered"):
         builder.add_capability_pack(DemoCapabilityPack())
+
+
+def test_builder_runs_the_generation_selected_by_the_control_plane():
+    manifest = CapabilityManifest(
+        id="example.demo",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="tests.test_composition:DemoCapabilityPack",
+        tools=("demo.lookup",),
+    )
+    generation = RuntimeGeneration.create(
+        (manifest,),
+        catalog_version="catalog-release-7",
+    )
+
+    runtime = (
+        HarnessRuntimeBuilder()
+        .add_capability_pack(DemoCapabilityPack(), manifest=manifest)
+        .with_runtime_generation(generation)
+        .build()
+    )
+
+    assert runtime.runtime_generation == generation
+
+
+def test_builder_rejects_a_generation_that_differs_from_installed_packs():
+    manifest = CapabilityManifest(
+        id="example.demo",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="tests.test_composition:DemoCapabilityPack",
+        tools=("demo.lookup",),
+    )
+    changed = manifest.model_copy(update={"version": "2.0.0"})
+
+    with pytest.raises(ValueError, match="changed manifests"):
+        (
+            HarnessRuntimeBuilder()
+            .add_capability_pack(DemoCapabilityPack(), manifest=manifest)
+            .with_runtime_generation(RuntimeGeneration.create((changed,)))
+            .build()
+        )
+
+
+def test_resume_fails_before_model_use_when_generation_is_incompatible():
+    run_id = "resume-incompatible-generation"
+    checkpoint_store = InMemoryDurableCheckpointStore()
+    old_manifest = CapabilityManifest(
+        id="example.demo",
+        version="1.0.0",
+        core_version="*",
+        entrypoint="tests.test_composition:DemoCapabilityPack",
+        tools=("demo.lookup",),
+    )
+    checkpoint_store.save(
+        run_id,
+        {
+            "schema_version": "harness-durable-checkpoint-v2",
+            "run_id": run_id,
+            "thread_id": "thread-generation",
+            "runtime": {
+                "diagnostics": {
+                    "capabilities": {
+                        "generation": RuntimeGeneration.create(
+                            (old_manifest,)
+                        ).model_dump(mode="json")
+                    }
+                }
+            },
+        },
+        user_id="user-generation",
+    )
+    current_manifest = old_manifest.model_copy(update={"version": "2.0.0"})
+    runtime = (
+        HarnessRuntimeBuilder()
+        .with_ports(RuntimePorts(checkpoint_store=checkpoint_store))
+        .add_capability_pack(DemoCapabilityPack(), manifest=current_manifest)
+        .build()
+    )
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="continue",
+            user_id="user-generation",
+            run_id=run_id,
+            thread_id="thread-generation",
+            short_context={"resume": True},
+        ),
+        provider=ScriptedNativeProvider([]),
+    )
+
+    assert result.status.value == "failed"
+    assert result.error is not None
+    assert result.error["code"] == "CHECKPOINT_INCOMPATIBLE"
 
 
 def test_runtime_continues_and_merges_output_truncated_by_model_limit():

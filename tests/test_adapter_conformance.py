@@ -8,7 +8,9 @@ from harness_core.adapter_sdk import (
     verify_run_lease_store_contract,
     verify_runtime_state_store_contract,
     verify_tool_execution_store_contract,
+    verify_capability_package_store_contract,
 )
+from harness_core.extension_sdk import InMemoryCapabilityPackageStore
 from harness_core.runtime_sdk import (
     InMemoryDurableCheckpointStore,
     InMemoryRuntimeStateStore,
@@ -60,3 +62,7 @@ def test_model_invocation_store_reference_adapter_passes_contract() -> None:
         InMemoryModelInvocationStore(),
         run_id="conformance-model",
     )
+
+
+def test_capability_package_store_reference_adapter_passes_contract() -> None:
+    verify_capability_package_store_contract(InMemoryCapabilityPackageStore())

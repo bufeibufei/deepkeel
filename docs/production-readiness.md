@@ -43,6 +43,12 @@ or Capability Catalog of a running generation. Start new work on the new
 generation, allow old work to resume on its captured generation, and retire an
 old generation only after no recoverable run references it.
 
+Compose each worker with `HarnessRuntimeBuilder.with_runtime_generation()`.
+Core verifies that the installed Capability Packs exactly match that generation
+and rejects incompatible persisted generations before invoking a model or tool.
+Run `verify_capability_package_store_contract` against the production catalog
+adapter to prove optimistic concurrency, rollback, and generation replay.
+
 ## Operational control
 
 `RunOperations` is the portable control-plane facade. It can inspect scoped

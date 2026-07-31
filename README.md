@@ -67,10 +67,21 @@ from harness_core.extension_sdk import (
 packages = CapabilityPackageManager(InMemoryCapabilityPackageStore())
 packages.install(inventory_manifest)
 generation = packages.generation()
+
+runtime = (
+    HarnessRuntimeBuilder()
+    .add_capability_pack(InventoryPack(), manifest=inventory_manifest)
+    .with_runtime_generation(generation)
+    .build()
+)
 ```
 
 The in-memory store is for tests and single-process embedding only. Production
-Hosts must provide a durable, optimistic-concurrency implementation.
+Hosts must provide a durable, optimistic-concurrency implementation and run
+`verify_capability_package_store_contract` against it. The builder rejects a
+generation whose manifests differ from the installed packs. Resume also fails
+before model or tool execution when the persisted generation is not compatible
+with the selected worker generation.
 
 The execution boundary is exclusively typed. Providers and sessions remain
 injected runtime ports, while request and result data are serializable Core

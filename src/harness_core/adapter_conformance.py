@@ -4,6 +4,12 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from harness_core.contracts import Observation, ToolCall, ToolResult
+from harness_core.capability_control import (
+    CapabilityPackageConflict,
+    CapabilityPackageManager,
+    CapabilityPackageStore,
+)
+from harness_core.capability_manifest import CapabilityManifest
 from harness_core.context_window import ContextSummaryCache, ContextSummaryRecord
 from harness_core.event_journal import EventJournalConflict, RuntimeEventJournal
 from harness_core.leases import RunLeaseConflict, RunLeaseStore
@@ -56,6 +62,57 @@ def verify_context_summary_cache_contract(cache: ContextSummaryCache) -> None:
     assert cache.get(record.cache_key, "stale") is None
     cache.invalidate(record.cache_key)
     assert cache.get(record.cache_key, record.source_fingerprint) is None
+
+
+def verify_capability_package_store_contract(
+    store: CapabilityPackageStore,
+    *,
+    package_id: str = "",
+) -> None:
+    """Assert optimistic lifecycle persistence and immutable generation replay."""
+
+    resolved_id = str(package_id or f"conformance.package.{uuid4().hex}").strip()
+    manager = CapabilityPackageManager(store)
+    initial = manager.inspect()
+    installed = manager.install(
+        CapabilityManifest(
+            id=resolved_id,
+            version="1.0.0",
+            core_version="*",
+            entrypoint="conformance:PackV1",
+        )
+    )
+    first_generation_id = installed.active_generation_id
+    assert manager.generation(first_generation_id).package_versions()[resolved_id] == "1.0.0"
+
+    manager.disable(resolved_id)
+    assert manager.inspect().get(resolved_id) is not None
+    assert manager.inspect().get(resolved_id).enabled is False  # type: ignore[union-attr]
+    manager.enable(resolved_id)
+    manager.upgrade(
+        CapabilityManifest(
+            id=resolved_id,
+            version="2.0.0",
+            core_version="*",
+            entrypoint="conformance:PackV2",
+            resume_compatible_versions=("1.0.0",),
+        )
+    )
+    assert manager.generation().package_versions()[resolved_id] == "2.0.0"
+    assert manager.generation(first_generation_id).package_versions()[resolved_id] == "1.0.0"
+    assert manager.resume_compatibility_issues(first_generation_id) == ()
+
+    try:
+        store.save(initial, expected_revision=initial.revision)
+    except CapabilityPackageConflict:
+        pass
+    else:
+        raise AssertionError("capability package store accepted a stale catalog revision")
+
+    manager.rollback(resolved_id, version="1.0.0")
+    assert manager.generation().package_versions()[resolved_id] == "1.0.0"
+    manager.uninstall(resolved_id)
+    assert manager.inspect().get(resolved_id) is None
 
 
 def verify_runtime_event_projection_contract(

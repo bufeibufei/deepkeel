@@ -68,6 +68,7 @@ from harness_core.model_routing import AdaptiveStepModelRouter, ModelRouter
 from harness_core.leases import ExecutionFence, RunLeaseGuard, RunLeaseStore
 from harness_core.migrations import StateMigrationRegistry, default_state_migrations
 from harness_core.persistence import (
+    CheckpointCompatibilityError,
     DurableCheckpointStore,
     checkpoint_from_durable_state,
     checkpoint_from_runtime,
@@ -155,6 +156,35 @@ def _optional_int(value: Any) -> int | None:
         return int(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _ensure_resume_generation_compatible(
+    current: RuntimeGeneration | None,
+    durable_state: dict[str, Any],
+) -> None:
+    runtime = as_dict(durable_state.get("runtime"))
+    diagnostics = as_dict(runtime.get("diagnostics"))
+    capabilities = as_dict(diagnostics.get("capabilities"))
+    generation_payload = capabilities.get("generation")
+    if not isinstance(generation_payload, dict) or not generation_payload:
+        return
+    try:
+        previous = RuntimeGeneration.model_validate(generation_payload)
+    except Exception as exc:
+        raise CheckpointCompatibilityError(
+            "persisted runtime generation is invalid"
+        ) from exc
+    if current is None:
+        raise CheckpointCompatibilityError(
+            f"runtime generation {previous.generation_id} is not installed"
+        )
+    if current.generation_id == previous.generation_id:
+        return
+    issues = current.resume_compatibility_issues(previous)
+    if issues:
+        raise CheckpointCompatibilityError(
+            "runtime generation is not resume compatible: " + "; ".join(issues)
+        )
 
 
 def _hook_audit_dict(audit: HookAudit) -> dict[str, Any]:
@@ -631,6 +661,24 @@ class HarnessRuntime:
             )
         else:
             durable_state, checkpoint_authority, checkpoint_load_errors = {}, "none", []
+        try:
+            _ensure_resume_generation_compatible(
+                self.runtime_generation,
+                durable_state,
+            )
+        except CheckpointCompatibilityError as exc:
+            return self._context_setup_failure(
+                question,
+                exc,
+                short_context=short,
+                context_bundle=bundle,
+                user_id=user_id,
+                skill_activation=skill_activation,
+                model_policy=model_policy,
+                session=session,
+                event_sink=event_sink,
+                execution_fence=execution_fence,
+            )
         resolved_model_policy = _resolved_model_policy(
             model_policy,
             provider=provider,

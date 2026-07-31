@@ -15,6 +15,7 @@ from harness_core.capabilities import (
 )
 from harness_core.capability_manifest import (
     CapabilityManifest,
+    RuntimeGeneration,
     RuntimeGenerationManager,
 )
 from harness_core.control import RunControl
@@ -179,6 +180,7 @@ class HarnessRuntimeBuilder:
         self._ports = RuntimePorts()
         self._capability_packs: list[CapabilityPack] = []
         self._capability_manifests: dict[str, CapabilityManifest] = {}
+        self._runtime_generation: RuntimeGeneration | None = None
         self._capability_catalog = CapabilityCatalog()
         self._installed_contributions: tuple[CapabilityContribution, ...] = ()
         self._max_steps = 12
@@ -199,6 +201,12 @@ class HarnessRuntimeBuilder:
         self._ensure_mutable()
         _validate_port_changes(changes)
         self._ports = replace(self._ports, **changes)
+        return self
+
+    def with_runtime_generation(self, generation: RuntimeGeneration) -> Self:
+        """Pin the worker to a generation selected by the package control plane."""
+        self._ensure_mutable()
+        self._runtime_generation = generation
         return self
 
     def add_capability_pack(
@@ -276,10 +284,16 @@ class HarnessRuntimeBuilder:
                 for name, spec in self._capability_catalog.artifact_types.items()
             }
         )
-        runtime_generation = RuntimeGenerationManager().activate(
+        composed_generation = RuntimeGenerationManager().activate(
             tuple(self._capability_manifests.values()),
             catalog_version=self._registry.catalog_version(),
         )
+        runtime_generation = self._runtime_generation or composed_generation
+        if self._runtime_generation is not None:
+            _validate_runtime_generation(
+                self._runtime_generation,
+                tuple(self._capability_manifests.values()),
+            )
         self._built = True
         return HarnessRuntime(
             self._registry,
@@ -495,4 +509,31 @@ def _validate_pack_manifest(
         raise ValueError(
             f"capability manifest {manifest.id} diverges from pack declaration: "
             + ", ".join(mismatches)
+        )
+
+
+def _validate_runtime_generation(
+    generation: RuntimeGeneration,
+    manifests: tuple[CapabilityManifest, ...],
+) -> None:
+    expected = {manifest.id: manifest for manifest in generation.packages}
+    installed = {manifest.id: manifest for manifest in manifests}
+    missing = sorted(set(expected) - set(installed))
+    unexpected = sorted(set(installed) - set(expected))
+    changed = sorted(
+        package_id
+        for package_id in set(expected) & set(installed)
+        if expected[package_id] != installed[package_id]
+    )
+    issues: list[str] = []
+    if missing:
+        issues.append(f"missing packages: {', '.join(missing)}")
+    if unexpected:
+        issues.append(f"unexpected packages: {', '.join(unexpected)}")
+    if changed:
+        issues.append(f"changed manifests: {', '.join(changed)}")
+    if issues:
+        raise ValueError(
+            f"runtime generation {generation.generation_id} does not match "
+            f"installed Capability Packs ({'; '.join(issues)})"
         )

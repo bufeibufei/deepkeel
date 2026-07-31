@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.24.0
+
+- Connect the Capability Package control plane to runtime composition through
+  an explicitly pinned, validated Runtime Generation.
+- Reject resume on an incompatible persisted generation before model or tool
+  execution.
+- Add a reusable Capability Package Store conformance verifier for durable Host
+  adapters.
+
 ## 3.23.0
 
 - Add typed Capability Package budgets, state schema versions, migration
