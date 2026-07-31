@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any, Callable
 from uuid import uuid4
 
+from harness_core.budget import BudgetLedger, BudgetRequest
 from harness_core.contracts import Observation, ToolCall, ToolResult
 from harness_core.capability_control import (
     CapabilityPackageConflict,
@@ -32,6 +33,95 @@ from harness_core.state_store import (
 )
 from harness_core.tools import ToolExecutionStore
 from harness_core.telemetry import TelemetryRecord, TraceQuery, TraceStore
+
+
+def verify_budget_ledger_contract(
+    ledger: BudgetLedger,
+    *,
+    run_id: str,
+) -> None:
+    """Assert idempotent accounting, rejection, peak usage, and monotonic restore."""
+
+    first = ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="model_calls",
+            amount=1,
+            limit=2,
+            operation_id="model:1",
+        )
+    )
+    replay = ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="model_calls",
+            amount=1,
+            limit=2,
+            operation_id="model:1",
+        )
+    )
+    assert first.allowed is True
+    assert replay == first
+    assert ledger.snapshot(run_id).usage["model_calls"] == 1
+
+    second = ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="model_calls",
+            amount=1,
+            limit=2,
+            operation_id="model:2",
+        )
+    )
+    rejected = ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="model_calls",
+            amount=1,
+            limit=2,
+            operation_id="model:3",
+        )
+    )
+    assert second.allowed is True and second.used == 2
+    assert rejected.allowed is False and rejected.used == 2
+    assert ledger.snapshot(run_id).usage["model_calls"] == 2
+
+    ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="tool_concurrency",
+            amount=3,
+            limit=4,
+            operation_id="tools:batch:1",
+            aggregation="max",
+        )
+    )
+    lower_peak = ledger.consume(
+        BudgetRequest(
+            run_id=run_id,
+            metric="tool_concurrency",
+            amount=2,
+            limit=4,
+            operation_id="tools:batch:2",
+            aggregation="max",
+        )
+    )
+    assert lower_peak.allowed is True and lower_peak.used == 3
+
+    ledger.restore(
+        run_id,
+        {
+            "usage": {
+                "model_calls": 1,
+                "tool_concurrency": 4,
+                "input_tokens": 128,
+            }
+        },
+    )
+    restored = ledger.snapshot(run_id).usage
+    assert restored["model_calls"] == 2
+    assert restored["tool_concurrency"] == 4
+    assert restored["input_tokens"] == 128
 
 
 def verify_trace_store_contract(store: TraceStore, *, run_id: str) -> None:

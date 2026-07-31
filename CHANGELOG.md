@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.25.0
+
+- Add a reusable Budget Ledger conformance verifier for durable Host adapters.
+- Verify idempotent accounting, limit rejection, peak aggregation, and
+  monotonic checkpoint restoration without constraining audit retention.
+
 ## 3.24.0
 
 - Connect the Capability Package control plane to runtime composition through

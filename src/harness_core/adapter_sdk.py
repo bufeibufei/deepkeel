@@ -1,6 +1,7 @@
 """Versioned Adapter SDK for models, persistence, policy, and telemetry."""
 
 from harness_core.adapter_conformance import (
+    verify_budget_ledger_contract,
     verify_capability_package_store_contract,
     verify_model_invocation_store_contract,
     verify_runtime_event_projection_contract,
@@ -263,6 +264,7 @@ ADAPTER_SDK_API = (
     "response_format_not_supported",
     "response_format_payload",
     "verify_durable_checkpoint_store_contract",
+    "verify_budget_ledger_contract",
     "verify_capability_package_store_contract",
     "verify_context_summary_cache_contract",
     "verify_model_invocation_store_contract",

@@ -1,4 +1,5 @@
 from harness_core.adapter_sdk import (
+    InMemoryBudgetLedger,
     InMemoryModelInvocationStore,
     InMemoryRuntimeEventJournal,
     verify_model_invocation_store_contract,
@@ -9,6 +10,7 @@ from harness_core.adapter_sdk import (
     verify_runtime_state_store_contract,
     verify_tool_execution_store_contract,
     verify_capability_package_store_contract,
+    verify_budget_ledger_contract,
 )
 from harness_core.extension_sdk import InMemoryCapabilityPackageStore
 from harness_core.runtime_sdk import (
@@ -24,6 +26,13 @@ def test_runtime_state_store_reference_adapter_passes_contract() -> None:
     verify_runtime_state_store_contract(
         InMemoryRuntimeStateStore(),
         run_id="conformance-runtime",
+    )
+
+
+def test_budget_ledger_reference_adapter_passes_contract() -> None:
+    verify_budget_ledger_contract(
+        InMemoryBudgetLedger(),
+        run_id="conformance-budget",
     )
 
 

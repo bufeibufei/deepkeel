@@ -60,7 +60,7 @@ from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUB
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "3.9.0"
+    assert PUBLIC_API_VERSION == "3.10.0"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
         "HARNESS_CORE_VERSION",
