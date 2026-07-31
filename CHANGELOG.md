@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.26.2
+
+- Resolve only the target package's transitive dependency closure during
+  conformance so callers may pass a complete package catalog safely.
+
 ## 3.26.1
 
 - Allow package conformance and certification to install declared dependency

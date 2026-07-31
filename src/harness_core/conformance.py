@@ -414,17 +414,29 @@ def _dependency_order(
     manifest: CapabilityManifest,
     dependency_manifests: tuple[CapabilityManifest, ...],
 ) -> tuple[CapabilityManifest, ...]:
-    pending = {
+    available = {
         item.id: item
         for item in dependency_manifests
         if item.id != manifest.id
     }
-    required_ids = set(manifest.dependencies)
-    missing = sorted(required_ids - set(pending))
+    selected: dict[str, CapabilityManifest] = {}
+    frontier = list(manifest.dependencies)
+    missing: set[str] = set()
+    while frontier:
+        package_id = frontier.pop()
+        if package_id in selected:
+            continue
+        dependency = available.get(package_id)
+        if dependency is None:
+            missing.add(package_id)
+            continue
+        selected[package_id] = dependency
+        frontier.extend(dependency.dependencies)
     if missing:
         raise ValueError(
-            "dependency manifests are missing: " + ", ".join(missing)
+            "dependency manifests are missing: " + ", ".join(sorted(missing))
         )
+    pending = dict(selected)
     ordered: list[CapabilityManifest] = []
     installed: set[str] = set()
     while pending:

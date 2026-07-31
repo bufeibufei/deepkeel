@@ -236,7 +236,18 @@ def test_conformance_installs_declared_dependency_manifests_first() -> None:
     report = validate_capability_pack(
         DependentInventoryPack(),
         manifest=dependent_manifest,
-        dependency_manifests=(foundation,),
+        dependency_manifests=(
+            foundation,
+            CapabilityManifest(
+                id="example.unrelated",
+                version="1.0.0",
+                core_version="*",
+                entrypoint="example.unrelated:Pack",
+                dependencies={
+                    "example.inventory-dependent": ">=1.0.0",
+                },
+            ),
+        ),
     )
 
     assert report.passed is True
