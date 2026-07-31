@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.28.0
+
+- Classify malformed native tool-call arguments as a retryable model contract
+  failure instead of an internal runtime error.
+- Retry a failed native tool call at most once with focused JSON repair
+  guidance while preserving multimodal inputs and forced-tool semantics.
+- Expose the repair category and strategy through model route diagnostics.
+
 ## 3.27.0
 
 - Add provider-neutral text and image message parts backed by opaque media

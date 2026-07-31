@@ -3,7 +3,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from harness_core.budget import InMemoryBudgetLedger
-from harness_core.contracts import AgentMessage
+from harness_core.contracts import AgentMessage, MessageContentPart
 from harness_core.model import RoutedModelGateway
 from harness_core.model_health import InMemoryModelHealthStore
 from harness_core.model_routing import ModelStepContext
@@ -29,6 +29,45 @@ class FakeProvider:
         return {
             "message": {"role": "assistant", "content": self.model},
             "finish_reason": "stop",
+            "model": self.model,
+        }
+
+
+class MalformedThenValidToolProvider:
+    def __init__(self) -> None:
+        self.model = "vision-model"
+        self.model_role = "reasoning"
+        self.base_url = "https://provider.example/v1"
+        self.model_capabilities = {
+            "supports_image_input": True,
+            "supports_forced_tool_choice": True,
+            "source": "test_catalog",
+        }
+        self.calls: list[list[dict]] = []
+
+    def complete_chat(self, messages, *_args, **_kwargs):
+        self.calls.append(messages)
+        arguments = (
+            '{"subject_scope":"person"'
+            if len(self.calls) == 1
+            else '{"subject_scope":"person"}'
+        )
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"tool-call-{len(self.calls)}",
+                        "type": "function",
+                        "function": {
+                            "name": "vision.read_face",
+                            "arguments": arguments,
+                        },
+                    }
+                ],
+            },
+            "finish_reason": "tool_calls",
             "model": self.model,
         }
 
@@ -147,3 +186,80 @@ def test_routed_gateway_fails_explicitly_when_all_models_are_open() -> None:
 
     assert reasoning.calls == 0
     assert fast.calls == 0
+
+
+def test_routed_gateway_repairs_malformed_forced_tool_arguments_once() -> None:
+    provider = MalformedThenValidToolProvider()
+    routes: list[dict] = []
+    gateway = RoutedModelGateway(
+        {"reasoning": provider},
+        router=None,
+        policy_engine=DefaultPolicyEngine(),
+        budget_ledger=InMemoryBudgetLedger(),
+    )
+    context = ModelStepContext(
+        run_id="run-tool-repair",
+        user_id="user-1",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        step_index=0,
+        message_count=1,
+        observation_count=0,
+        tool_result_count=0,
+        available_roles=("reasoning",),
+        model_policy={
+            "mode": "single",
+            "primary_role": "reasoning",
+            "failure_policy": "retry_selected",
+        },
+        forced_tool_name="vision.read_face",
+    )
+    message = AgentMessage(
+        id="message-vision",
+        role="user",
+        content="Read this face image.",
+        content_parts=[
+            MessageContentPart(
+                type="image",
+                uri="attachment://face-image",
+                reference_id="face-image",
+                media_type="image/jpeg",
+            )
+        ],
+    )
+
+    result = gateway.run_turn(
+        [message],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "vision.read_face",
+                    "description": "Read visible facial features.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"subject_scope": {"type": "string"}},
+                        "required": ["subject_scope"],
+                    },
+                },
+            }
+        ],
+        system_prompt="Use the supplied image as evidence.",
+        step_context=context,
+        on_route=routes.append,
+    )
+
+    assert provider.calls and len(provider.calls) == 2
+    assert result.tool_calls[0].name == "vision.read_face"
+    assert result.tool_calls[0].arguments == {"subject_scope": "person"}
+    assert provider.calls[1][0]["role"] == "system"
+    assert "invalid or truncated JSON arguments" in provider.calls[1][0]["content"]
+    assert "attachment://face-image" in str(provider.calls[1])
+    assert any(
+        route.get("failure_category") == "tool_arguments_invalid"
+        for route in routes
+    )
+    assert any(
+        route.get("repair_strategy") == "native_tool_arguments_json"
+        for route in routes
+    )

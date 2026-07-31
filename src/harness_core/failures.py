@@ -196,13 +196,16 @@ def classify_runtime_failure(exc: Exception) -> RuntimeFailure:
             detail=detail,
             exception_type=exception_type,
         )
-    if explicit_code == "MODEL_TOOL_CONTRACT_VIOLATION":
+    if explicit_code in {
+        "MODEL_TOOL_CONTRACT_VIOLATION",
+        "MODEL_TOOL_ARGUMENTS_INVALID",
+    }:
         return RuntimeFailure(
             code=explicit_code,
             category="model_contract",
             retryable=True,
             user_message=(
-                "The model did not honor the required tool call. "
+                "The model response did not satisfy the required tool contract. "
                 "The run ended safely and may be retried."
             ),
             detail=detail,

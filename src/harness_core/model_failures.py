@@ -28,6 +28,21 @@ class ModelToolContractError(RuntimeError):
         self.actual_tools = tuple(actual_tools)
 
 
+class ModelToolArgumentsError(RuntimeError):
+    """The provider emitted malformed native tool-call arguments."""
+
+    code = "MODEL_TOOL_ARGUMENTS_INVALID"
+
+    def __init__(self, reason: str, *, character_count: int = 0) -> None:
+        normalized_reason = str(reason or "invalid_json").strip() or "invalid_json"
+        super().__init__(
+            "model returned invalid native tool arguments: "
+            f"{normalized_reason} (characters={max(0, int(character_count))})"
+        )
+        self.reason = normalized_reason
+        self.character_count = max(0, int(character_count))
+
+
 def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
     status_code = _status_code(exc)
     message = str(exc or "").lower()
@@ -39,6 +54,14 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             status_code,
             0.0,
             "The model did not honor the required tool call; a fallback was attempted.",
+        )
+    if isinstance(exc, ModelToolArgumentsError):
+        return ModelFailureInfo(
+            "tool_arguments_invalid",
+            True,
+            status_code,
+            0.0,
+            "The model returned malformed tool arguments; a repair attempt was made.",
         )
     if status_code == 429 or "too many requests" in message or "rate limit" in message:
         return ModelFailureInfo(

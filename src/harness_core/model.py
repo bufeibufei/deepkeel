@@ -29,6 +29,7 @@ from harness_core.context_window import ConservativeTokenEstimator
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from harness_core.model_failures import (
+    ModelToolArgumentsError,
     ModelToolContractError,
     classify_model_failure,
     provider_fingerprint,
@@ -906,9 +907,14 @@ class RoutedModelGateway:
                     },
                 )
             ) if policy.allowed else None
+            attempt_system_prompt = _system_prompt_for_attempt(
+                system_prompt,
+                previous_failure=previous_failure,
+                forced_tool_name=step_context.forced_tool_name,
+            )
             provider_messages = provider_messages_from_agent(
                 messages,
-                system_prompt=system_prompt,
+                system_prompt=attempt_system_prompt,
             )
             estimated_input_tokens = token_estimator.estimate(
                 {"messages": provider_messages, "tools": tools}
@@ -1006,6 +1012,12 @@ class RoutedModelGateway:
                     "image_input": requires_image_input,
                 },
                 "provider_capabilities": provider_capabilities.model_dump(mode="json"),
+                "repair_strategy": (
+                    "native_tool_arguments_json"
+                    if previous_failure.get("failure_category")
+                    == "tool_arguments_invalid"
+                    else ""
+                ),
                 **previous_failure,
             }
             if not policy.allowed:
@@ -1729,10 +1741,35 @@ def _json_arguments(value: Any) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise RuntimeError("model returned invalid native tool arguments") from exc
+        raise ModelToolArgumentsError(
+            "invalid_json",
+            character_count=len(text),
+        ) from exc
     if not isinstance(parsed, dict):
-        raise RuntimeError("model native tool arguments must be a JSON object")
+        raise ModelToolArgumentsError(
+            "not_an_object",
+            character_count=len(text),
+        )
     return parsed
+
+
+def _system_prompt_for_attempt(
+    system_prompt: str,
+    *,
+    previous_failure: dict[str, Any],
+    forced_tool_name: str = "",
+) -> str:
+    if previous_failure.get("failure_category") != "tool_arguments_invalid":
+        return system_prompt
+    expected = str(forced_tool_name or "").strip()
+    target = f" `{expected}`" if expected else ""
+    instruction = (
+        "The previous native tool call contained invalid or truncated JSON arguments. "
+        f"Retry the required tool call{target} now. Emit exactly one complete JSON object "
+        "that matches the tool schema. Include every required field, close every string, "
+        "array, and object, and do not add prose outside the tool call."
+    )
+    return f"{system_prompt.strip()}\n\n{instruction}".strip()
 
 
 def _model_tool_description(spec: ToolSpec) -> str:

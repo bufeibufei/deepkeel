@@ -11,6 +11,7 @@ from harness_core.failures import (
     failure_from_code,
 )
 from harness_core.model_failures import (
+    ModelToolArgumentsError,
     ModelToolContractError,
     classify_model_failure,
     provider_fingerprint,
@@ -82,11 +83,17 @@ def test_runtime_failure_contract_classifies_model_contract_cancel_and_internal_
     model_contract = classify_runtime_failure(
         ModelToolContractError("report.build", [])
     )
+    malformed_arguments = classify_runtime_failure(
+        ModelToolArgumentsError("invalid_json", character_count=128)
+    )
     canceled = classify_runtime_failure(RunCanceledError())
     internal = classify_runtime_failure(RuntimeError("unexpected"))
 
     assert model_contract.category == "model_contract"
     assert model_contract.retryable is True
+    assert malformed_arguments.code == "MODEL_TOOL_ARGUMENTS_INVALID"
+    assert malformed_arguments.category == "model_contract"
+    assert malformed_arguments.retryable is True
     assert canceled.category == "canceled"
     assert canceled.retryable is False
     assert internal.code == "RUNTIME_INTERNAL_ERROR"
@@ -124,6 +131,16 @@ def test_model_failure_classifier_covers_provider_failure_categories() -> None:
     assert classify_model_failure(invalid).category == "invalid_request"
     assert classify_model_failure(URLError("offline")).category == "provider_unavailable"
     assert classify_model_failure(RuntimeError("unknown")).category == "provider_error"
+
+
+def test_model_failure_classifier_retries_malformed_tool_arguments() -> None:
+    failure = classify_model_failure(
+        ModelToolArgumentsError("invalid_json", character_count=512)
+    )
+
+    assert failure.category == "tool_arguments_invalid"
+    assert failure.retryable is True
+    assert failure.status_code is None
 
 
 def test_model_failure_classifier_retries_provider_parameter_drift_only() -> None:
