@@ -14,6 +14,7 @@ from harness_core.capabilities import (
     CapabilityInstallContext,
     CapabilityPack,
     CapabilityPackSpec,
+    capability_pack_spec_from_manifest,
     capability_pack_spec,
 )
 from harness_core.clarifications import (
@@ -22,7 +23,11 @@ from harness_core.clarifications import (
     clarification_tool_result,
 )
 from harness_core.conformance import (
+    CapabilityLifecycleConformanceReport,
+    CapabilityPackageCertificationReport,
     CapabilityPackConformanceReport,
+    REQUIRED_CAPABILITY_EVAL_TAGS,
+    certify_capability_package,
     validate_capability_pack,
 )
 from harness_core.handoffs import (
@@ -116,7 +121,9 @@ EXTENSION_SDK_API = (
     "CapabilityContribution",
     "CapabilityInstallContext",
     "CapabilityManifest",
+    "CapabilityLifecycleConformanceReport",
     "CapabilityPack",
+    "CapabilityPackageCertificationReport",
     "CapabilityPackConformanceReport",
     "CapabilityPackSpec",
     "CapabilityPackageConflict",
@@ -148,6 +155,7 @@ EXTENSION_SDK_API = (
     "InMemoryCapabilityPackageStore",
     "ReferenceProjection",
     "ReferenceProjector",
+    "REQUIRED_CAPABILITY_EVAL_TAGS",
     "RuntimeGeneration",
     "RuntimeGenerationManager",
     "SkillPackageManifest",
@@ -167,6 +175,8 @@ EXTENSION_SDK_API = (
     "ToolDiscoveryPort",
     "ToolView",
     "capability_pack_spec",
+    "capability_pack_spec_from_manifest",
+    "certify_capability_package",
     "clarification_from_validation_error",
     "clarification_tool_result",
     "discover_tools",

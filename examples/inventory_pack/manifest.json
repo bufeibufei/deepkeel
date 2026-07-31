@@ -1,0 +1,35 @@
+{
+  "schema_version": "harness-capability-manifest-v1",
+  "id": "example.inventory",
+  "version": "1.0.0",
+  "core_contract": "harness-core-v3",
+  "core_version": "*",
+  "entrypoint": "examples.inventory_pack.package:InventoryCapabilityPack",
+  "tools": [
+    "inventory.lookup"
+  ],
+  "permissions": [
+    "inventory.read"
+  ],
+  "tool_permissions": {
+    "inventory.lookup": [
+      "inventory.read"
+    ]
+  },
+  "budget": {
+    "max_model_calls": 3,
+    "max_tool_calls": 2,
+    "max_elapsed_seconds": 30
+  },
+  "state_schema_version": "1",
+  "resume_compatible_versions": [
+    "1.0.0"
+  ],
+  "ui_surfaces": [
+    "inventory.result"
+  ],
+  "metadata": {
+    "domain": "inventory",
+    "purpose": "non-business certification example"
+  }
+}

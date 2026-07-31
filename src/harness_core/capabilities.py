@@ -266,6 +266,50 @@ def capability_pack_spec(pack: object) -> CapabilityPackSpec:
     return declared
 
 
+def capability_pack_spec_from_manifest(manifest: object) -> CapabilityPackSpec:
+    """Derive the executable declaration from the control-plane manifest."""
+
+    from harness_core.capability_manifest import CapabilityManifest
+
+    if not isinstance(manifest, CapabilityManifest):
+        raise TypeError("manifest must be a CapabilityManifest")
+    return CapabilityPackSpec(
+        package_id=manifest.id,
+        contract_version=manifest.core_contract,
+        package_version=manifest.version,
+        declared_tools=manifest.tools,
+        declared_skills=manifest.skills,
+        declared_artifact_types=manifest.artifact_types,
+        declared_handoffs=manifest.handoffs,
+        declared_tool_providers=manifest.mcp_servers,
+        declared_subagents=manifest.subagents,
+        declared_hooks=manifest.hooks,
+        declared_context_contributors=manifest.context_contributors,
+        declared_resources=manifest.resources,
+        required_scopes=manifest.permissions,
+        metadata={
+            **dict(manifest.metadata),
+            "capability_manifest": {
+                "schema_version": manifest.schema_version,
+                "entrypoint": manifest.entrypoint,
+                "dependencies": dict(manifest.dependencies),
+                "budget": manifest.budget.limits(),
+                "tool_permissions": {
+                    name: list(scopes)
+                    for name, scopes in manifest.tool_permissions.items()
+                },
+                "memory_namespaces": list(manifest.memory_namespaces),
+                "ui_surfaces": list(manifest.ui_surfaces),
+                "state_schema_version": manifest.state_schema_version,
+                "resume_compatible_versions": list(
+                    manifest.resume_compatible_versions
+                ),
+                "state_migrations": dict(manifest.state_migrations),
+            },
+        },
+    )
+
+
 def assert_capability_contribution(
     spec: CapabilityPackSpec,
     contribution: CapabilityContribution,

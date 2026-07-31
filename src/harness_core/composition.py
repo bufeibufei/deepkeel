@@ -379,6 +379,10 @@ class HarnessRuntimeBuilder:
         installed_tools = tuple(
             sorted((tools_after - set(tools_before)) | (handlers_after - set(handlers_before)))
         )
+        self._apply_manifest_tool_permissions(
+            spec.package_id,
+            installed_tools or spec.declared_tools,
+        )
         catalog_after = self._capability_catalog.snapshot()
         metadata = contribution.metadata if contribution is not None else {}
         resolved = CapabilityContribution(
@@ -418,6 +422,31 @@ class HarnessRuntimeBuilder:
             )
             raise
         return resolved
+
+    def _apply_manifest_tool_permissions(
+        self,
+        package_id: str,
+        tool_names: tuple[str, ...],
+    ) -> None:
+        manifest = self._capability_manifests[package_id]
+        for tool_name in tool_names:
+            scopes = manifest.tool_permissions.get(tool_name, ())
+            if not scopes:
+                continue
+            tool = self._registry.get(tool_name)
+            runtime_policy = dict(tool.runtime_policy)
+            existing = tuple(
+                str(scope).strip()
+                for scope in runtime_policy.get("required_scopes") or ()
+                if str(scope).strip()
+            )
+            runtime_policy["required_scopes"] = list(
+                dict.fromkeys((*existing, *scopes))
+            )
+            self._registry.register(
+                tool.model_copy(update={"runtime_policy": runtime_policy}),
+                replace=True,
+            )
 
     def _rollback_install(
         self,
@@ -471,6 +500,11 @@ def _manifest_from_pack(
         mcp_servers=spec.declared_tool_providers,
         resources=spec.declared_resources,
         permissions=spec.required_scopes,
+        tool_permissions={
+            tool_name: spec.required_scopes
+            for tool_name in spec.declared_tools
+            if spec.required_scopes
+        },
         metadata=dict(spec.metadata),
     )
 

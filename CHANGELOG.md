@@ -1,5 +1,17 @@
 # Changelog
 
+## 3.26.0
+
+- Make `CapabilityManifest` the single source for package declarations and
+  expose a supported converter to `CapabilityPackSpec`.
+- Add per-tool permission mappings and apply them automatically during runtime
+  composition so package governance declarations are executable.
+- Add a Capability Package certification gate covering structure, permissions,
+  lifecycle, runtime generations, rollback, resume compatibility, and required
+  behavior-evaluation scenarios.
+- Ship the Capability Package V1 guide and a product-neutral inventory package
+  proving second-domain integration through public SDKs only.
+
 ## 3.25.0
 
 - Add a reusable Budget Ledger conformance verifier for durable Host adapters.

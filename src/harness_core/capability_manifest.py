@@ -77,6 +77,7 @@ class CapabilityManifest(BaseModel):
     mcp_servers: tuple[str, ...] = ()
     resources: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
+    tool_permissions: dict[str, tuple[str, ...]] = Field(default_factory=dict)
     memory_namespaces: tuple[str, ...] = ()
     ui_surfaces: tuple[str, ...] = ()
     budget: CapabilityBudgetSpec = Field(default_factory=CapabilityBudgetSpec)
@@ -125,6 +126,37 @@ class CapabilityManifest(BaseModel):
             if str(package_id).strip()
         }
         object.__setattr__(self, "dependencies", normalized_dependencies)
+        normalized_tool_permissions = {
+            str(tool_name).strip(): tuple(
+                dict.fromkeys(
+                    str(scope).strip()
+                    for scope in scopes
+                    if str(scope).strip()
+                )
+            )
+            for tool_name, scopes in self.tool_permissions.items()
+            if str(tool_name).strip()
+        }
+        unknown_tools = sorted(set(normalized_tool_permissions) - set(self.tools))
+        if unknown_tools:
+            raise ValueError(
+                "tool permission mappings reference undeclared tools: "
+                + ", ".join(unknown_tools)
+            )
+        undeclared_permissions = sorted(
+            {
+                scope
+                for scopes in normalized_tool_permissions.values()
+                for scope in scopes
+            }
+            - set(self.permissions)
+        )
+        if undeclared_permissions:
+            raise ValueError(
+                "tool permission mappings reference undeclared permissions: "
+                + ", ".join(undeclared_permissions)
+            )
+        object.__setattr__(self, "tool_permissions", normalized_tool_permissions)
         compatible_versions = tuple(
             dict.fromkeys((*self.resume_compatible_versions, self.version))
         )

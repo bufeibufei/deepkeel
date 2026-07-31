@@ -15,6 +15,11 @@ The package does not contain host tools, database models, API routes or product
 prompts. Consumers integrate through `HarnessRuntimeBuilder`,
 `RuntimePorts` and a versioned Capability Pack. New packs should expose a
 `CapabilityPackSpec` and implement `install(CapabilityInstallContext)`.
+
+For production packages, use the Manifest-first V1 contract and release gate
+described in [Capability Package V1](docs/capability-package-v1.md). A runnable,
+non-domain example is available in
+[`examples/inventory_pack`](examples/inventory_pack).
 There is no implicit registration or legacy Pack adapter in the v3 contract.
 
 ```python
