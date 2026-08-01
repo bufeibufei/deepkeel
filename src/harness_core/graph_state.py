@@ -9,7 +9,14 @@ from uuid import uuid4
 
 from langchain_core.runnables import RunnableConfig
 
-from harness_core.contracts import AgentMessage, Observation, RunContext, ToolCall, ToolResult
+from harness_core.contracts import (
+    AgentMessage,
+    MessageContentPart,
+    Observation,
+    RunContext,
+    ToolCall,
+    ToolResult,
+)
 from harness_core.model import ModelGateway
 from harness_core.skills import DelegationPolicy, SkillPolicy
 from harness_core.tool_registry import ToolRegistry
@@ -523,6 +530,11 @@ def _apply_resume_payload(
     status = str(payload.get("status") or "succeeded")
     summary = str(payload.get("summary") or "The user action is complete.")
     data = payload.get("data") if isinstance(payload.get("data"), dict) else payload
+    content_parts = [
+        MessageContentPart.model_validate(item)
+        for item in as_list(data.get("content_parts") if isinstance(data, dict) else [])
+        if isinstance(item, dict)
+    ]
     observation = Observation(
         id=f"resume-{uuid4()}",
         run_id=current["run_id"],
@@ -568,6 +580,7 @@ def _apply_resume_payload(
                 id=f"user-resume-{uuid4()}",
                 role="user",
                 content=clarification,
+                content_parts=content_parts,
                 metadata={"resume_source": source, "clarification": True},
             ).model_dump(mode="json")
         )

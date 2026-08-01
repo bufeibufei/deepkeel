@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.29.1
+
+- Preserve provider-neutral image content parts when resuming a clarification checkpoint.
+
 ## 3.29.0
 
 - Repair only structurally incomplete native tool-call JSON truncated at the
