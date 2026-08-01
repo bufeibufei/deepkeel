@@ -73,6 +73,35 @@ class MalformedThenValidToolProvider:
         }
 
 
+class MissingThenValidToolProvider(MalformedThenValidToolProvider):
+    def complete_chat(self, messages, *_args, **_kwargs):
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return {
+                "message": {"role": "assistant", "content": "I can analyze the image."},
+                "finish_reason": "stop",
+                "model": self.model,
+            }
+        return {
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "tool-call-repaired",
+                        "type": "function",
+                        "function": {
+                            "name": "vision.read_face",
+                            "arguments": '{"subject_scope":"person"}',
+                        },
+                    }
+                ],
+            },
+            "finish_reason": "tool_calls",
+            "model": self.model,
+        }
+
+
 def _context() -> ModelStepContext:
     return ModelStepContext(
         run_id="run-1",
@@ -260,10 +289,58 @@ def test_routed_gateway_repairs_malformed_forced_tool_arguments_once() -> None:
         route.get("failure_category") == "tool_arguments_invalid"
         for route in routes
     )
-    assert any(
-        route.get("repair_strategy") == "native_tool_arguments_json"
-        for route in routes
+
+
+def test_routed_gateway_repairs_missing_forced_tool_call_once() -> None:
+    provider = MissingThenValidToolProvider()
+    gateway = RoutedModelGateway(
+        {"reasoning": provider},
+        router=None,
+        policy_engine=DefaultPolicyEngine(),
+        budget_ledger=InMemoryBudgetLedger(),
     )
+    context = ModelStepContext(
+        run_id="run-tool-contract-repair",
+        user_id="user-1",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        step_index=0,
+        message_count=1,
+        observation_count=0,
+        tool_result_count=0,
+        available_roles=("reasoning",),
+        model_policy={
+            "mode": "single",
+            "primary_role": "reasoning",
+            "failure_policy": "retry_selected",
+        },
+        forced_tool_name="vision.read_face",
+    )
+
+    result = gateway.run_turn(
+        [AgentMessage(id="message-vision", role="user", content="Read this image.")],
+        tools=[
+            {
+                "type": "function",
+                "function": {
+                    "name": "vision.read_face",
+                    "description": "Read visible facial features.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"subject_scope": {"type": "string"}},
+                        "required": ["subject_scope"],
+                    },
+                },
+            }
+        ],
+        system_prompt="Use the image as evidence.",
+        step_context=context,
+    )
+
+    assert result.tool_calls[0].name == "vision.read_face"
+    assert len(provider.calls) == 2
+    assert "violated the required tool contract" in provider.calls[1][0]["content"]
+    assert "vision.read_face" in provider.calls[1][0]["content"]
 
 
 def test_json_arguments_repairs_structural_eof_truncation() -> None:

@@ -1016,6 +1016,9 @@ class RoutedModelGateway:
                     "native_tool_arguments_json"
                     if previous_failure.get("failure_category")
                     == "tool_arguments_invalid"
+                    else "forced_tool_contract"
+                    if previous_failure.get("failure_category")
+                    == "tool_contract_violation"
                     else ""
                 ),
                 **previous_failure,
@@ -1813,16 +1816,28 @@ def _system_prompt_for_attempt(
     previous_failure: dict[str, Any],
     forced_tool_name: str = "",
 ) -> str:
-    if previous_failure.get("failure_category") != "tool_arguments_invalid":
+    failure_category = previous_failure.get("failure_category")
+    if failure_category not in {
+        "tool_arguments_invalid",
+        "tool_contract_violation",
+    }:
         return system_prompt
     expected = str(forced_tool_name or "").strip()
     target = f" `{expected}`" if expected else ""
-    instruction = (
-        "The previous native tool call contained invalid or truncated JSON arguments. "
-        f"Retry the required tool call{target} now. Emit exactly one complete JSON object "
-        "that matches the tool schema. Include every required field, close every string, "
-        "array, and object, and do not add prose outside the tool call."
-    )
+    if failure_category == "tool_contract_violation":
+        instruction = (
+            "The previous response violated the required tool contract because it did not "
+            f"call the required tool{target}. Call that tool exactly once now. Do not answer "
+            "with prose and do not call any other tool. Populate a complete arguments object "
+            "that matches the supplied tool schema."
+        )
+    else:
+        instruction = (
+            "The previous native tool call contained invalid or truncated JSON arguments. "
+            f"Retry the required tool call{target} now. Emit exactly one complete JSON object "
+            "that matches the tool schema. Include every required field, close every string, "
+            "array, and object, and do not add prose outside the tool call."
+        )
     return f"{system_prompt.strip()}\n\n{instruction}".strip()
 
 
