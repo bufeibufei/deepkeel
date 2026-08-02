@@ -364,6 +364,92 @@ def test_forced_tool_contract_falls_back_to_structured_clarification() -> None:
     assert result.error is None
 
 
+def test_explicit_workflow_can_recover_one_forced_entry_tool_from_trusted_sources() -> None:
+    class IgnoresForcedTool(EchoModelAdapter):
+        def invoke(self, request: ModelInvocation, *, on_text_delta=None) -> ModelTurn:
+            return ModelTurn(
+                content="The workflow is ready.",
+                finish_reason="stop",
+                model_id=self.info.model_id,
+                model_role=self.info.model_role,
+            )
+
+    spec = ToolSpec(
+        name="debate.start",
+        parameters_schema={
+            "type": "object",
+            "properties": {
+                "profile_id": {"type": "string"},
+                "question": {"type": "string"},
+            },
+            "required": ["profile_id", "question"],
+            "additionalProperties": False,
+        },
+        required_args=["profile_id", "question"],
+        requires_user_action=True,
+        runtime_policy={
+            "context_argument_bindings": {"profile_id": ["active_profile.id"]},
+            "forced_tool_contract_fallback": {
+                "enabled": True,
+                "argument_sources": {
+                    "question": ["context.question", "latest_user_message"],
+                },
+            },
+        },
+    )
+    registry = ToolRegistry([spec])
+    executor = ToolExecutor(registry)
+    observed: list[dict[str, str]] = []
+
+    def start_debate(call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        observed.append(dict(call.arguments))
+        return ToolResult(
+            call=call,
+            tool_call_id=call.id,
+            name=call.name,
+            status="requires_user_action",
+            summary="Configure the debate.",
+            pending_action=PendingAction(
+                id="pending-debate",
+                run_id=context.run_id,
+                tool_call_id=call.id,
+                action_type="workflow",
+                prompt="Choose participants.",
+            ),
+        )
+
+    executor.register(spec.name, start_debate)
+    runtime = runtime_sdk.HarnessRuntime(registry, executor)
+
+    result = run_runtime(
+        runtime,
+        "Compare the schools for my career choice.",
+        provider=IgnoresForcedTool(),
+        context_bundle={
+            "agent_session_id": "run-forced-tool-arguments",
+            "active_profile": {"id": "profile-1"},
+        },
+        skill_activation={
+            "skill_id": "debate",
+            "kind": "workflow",
+            "explicit": True,
+            "allowed_tools": ["debate.start"],
+            "required_tools": ["debate.start"],
+            "completion_policy": {
+                "required_transition": "debate.start",
+                "allow_model_clarification": False,
+                "clarification_strategy": "tool_contract",
+            },
+        },
+    )
+
+    assert result.status.value == "waiting_user_action"
+    assert observed == [{
+        "profile_id": "profile-1",
+        "question": "Compare the schools for my career choice.",
+    }]
+
+
 def test_telemetry_failure_is_fail_open_and_visible_in_diagnostics() -> None:
     class BrokenTelemetry:
         def record(self, _event: TelemetryRecord) -> None:

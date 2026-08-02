@@ -1,5 +1,13 @@
 # Changelog
 
+## 3.32.1
+
+- Recover an opt-in explicit workflow's unique required entry tool when a
+  provider ignores a forced-tool contract and every required argument can be
+  resolved from Host-declared context or the latest user message.
+- Keep the recovery inside the normal validation, policy, idempotency, and
+  tool-execution path, with a dedicated diagnostic event.
+
 ## 3.32.0
 
 - Add explicit host-context argument bindings so tool execution can override
