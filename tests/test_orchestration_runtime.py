@@ -145,6 +145,82 @@ def test_deliberation_resumes_without_replaying_opening() -> None:
     assert resumed_executor.requests[0].tasks[0].id.startswith("synthesize-")
 
 
+def test_deliberation_resumes_an_incomplete_opening_without_replaying_completed_participant() -> None:
+    spec = DeliberationSpec(
+        deliberation_id="review-partial-resume",
+        question="Review the evidence.",
+        facts={"record": "stable"},
+        participants=_participants(),
+        moderator_agent_id="review.moderator",
+    )
+    completed = {
+        "argument_id": "review-partial-resume:opening:1:facts-1",
+        "round_index": 1,
+        "phase": "opening",
+        "participant_instance_id": "facts-1",
+        "agent_id": "review.facts",
+        "display_name": "Fact reviewer",
+        "label": "Facts",
+        "status": "completed",
+        "conclusion": "Already checked.",
+    }
+    executor = ScriptedSubAgents(first_decision="synthesize")
+    result = DeliberationCoordinator(executor).run(
+        spec,
+        context=_context(),
+        providers={"reasoning": object()},
+        resume_state={"arguments": [completed], "completed_stages": []},
+    )
+
+    assert [task.agent_id for task in executor.requests[0].tasks] == ["review.risk"]
+    assert len(result.arguments) == 2
+    assert result.diagnostics["recovery"] == {
+        "resume_count": 1,
+        "recovered_argument_count": 1,
+    }
+
+
+def test_deliberation_stop_after_opening_skips_moderation_and_still_synthesizes() -> None:
+    executor = ScriptedSubAgents(first_decision="continue")
+    result = DeliberationCoordinator(executor).run(
+        DeliberationSpec(
+            deliberation_id="review-stop",
+            question="Stop after opening.",
+            facts={"record": "stable"},
+            participants=_participants(),
+            moderator_agent_id="review.moderator",
+        ),
+        context=_context(),
+        providers={"reasoning": object()},
+        should_stop=lambda: bool(executor.requests),
+    )
+
+    phases = [task.input_data.get("phase") for request in executor.requests for task in request.tasks]
+    assert phases == ["opening", "opening", "synthesize"]
+    assert result.stop_reason == "user_stop_and_summarize"
+
+
+def test_deliberation_preexisting_stop_completes_one_opening_batch_before_synthesis() -> None:
+    executor = ScriptedSubAgents(first_decision="continue")
+    result = DeliberationCoordinator(executor).run(
+        DeliberationSpec(
+            deliberation_id="review-pre-stopped",
+            question="Summarize one useful opening batch.",
+            facts={"record": "stable"},
+            participants=_participants(),
+            moderator_agent_id="review.moderator",
+        ),
+        context=_context(),
+        providers={"reasoning": object()},
+        should_stop=lambda: True,
+    )
+
+    phases = [task.input_data.get("phase") for request in executor.requests for task in request.tasks]
+    assert phases == ["opening", "opening", "synthesize"]
+    assert result.status == "completed"
+    assert result.stop_reason == "user_stop_and_summarize"
+
+
 def test_deliberation_scopes_participant_facts_and_reports_diagnostics() -> None:
     executor = ScriptedSubAgents(first_decision="synthesize")
     participants = _participants()

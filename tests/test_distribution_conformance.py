@@ -41,7 +41,7 @@ def test_mcp_and_subagent_conformance() -> None:
 
 
 def test_source_installation_identity_conformance() -> None:
-    assert harness_core.HARNESS_CORE_VERSION == "3.31.0"
+    assert harness_core.HARNESS_CORE_VERSION == "3.32.0"
     assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
@@ -60,7 +60,7 @@ def test_source_installation_identity_conformance() -> None:
         SDK_API_VERSION,
     )
 
-    assert PACKAGE_VERSION == "3.31.0"
+    assert PACKAGE_VERSION == "3.32.0"
     assert RUNTIME_CONTRACT_VERSION == "harness-core-v3"
     assert EVENT_SCHEMA_VERSION == "harness-runtime-event-v1"
     assert SDK_API_VERSION == "3.13.0"

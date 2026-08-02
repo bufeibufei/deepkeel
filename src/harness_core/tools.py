@@ -481,6 +481,7 @@ class ToolExecutor:
 
         try:
             normalized = call.model_copy(update={"arguments": normalize_arguments(call.arguments, spec)})
+            normalized = _bind_authoritative_context_arguments(normalized, context, spec)
         except (TypeError, ValueError) as exc:
             return _with_runtime_metrics(
                 _failed_result(call, str(exc)),
@@ -969,6 +970,52 @@ class ToolExecutor:
                     f"{errors[0].message}"
                 )
         return ""
+
+
+def _bind_authoritative_context_arguments(
+    call: ToolCall,
+    context: ToolExecutionContext,
+    spec: ToolSpec,
+) -> ToolCall:
+    """Replace model-provided arguments with explicitly bound Host context."""
+
+    bindings = spec.runtime_policy.get("context_argument_bindings")
+    if not isinstance(bindings, dict) or not bindings:
+        return call
+    document = {
+        **context.context_bundle,
+        "run_id": context.run_id,
+        "user_id": context.user_id,
+        "thread_id": context.thread_id,
+        "turn_id": context.turn_id,
+    }
+    arguments = dict(call.arguments)
+    changed = False
+    for argument_name, configured_paths in bindings.items():
+        paths = configured_paths if isinstance(configured_paths, list) else [configured_paths]
+        value = next(
+            (
+                resolved
+                for path in paths
+                if isinstance(path, str)
+                and (resolved := _context_path_value(document, path)) not in (None, "")
+            ),
+            None,
+        )
+        name = str(argument_name).strip()
+        if name and value is not None and arguments.get(name) != value:
+            arguments[name] = deepcopy(value)
+            changed = True
+    return call.model_copy(update={"arguments": arguments}) if changed else call
+
+
+def _context_path_value(document: Mapping[str, Any], path: str) -> Any:
+    current: Any = document
+    for segment in (part for part in path.split(".") if part):
+        if not isinstance(current, Mapping) or segment not in current:
+            return None
+        current = current[segment]
+    return current
 
 
 def _confirmation_grant(context: ToolExecutionContext, call: ToolCall) -> dict[str, Any]:

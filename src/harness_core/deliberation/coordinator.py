@@ -60,8 +60,10 @@ class DeliberationCoordinator:
                 providers=providers,
                 event_sink=event_sink,
                 prior_arguments=[],
+                existing_arguments=state["arguments"],
+                should_stop=stop_requested,
             )
-            state["arguments"].extend(opening)
+            state["arguments"] = _merge_arguments(state["arguments"], opening)
             state["model_calls"] += calls
             state["retry_count"] += retries
             state["completed_stages"].append("opening")
@@ -73,8 +75,15 @@ class DeliberationCoordinator:
 
         round_index = max(1, max((item.round_index for item in state["arguments"]), default=1))
         moderation_key = f"moderate:{round_index}"
-        moderator = state["moderation_history"][-1] if state["moderation_history"] else {}
-        if moderation_key not in state["completed_stages"]:
+        stopped_after_opening = stop_requested()
+        moderator = (
+            state["moderation_history"][-1]
+            if state["moderation_history"]
+            else {"decision": "synthesize", "status": "skipped"}
+            if stopped_after_opening
+            else {}
+        )
+        if moderation_key not in state["completed_stages"] and not stopped_after_opening:
             self._emit_stage_started(
                 event_sink,
                 spec,
@@ -96,7 +105,7 @@ class DeliberationCoordinator:
             state["completed_stages"].append(moderation_key)
             self._checkpoint(checkpoint_sink, "moderating", state)
 
-        stop_reason = "moderator_converged"
+        stop_reason = "user_stop_and_summarize" if stopped_after_opening else "moderator_converged"
         while True:
             decision = self._moderator_decision(moderator, round_index)
             targets = self._target_participants(spec, moderator)
@@ -135,8 +144,10 @@ class DeliberationCoordinator:
                     prior_arguments=state["arguments"],
                     moderator=moderator,
                     participants=targets,
+                    existing_arguments=state["arguments"],
+                    should_stop=stop_requested,
                 )
-                state["arguments"].extend(rebuttals)
+                state["arguments"] = _merge_arguments(state["arguments"], rebuttals)
                 state["model_calls"] += calls
                 state["retry_count"] += retries
                 state["completed_stages"].append(rebuttal_key)
@@ -203,8 +214,28 @@ class DeliberationCoordinator:
         prior_arguments: list[DeliberationArgument],
         moderator: dict[str, Any] | None = None,
         participants=None,
+        existing_arguments: list[DeliberationArgument] | None = None,
+        should_stop: Callable[[], bool] | None = None,
     ) -> tuple[list[DeliberationArgument], int, int]:
         selected = list(participants or spec.participants)
+        completed_ids = {
+            item.argument_id
+            for item in (existing_arguments or [])
+            if item.status == "completed"
+        }
+        selected = [
+            item
+            for item in selected
+            if _argument_id(spec, phase, round_index, item.participant_instance_id)
+            not in completed_ids
+        ]
+        stop_before_batch = (
+            should_stop is not None
+            and should_stop()
+            and (phase != "opening" or bool(completed_ids))
+        )
+        if not selected or stop_before_batch:
+            return [], 0, 0
         tasks = [self._participant_task(spec, item, phase, round_index, prior_arguments, moderator) for item in selected]
         results, calls, retries = self._execute_with_retry(
             spec,
@@ -213,13 +244,19 @@ class DeliberationCoordinator:
             providers=providers,
             event_sink=event_sink,
             stage=f"{phase}:{round_index}",
+            should_stop=should_stop,
         )
         by_agent = {item.agent_id: item for item in results}
         arguments = []
         for participant in selected:
             item = by_agent.get(participant.agent_id)
             argument = DeliberationArgument(
-                argument_id=f"{spec.deliberation_id}:{phase}:{round_index}:{participant.participant_instance_id}",
+                argument_id=_argument_id(
+                    spec,
+                    phase,
+                    round_index,
+                    participant.participant_instance_id,
+                ),
                 round_index=round_index,
                 phase=phase,
                 participant_instance_id=participant.participant_instance_id,
@@ -278,6 +315,10 @@ class DeliberationCoordinator:
                 "participant_instance_id": participant.participant_instance_id,
                 "participant_label": participant.label,
                 "fact_keys": list(participant.fact_keys),
+                "deliberation_id": spec.deliberation_id,
+                "deliberation_phase": phase,
+                "deliberation_round": round_index,
+                "deliberation_role": "participant",
             },
         )
 
@@ -303,6 +344,12 @@ class DeliberationCoordinator:
                 "Do not decide by vote or introduce facts beyond the supplied facts and read-only tool results",
                 "The moderation phase must state its decision, unresolved questions, and target agent IDs",
             ],
+            metadata={
+                "deliberation_id": spec.deliberation_id,
+                "deliberation_phase": phase,
+                "deliberation_round": round_index,
+                "deliberation_role": "moderator",
+            },
         )
         results, calls, retries = self._execute_with_retry(
             spec,
@@ -334,7 +381,17 @@ class DeliberationCoordinator:
         self._emit(event_sink, f"deliberation.{phase}.completed", "The lead agent completed phase synthesis", spec, payload)
         return payload, calls, retries
 
-    def _execute_with_retry(self, spec, tasks, *, context, providers, event_sink, stage):
+    def _execute_with_retry(
+        self,
+        spec,
+        tasks,
+        *,
+        context,
+        providers,
+        event_sink,
+        stage,
+        should_stop: Callable[[], bool] | None = None,
+    ):
         batch = self.subagents.execute_many(
             DelegationRequest(
                 delegation_id=f"{spec.deliberation_id}:{stage}",
@@ -356,6 +413,8 @@ class DeliberationCoordinator:
             # A parallel provider burst can fail as one unit. Retry failed specialists
             # serially so the recovery path does not reproduce the same upstream load.
             for index, task in enumerate(failed, start=1):
+                if should_stop is not None and should_stop():
+                    break
                 retry_batch = self.subagents.execute_many(
                     DelegationRequest(
                         delegation_id=f"{spec.deliberation_id}:{stage}:retry-{index}",
@@ -441,6 +500,8 @@ class DeliberationCoordinator:
             "retry_count": int(source.get("retry_count") or 0),
             "completed_stages": list(source.get("completed_stages") or []),
             "profile": dict(source.get("profile") or {}),
+            "resume_count": int(source.get("resume_count") or 0) + (1 if source else 0),
+            "recovered_argument_count": len(arguments) if source else 0,
         }
 
     @staticmethod
@@ -493,6 +554,11 @@ class DeliberationCoordinator:
                 "remaining": max(0, spec.max_model_calls - int(state.get("model_calls") or 0)),
                 "synthesis_reserve_calls": spec.synthesis_reserve_calls,
             },
+            "recovery": {
+                "resume_count": int(state.get("resume_count") or 0),
+                "recovered_argument_count": int(state.get("recovered_argument_count") or 0),
+            },
+            "participants": _participant_diagnostics(spec, arguments),
         }
 
     def _emit_stage_started(
@@ -548,6 +614,59 @@ def _participant_facts(facts: dict[str, Any], fact_keys: list[str]) -> dict[str,
         if key in facts and key not in selected:
             selected[key] = copy.deepcopy(facts[key])
     return selected
+
+
+def _argument_id(
+    spec: DeliberationSpec,
+    phase: DeliberationPhase,
+    round_index: int,
+    participant_instance_id: str,
+) -> str:
+    return f"{spec.deliberation_id}:{phase}:{round_index}:{participant_instance_id}"
+
+
+def _merge_arguments(
+    current: list[DeliberationArgument],
+    incoming: list[DeliberationArgument],
+) -> list[DeliberationArgument]:
+    by_id = {item.argument_id: item for item in current}
+    order = [item.argument_id for item in current]
+    for item in incoming:
+        if item.argument_id not in by_id:
+            order.append(item.argument_id)
+        previous = by_id.get(item.argument_id)
+        if previous is None or item.status == "completed" or previous.status != "completed":
+            by_id[item.argument_id] = item
+    return [by_id[argument_id] for argument_id in order]
+
+
+def _participant_diagnostics(
+    spec: DeliberationSpec,
+    arguments: list[DeliberationArgument],
+) -> list[dict[str, Any]]:
+    rows = []
+    for participant in spec.participants:
+        views = [
+            item
+            for item in arguments
+            if item.participant_instance_id == participant.participant_instance_id
+        ]
+        completed = [item for item in views if item.status == "completed"]
+        latest = views[-1] if views else None
+        rows.append(
+            {
+                "agent_id": participant.agent_id,
+                "participant_instance_id": participant.participant_instance_id,
+                "display_name": participant.display_name,
+                "status": "completed" if completed else latest.status if latest else "pending",
+                "completed_rounds": sorted({item.round_index for item in completed}),
+                "model_role": latest.model_role if latest else "",
+                "model_id": latest.model_id if latest else "",
+                "duration_ms": sum(item.duration_ms for item in views),
+                "error": latest.error if latest and latest.status != "completed" else "",
+            }
+        )
+    return rows
 
 
 def _score(value) -> float | None:

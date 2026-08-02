@@ -1,5 +1,16 @@
 # Changelog
 
+## 3.32.0
+
+- Add explicit host-context argument bindings so tool execution can override
+  model-invented identity and resource parameters before handler dispatch.
+- Resume incomplete deliberation stages without replaying participants that
+  already completed the same stable round argument.
+- Make soft-stop requests converge after the current opening batch, skip new
+  moderation/rebuttal work, and still produce a lead-agent synthesis.
+- Expose participant, retry, recovery, model-route, and partial-failure
+  diagnostics in durable deliberation results.
+
 ## 3.31.0
 
 - Add participant-scoped fact views and instructions to the product-neutral
