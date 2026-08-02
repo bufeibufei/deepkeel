@@ -12,6 +12,7 @@ class ModelFailureInfo:
     status_code: int | None
     retry_after_seconds: float
     public_message: str
+    degrades_provider_health: bool = True
 
 
 class ModelToolContractError(RuntimeError):
@@ -54,6 +55,7 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             status_code,
             0.0,
             "The model did not honor the required tool call; a fallback was attempted.",
+            False,
         )
     if isinstance(exc, ModelToolArgumentsError):
         return ModelFailureInfo(
@@ -62,6 +64,7 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             status_code,
             0.0,
             "The model returned malformed tool arguments; a repair attempt was made.",
+            False,
         )
     if status_code == 429 or "too many requests" in message or "rate limit" in message:
         return ModelFailureInfo(

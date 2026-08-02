@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -5,7 +6,7 @@ import pytest
 from harness_core.budget import InMemoryBudgetLedger
 from harness_core.contracts import AgentMessage, MessageContentPart
 from harness_core.model import RoutedModelGateway, _json_arguments
-from harness_core.model_failures import ModelToolArgumentsError
+from harness_core.model_failures import ModelToolArgumentsError, ModelToolContractError
 from harness_core.model_health import InMemoryModelHealthStore
 from harness_core.model_routing import ModelStepContext
 from harness_core.policy import DefaultPolicyEngine
@@ -98,6 +99,22 @@ class MissingThenValidToolProvider(MalformedThenValidToolProvider):
                 ],
             },
             "finish_reason": "tool_calls",
+            "model": self.model,
+        }
+
+
+class RepeatedlyMissingToolThenAnswersProvider(MalformedThenValidToolProvider):
+    def complete_chat(self, messages, *_args, **_kwargs):
+        self.calls.append(messages)
+        if len(self.calls) <= 2:
+            return {
+                "message": {"role": "assistant", "content": "I will answer directly."},
+                "finish_reason": "stop",
+                "model": self.model,
+            }
+        return {
+            "message": {"role": "assistant", "content": "The workflow result is ready."},
+            "finish_reason": "stop",
             "model": self.model,
         }
 
@@ -341,6 +358,64 @@ def test_routed_gateway_repairs_missing_forced_tool_call_once() -> None:
     assert len(provider.calls) == 2
     assert "violated the required tool contract" in provider.calls[1][0]["content"]
     assert "vision.read_face" in provider.calls[1][0]["content"]
+
+
+def test_tool_contract_repairs_do_not_open_provider_health_circuit() -> None:
+    provider = RepeatedlyMissingToolThenAnswersProvider()
+    health = InMemoryModelHealthStore(failure_threshold=1)
+    gateway = RoutedModelGateway(
+        {"reasoning": provider},
+        router=None,
+        policy_engine=DefaultPolicyEngine(),
+        budget_ledger=InMemoryBudgetLedger(),
+        model_health_store=health,
+    )
+    forced_context = ModelStepContext(
+        run_id="run-tool-contract-health",
+        user_id="user-1",
+        thread_id="thread-1",
+        turn_id="turn-1",
+        step_index=0,
+        message_count=1,
+        observation_count=0,
+        tool_result_count=0,
+        available_roles=("reasoning",),
+        model_policy={
+            "mode": "single",
+            "primary_role": "reasoning",
+            "failure_policy": "retry_selected",
+        },
+        forced_tool_name="vision.read_face",
+    )
+    tools = [{
+        "type": "function",
+        "function": {
+            "name": "vision.read_face",
+            "description": "Read visible facial features.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+    }]
+
+    with pytest.raises(ModelToolContractError):
+        gateway.run_turn(
+            [AgentMessage(id="message-vision", role="user", content="Read this image.")],
+            tools=tools,
+            step_context=forced_context,
+        )
+
+    provider_info = gateway.providers["reasoning"].info
+    snapshot = health.snapshot(provider_info.provider_id, provider_info.model_id)
+    assert snapshot.is_available() is True
+    assert snapshot.consecutive_failures == 0
+
+    result = gateway.run_turn(
+        [AgentMessage(id="message-result", role="user", content="Summarize the result.")],
+        tools=[],
+        step_context=replace(forced_context, step_index=1, forced_tool_name=""),
+    )
+
+    assert result.content == "The workflow result is ready."
+    assert len(provider.calls) == 3
 
 
 def test_json_arguments_repairs_structural_eof_truncation() -> None:

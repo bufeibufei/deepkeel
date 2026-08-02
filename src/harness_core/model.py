@@ -1234,7 +1234,7 @@ class RoutedModelGateway:
                         on_route(route_payload)
                     raise BudgetExceededError(failed_output_budget) from exc
                 failure = classify_model_failure(exc)
-                if failure.retryable:
+                if failure.retryable and failure.degrades_provider_health:
                     route_payload["health"] = self.model_health_store.record_failure(
                         provider.info.provider_id,
                         provider.info.model_id,

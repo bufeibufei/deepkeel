@@ -91,9 +91,15 @@ def test_runtime_failure_contract_classifies_model_contract_cancel_and_internal_
 
     assert model_contract.category == "model_contract"
     assert model_contract.retryable is True
+    assert classify_model_failure(
+        ModelToolContractError("report.build", [])
+    ).degrades_provider_health is False
     assert malformed_arguments.code == "MODEL_TOOL_ARGUMENTS_INVALID"
     assert malformed_arguments.category == "model_contract"
     assert malformed_arguments.retryable is True
+    assert classify_model_failure(
+        ModelToolArgumentsError("invalid_json", character_count=128)
+    ).degrades_provider_health is False
     assert canceled.category == "canceled"
     assert canceled.retryable is False
     assert internal.code == "RUNTIME_INTERNAL_ERROR"
