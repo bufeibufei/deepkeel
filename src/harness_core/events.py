@@ -112,6 +112,10 @@ def event_runtime_status(event: dict[str, Any]) -> str | None:
         return "reasoning"
     if event_type in {"tool.started", "tool.call.started"}:
         return "executing_tools"
+    if event_type in {"subagent.batch.started", "subagent.started"}:
+        return "executing_tools"
+    if event_type == "subagent.needs_input":
+        return "waiting_user"
     if event_type in {"tool.requires_user_action", "tool.call.requires_user_action"}:
         return "waiting_user"
     if event_type in {"tool.waiting_async", "run.waiting_async"}:

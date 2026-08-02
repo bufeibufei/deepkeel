@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from harness_core.contracts import (
     Observation,
     ObservationStatus,
+    PendingAction,
     ResultOutcome,
     ToolCall,
     ToolResult,
@@ -122,6 +123,39 @@ class DelegationToolHandler:
                 retryable=True,
                 metadata={"visible_label": "Specialist collaboration incomplete"},
             )
+        if batch.status == "needs_input":
+            pending_result = batch.pending_input_results[0]
+            input_request = pending_result.input_request
+            if input_request is None:
+                raise RuntimeError("needs_input delegation result is missing input_request")
+            pending = PendingAction(
+                id=f"{call.id}:subagent-input",
+                run_id=context.run_id,
+                tool_call_id=call.id,
+                action_type="subagent_input",
+                title="More information is needed",
+                prompt=input_request.prompt,
+                payload={
+                    "delegation": batch.parent_payload(),
+                    "resume_token": input_request.resume_token,
+                    "requirements": list(input_request.requirements),
+                    "input_schema": dict(input_request.input_schema),
+                },
+            )
+            return _result(
+                call,
+                context,
+                status="requires_user_action",
+                outcome="partial",
+                summary=input_request.prompt,
+                data=batch.parent_payload(),
+                pending_action=pending,
+                metadata={
+                    "visible_label": "Waiting for additional information",
+                    "parent_projection": True,
+                    "subagent_needs_input": True,
+                },
+            )
         outcome = batch.status if batch.status != "failed" else "degraded"
         return _result(
             call,
@@ -214,6 +248,7 @@ def _result(
     data: dict[str, Any] | None = None,
     error: str = "",
     retryable: bool = False,
+    pending_action: PendingAction | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> ToolResult:
     if status == "succeeded":
@@ -243,6 +278,7 @@ def _result(
         data=dict(data or {}),
         error=error,
         retryable=retryable,
+        pending_action=pending_action,
         observation=observation,
         metadata=dict(metadata or {}),
     )

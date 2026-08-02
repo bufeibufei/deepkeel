@@ -132,6 +132,22 @@ def _output_schema(spec: SubAgentSpec) -> dict[str, Any]:
         "warnings": {"type": "array", "items": {"type": "string"}},
         "confidence": {"type": ["number", "null"]},
         "abstained": {"type": "boolean"},
+        "status": {
+            "type": "string",
+            "enum": ["completed", "needs_input"],
+        },
+        "input_request": {
+            "type": ["object", "null"],
+            "properties": {
+                "prompt": {"type": "string"},
+                "requirements": {"type": "array", "items": {"type": "string"}},
+                "input_schema": {"type": "object"},
+                "resume_token": {"type": "string"},
+                "metadata": {"type": "object"},
+            },
+        },
+        "artifact_refs": {"type": "array", "items": {"type": "object"}},
+        "context_refs": {"type": "array", "items": {"type": "object"}},
     }
     contract = dict(spec.output_contract or {})
     nested = contract.get("schema")

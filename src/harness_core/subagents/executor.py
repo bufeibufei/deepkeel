@@ -14,7 +14,9 @@ from harness_core.model_capabilities import InMemoryModelCapabilityRegistry
 from harness_core.model_routing import ModelStepContext
 from harness_core.skills import DelegationPolicy
 from harness_core.subagents.contracts import (
+    SUBAGENT_EVENT_SCHEMA_VERSION,
     DelegationBatchResult, DelegationRequest, DelegationTask,
+    SubAgentArtifactRef, SubAgentContextRef, SubAgentInputRequest,
     SubAgentResult, SubAgentSpec,
 )
 from harness_core.subagents.execution_types import (
@@ -99,6 +101,22 @@ class SubAgentExecutor:
             task.id: _child_run_id(parent_run_id, request.delegation_id, task)
             for task in request.tasks
         }
+        request = request.model_copy(
+            update={
+                "root_run_id": root_run_id,
+                "parent_run_id": parent_run_id,
+                "tasks": [
+                    task.bind_lineage(
+                        root_run_id=root_run_id,
+                        parent_run_id=parent_run_id,
+                        delegation_id=request.delegation_id,
+                        depth=request.depth,
+                        child_run_id=child_ids[task.id],
+                    )
+                    for task in request.tasks
+                ],
+            }
+        )
         self._emit(
             event_sink,
             "subagent.batch.started",
@@ -199,6 +217,8 @@ class SubAgentExecutor:
                             agent_id=task.agent_id,
                             child_run_id=child_ids[task.id],
                             status="canceled",
+                            idempotency_key=task.effective_idempotency_key,
+                            lineage=task.lineage,
                             error=str(exc),
                         )
                     except Exception as exc:
@@ -207,13 +227,19 @@ class SubAgentExecutor:
                             agent_id=task.agent_id,
                             child_run_id=child_ids[task.id],
                             status="failed",
+                            idempotency_key=task.effective_idempotency_key,
+                            lineage=task.lineage,
                             error=str(exc),
                             raw_text=str(getattr(exc, "raw_text", "") or ""),
                             metadata={
                                 "diagnostics": dict(getattr(exc, "diagnostics", {}) or {}),
                             },
                         )
-                    if result.status == "completed" and not self._parent_accepts_results(parent_run_id):
+                    if (
+                        result.status == "completed"
+                        and task.cancellation.discard_late_result
+                        and not self._parent_accepts_results(parent_run_id)
+                    ):
                         result = result.model_copy(
                             update={
                                 "status": "canceled",
@@ -239,6 +265,7 @@ class SubAgentExecutor:
                         {
                             "completed": "subagent.completed",
                             "canceled": "subagent.canceled",
+                            "needs_input": "subagent.needs_input",
                         }.get(result.status, "subagent.failed"),
                         request,
                         task,
@@ -252,18 +279,23 @@ class SubAgentExecutor:
             index for index, task in enumerate(request.tasks) if task.id == item.task_id
         ))
         completed = sum(result.status == "completed" for result in ordered)
+        failed = sum(result.status == "failed" for result in ordered)
         canceled = sum(result.status == "canceled" for result in ordered)
+        needs_input = sum(result.status == "needs_input" for result in ordered)
         degraded = sum(result.outcome == "degraded" for result in ordered)
         fail_batch = any(
-            result.status != "completed"
+            result.status in {"failed", "canceled"}
             and self.registry.get(result.agent_id).failure_policy == "fail_batch"
             for result in ordered
         )
-        status: Literal["completed", "partial", "failed", "canceled"] = (
+        status: Literal["completed", "partial", "failed", "canceled", "needs_input"] = (
+            "failed"
+            if fail_batch
+            else "needs_input"
+            if needs_input
+            else
             "canceled"
             if canceled == len(ordered)
-            else "failed"
-            if fail_batch
             else "completed"
             if completed == len(ordered)
             else "partial"
@@ -293,7 +325,9 @@ class SubAgentExecutor:
                 "duration_ms": batch.duration_ms,
                 "completed_count": completed,
                 "degraded_count": degraded,
-                "failed_count": len(ordered) - completed,
+                "failed_count": failed,
+                "canceled_count": canceled,
+                "needs_input_count": needs_input,
             },
         )
         return batch
@@ -353,13 +387,20 @@ class SubAgentExecutor:
     ) -> SubAgentResult:
         started_at = time.perf_counter()
         try:
-            self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+            self._raise_if_canceled(
+                child_run_id,
+                parent_run_id,
+                context=context,
+                task=task,
+            )
         except SubAgentCanceledError:
             return SubAgentResult(
                 task_id=task.id,
                 agent_id=task.agent_id,
                 child_run_id=child_run_id,
                 status="canceled",
+                idempotency_key=task.effective_idempotency_key,
+                lineage=task.lineage,
                 error="parent agent run is terminal",
                 metadata={"late_result_discarded": True},
             )
@@ -372,6 +413,28 @@ class SubAgentExecutor:
         system_prompt = spec.system_prompt or _default_system_prompt(spec)
         schema = _output_schema(spec)
         resume_state = self._load_child_checkpoint(child_run_id)
+        child_deadline_monotonic = self._task_deadline_monotonic(
+            context,
+            task,
+            spec,
+        )
+        task_quota = _DelegationQuota(
+            max_model_calls=_minimum_optional(
+                spec.max_model_calls,
+                task.budget.max_model_calls,
+            ),
+            max_tool_calls=_minimum_optional(
+                spec.max_tool_calls,
+                task.budget.max_tool_calls,
+            ),
+            model_calls=int((resume_state or {}).get("model_calls") or 0),
+            tool_calls=int((resume_state or {}).get("tool_calls") or 0),
+        )
+        effective_model_call_limit = _minimum_optional(
+            model_call_limit,
+            spec.max_model_calls,
+            task.budget.max_model_calls,
+        )
         raw, tool_trace, model_calls, structured_output = self._run_bounded_agent(
             task,
             spec=spec,
@@ -384,12 +447,19 @@ class SubAgentExecutor:
             output_schema=schema,
             root_run_id=root_run_id,
             budget_ledger=budget_ledger,
-            model_call_limit=model_call_limit,
+            model_call_limit=effective_model_call_limit,
             parent_run_id=parent_run_id,
             resume_state=resume_state,
             quota=quota,
+            task_quota=task_quota,
+            deadline_monotonic=child_deadline_monotonic,
         )
-        self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+        self._raise_if_canceled(
+            child_run_id,
+            parent_run_id,
+            context=context,
+            task=task,
+        )
         output_outcome: Literal["completed", "degraded"] = "completed"
         output_diagnostics: dict[str, Any] = {}
         try:
@@ -416,7 +486,12 @@ class SubAgentExecutor:
                     "recovered_from_checkpoint": True,
                 }
             else:
-                self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+                self._raise_if_canceled(
+                    child_run_id,
+                    parent_run_id,
+                    context=context,
+                    task=task,
+                )
                 _consume_model_budget(
                     budget_ledger,
                     root_run_id=root_run_id,
@@ -425,6 +500,7 @@ class SubAgentExecutor:
                     model_call_limit=model_call_limit,
                     step_index=model_calls,
                     quota=quota,
+                    task_quota=task_quota,
                 )
                 repair_prompt = _repair_prompt(prompt, raw, schema, str(first_error), tool_trace)
                 repair_invocation = _invoke_provider(
@@ -432,17 +508,22 @@ class SubAgentExecutor:
                     system_prompt,
                     repair_prompt,
                     timeout_seconds=remaining_timeout_ceiling(
-                        context.deadline_monotonic,
-                        maximum=spec.timeout_seconds,
+                        child_deadline_monotonic,
+                        maximum=self._task_timeout_seconds(task, spec),
                     ),
-                    max_tokens=spec.max_tokens,
+                    max_tokens=self._task_max_tokens(task, spec),
                     output_schema=schema,
                     capability_registry=self.model_capabilities,
                 )
                 repaired = repair_invocation.text
                 structured_output["repair"] = repair_invocation.diagnostics()
-                self._raise_if_canceled(child_run_id, parent_run_id, context=context)
-                ensure_time_remaining(context.deadline_monotonic)
+                self._raise_if_canceled(
+                    child_run_id,
+                    parent_run_id,
+                    context=context,
+                    task=task,
+                )
+                ensure_time_remaining(child_deadline_monotonic)
                 model_calls += 1
                 self._checkpoint_child(
                     child_run_id,
@@ -450,6 +531,8 @@ class SubAgentExecutor:
                     state={
                         "schema_version": "subagent-execution-v1",
                         "task_id": task.id,
+                        "idempotency_key": task.effective_idempotency_key,
+                        "lineage": task.lineage.model_dump(mode="json"),
                         "spec_version": spec.version,
                         "phase": "repair_completed",
                         "raw_text": repaired,
@@ -484,8 +567,57 @@ class SubAgentExecutor:
                         "repair_error": str(repair_error),
                     }
         conclusion = str(parsed.get("conclusion") or parsed.get("summary") or raw).strip()
+        if str(parsed.get("status") or "") == "needs_input":
+            request_payload = parsed.get("input_request")
+            request_payload = request_payload if isinstance(request_payload, dict) else {}
+            prompt = str(request_payload.get("prompt") or conclusion).strip()
+            input_request = SubAgentInputRequest.model_validate(
+                {
+                    **request_payload,
+                    "prompt": prompt,
+                }
+            )
+            return SubAgentResult(
+                task_id=task.id,
+                agent_id=task.agent_id,
+                child_run_id=child_run_id,
+                status="needs_input",
+                outcome="needs_input",
+                conclusion=conclusion,
+                input_request=input_request,
+                context_refs=list(task.context_refs),
+                artifact_refs=list(task.artifact_refs),
+                idempotency_key=task.effective_idempotency_key,
+                lineage=task.lineage,
+                output=parsed,
+                model_role=role,
+                model_id=str(getattr(provider, "model", "") or ""),
+                duration_ms=round((time.perf_counter() - started_at) * 1000),
+                raw_text=raw,
+                metadata={
+                    "spec_version": spec.version,
+                    "model_calls": model_calls,
+                    "tool_trace": tool_trace,
+                    "structured_output": structured_output,
+                },
+            )
         if not conclusion:
             raise RuntimeError("subagent returned an empty conclusion")
+        artifact_refs = list(task.artifact_refs)
+        artifact_refs.extend(
+            SubAgentArtifactRef.model_validate(item)
+            for trace in tool_trace
+            for item in _dict_list(trace.get("artifact_refs"))
+        )
+        artifact_refs.extend(
+            SubAgentArtifactRef.model_validate(item)
+            for item in _dict_list(parsed.get("artifact_refs"))
+        )
+        context_refs = list(task.context_refs)
+        context_refs.extend(
+            SubAgentContextRef.model_validate(item)
+            for item in _dict_list(parsed.get("context_refs"))
+        )
         return SubAgentResult(
             task_id=task.id,
             agent_id=task.agent_id,
@@ -495,12 +627,16 @@ class SubAgentExecutor:
             conclusion=conclusion,
             evidence=_string_list(parsed.get("evidence")),
             evidence_refs=_dict_list(parsed.get("evidence_refs")),
+            context_refs=context_refs,
+            artifact_refs=artifact_refs,
             risks=_string_list(parsed.get("risks")),
             recommendations=_string_list(parsed.get("recommendations")),
             claims=_dict_list(parsed.get("claims")),
             warnings=_string_list(parsed.get("warnings")),
             confidence=_confidence(parsed.get("confidence")),
             abstained=bool(parsed.get("abstained", False)),
+            idempotency_key=task.effective_idempotency_key,
+            lineage=task.lineage,
             output=parsed,
             model_role=role,
             model_id=str(getattr(provider, "model", "") or ""),
@@ -536,6 +672,8 @@ class SubAgentExecutor:
         parent_run_id: str,
         resume_state: dict[str, Any] | None,
         quota: _DelegationQuota | None,
+        task_quota: _DelegationQuota | None,
+        deadline_monotonic: float | None,
     ) -> tuple[str, list[dict[str, Any]], int, dict[str, Any]]:
         allowed = set(spec.tool_allowlist)
         tool_executor = self.tool_executor
@@ -562,7 +700,9 @@ class SubAgentExecutor:
             model_calls = int(restored.get("model_calls") or 0)
             empty_response_retries = int(restored.get("empty_response_retries") or 0)
             while True:
-                self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+                self._raise_if_canceled(
+                    child_run_id, parent_run_id, context=context, task=task
+                )
                 _consume_model_budget(
                     budget_ledger,
                     root_run_id=root_run_id,
@@ -571,6 +711,7 @@ class SubAgentExecutor:
                     model_call_limit=model_call_limit,
                     step_index=model_calls,
                     quota=quota,
+                    task_quota=task_quota,
                 )
                 try:
                     invocation = _invoke_provider(
@@ -578,15 +719,15 @@ class SubAgentExecutor:
                         system_prompt,
                         prompt,
                         timeout_seconds=remaining_timeout_ceiling(
-                            context.deadline_monotonic,
-                            maximum=spec.timeout_seconds,
+                            deadline_monotonic,
+                            maximum=self._task_timeout_seconds(task, spec),
                         ),
-                        max_tokens=spec.max_tokens,
+                        max_tokens=self._task_max_tokens(task, spec),
                         output_schema=output_schema,
                         capability_registry=self.model_capabilities,
                     )
                     raw = invocation.text
-                    ensure_time_remaining(context.deadline_monotonic)
+                    ensure_time_remaining(deadline_monotonic)
                     model_calls += 1
                     if not raw:
                         raise SubAgentEmptyResponseError("subagent model returned an empty response")
@@ -612,6 +753,8 @@ class SubAgentExecutor:
                         state={
                             "schema_version": "subagent-execution-v1",
                             "task_id": task.id,
+                            "idempotency_key": task.effective_idempotency_key,
+                            "lineage": task.lineage.model_dump(mode="json"),
                             "spec_version": spec.version,
                             "phase": "model_retrying",
                             "raw_text": "",
@@ -633,6 +776,8 @@ class SubAgentExecutor:
                 state={
                     "schema_version": "subagent-execution-v1",
                     "task_id": task.id,
+                    "idempotency_key": task.effective_idempotency_key,
+                    "lineage": task.lineage.model_dump(mode="json"),
                     "spec_version": spec.version,
                     "phase": "output_ready",
                     "raw_text": raw,
@@ -662,10 +807,18 @@ class SubAgentExecutor:
             for item in restored.get("pending_tool_calls", [])
             if isinstance(item, dict)
         ]
-        child_context, owned_session = _child_tool_context(context, child_run_id, spec)
+        child_context, owned_session = _child_tool_context(
+            context,
+            child_run_id,
+            spec,
+            task,
+            deadline_monotonic=deadline_monotonic,
+        )
         try:
             while round_index <= spec.max_tool_rounds:
-                self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+                self._raise_if_canceled(
+                    child_run_id, parent_run_id, context=context, task=task
+                )
                 if not pending_calls:
                     _consume_model_budget(
                         budget_ledger,
@@ -675,13 +828,14 @@ class SubAgentExecutor:
                         model_call_limit=model_call_limit,
                         step_index=model_calls,
                         quota=quota,
+                        task_quota=task_quota,
                     )
                     try:
                         turn = NativeChatProviderAdapter(
                             provider,
                             request_timeout=remaining_timeout_ceiling(
-                                context.deadline_monotonic,
-                                maximum=spec.timeout_seconds,
+                                deadline_monotonic,
+                                maximum=self._task_timeout_seconds(task, spec),
                             ),
                         ).run_turn(
                             messages,
@@ -703,7 +857,7 @@ class SubAgentExecutor:
                                         or "reasoning"
                                     ),
                                 ),
-                                deadline_monotonic=context.deadline_monotonic,
+                                deadline_monotonic=deadline_monotonic,
                             ),
                         )
                         model_calls += 1
@@ -795,12 +949,20 @@ class SubAgentExecutor:
                     if not tool_spec.read_only:
                         raise RuntimeError(f"subagent requested non-read-only tool: {call.name}")
                     accepted.append(call)
-                if tool_calls + len(accepted) > spec.max_tool_calls:
+                task_tool_limit = _minimum_optional(
+                    spec.max_tool_calls,
+                    task.budget.max_tool_calls,
+                )
+                if task_tool_limit is not None and tool_calls + len(accepted) > task_tool_limit:
                     raise RuntimeError("subagent tool call limit exceeded")
                 if quota is not None:
                     quota.reserve_tool_calls(len(accepted))
+                if task_quota is not None:
+                    task_quota.reserve_tool_calls(len(accepted))
                 tool_calls += len(accepted)
-                self._raise_if_canceled(child_run_id, parent_run_id, context=context)
+                self._raise_if_canceled(
+                    child_run_id, parent_run_id, context=context, task=task
+                )
                 _emit_subagent_tools(event_sink, child_run_id, task, accepted, status="started")
                 results = tool_executor.execute_many(accepted, child_context)
                 for result in results:
@@ -810,6 +972,17 @@ class SubAgentExecutor:
                         "status": result.status,
                         "summary": result.summary,
                         "error": result.error,
+                        "artifact_refs": [
+                            {
+                                "id": artifact.id,
+                                "artifact_type": artifact.artifact_type,
+                                "metadata": {
+                                    "source_tool": result.name,
+                                    "source_run_id": artifact.run_id,
+                                },
+                            }
+                            for artifact in result.artifacts
+                        ],
                     }
                     tool_trace.append(trace)
                     messages.append(
@@ -887,6 +1060,25 @@ class SubAgentExecutor:
     def _settle_child_run(self, result: SubAgentResult) -> None:
         if self.run_store is None:
             return
+        if result.status == "needs_input":
+            suspend = getattr(self.run_store, "suspend_child", None)
+            if callable(suspend):
+                suspend(result)
+                return
+            self.run_store.checkpoint_child(
+                result.child_run_id,
+                phase="needs_input",
+                state={
+                    "schema_version": "subagent-execution-v1",
+                    "task_id": result.task_id,
+                    "idempotency_key": result.idempotency_key,
+                    "spec_version": str(result.metadata.get("spec_version") or ""),
+                    "lineage": result.lineage.model_dump(mode="json"),
+                    "phase": "needs_input",
+                    "result": result.model_dump(mode="json"),
+                },
+            )
+            return
         self.run_store.settle_child(result)
 
     def _parent_accepts_results(self, parent_run_id: str) -> bool:
@@ -926,17 +1118,50 @@ class SubAgentExecutor:
         parent_run_id: str,
         *,
         context: ToolExecutionContext,
+        task: DelegationTask | None = None,
     ) -> None:
         try:
-            context.run_control.raise_if_cancelled(parent_run_id or context.run_id)
+            if task is None or task.cancellation.propagate_parent:
+                context.run_control.raise_if_cancelled(parent_run_id or context.run_id)
             if child_run_id and child_run_id != parent_run_id:
                 context.run_control.raise_if_cancelled(child_run_id)
         except RunCanceledError as exc:
             raise SubAgentCanceledError(
                 "subagent execution was canceled by run control"
             ) from exc
-        if self._cancel_requested(child_run_id, parent_run_id):
+        if (
+            (task is None or task.cancellation.propagate_parent)
+            and self._cancel_requested(child_run_id, parent_run_id)
+        ):
             raise SubAgentCanceledError("subagent execution was canceled by its parent run")
+
+    @staticmethod
+    def _task_timeout_seconds(task: DelegationTask, spec: SubAgentSpec) -> int:
+        values = [float(spec.timeout_seconds)]
+        if task.timeout_seconds is not None:
+            values.append(float(task.timeout_seconds))
+        if task.budget.max_elapsed_seconds is not None:
+            values.append(float(task.budget.max_elapsed_seconds))
+        return max(1, int(min(values)))
+
+    @staticmethod
+    def _task_max_tokens(task: DelegationTask, spec: SubAgentSpec) -> int:
+        values = [int(spec.max_tokens)]
+        if task.budget.max_output_tokens is not None:
+            values.append(int(task.budget.max_output_tokens))
+        return max(128, min(values))
+
+    @classmethod
+    def _task_deadline_monotonic(
+        cls,
+        context: ToolExecutionContext,
+        task: DelegationTask,
+        spec: SubAgentSpec,
+    ) -> float:
+        local_deadline = time.monotonic() + cls._task_timeout_seconds(task, spec)
+        if context.deadline_monotonic is None:
+            return local_deadline
+        return min(float(context.deadline_monotonic), local_deadline)
 
     @staticmethod
     def _validate_delegation_policy(
@@ -977,6 +1202,7 @@ class SubAgentExecutor:
             "title": title,
             "summary": summary,
             "payload": {
+                "schema_version": SUBAGENT_EVENT_SCHEMA_VERSION,
                 "visible": visible,
                 "delegation_id": request.delegation_id,
                 "root_run_id": request.root_run_id,
@@ -1005,6 +1231,7 @@ class SubAgentExecutor:
             "title": spec.label,
             "summary": result.conclusion if result and result.conclusion else task.objective,
             "payload": {
+                "schema_version": SUBAGENT_EVENT_SCHEMA_VERSION,
                 "visible": True,
                 "delegation_id": request.delegation_id,
                 "task_id": task.id,
@@ -1013,10 +1240,30 @@ class SubAgentExecutor:
                 "child_run_id": child_run_id,
                 "parent_run_id": request.parent_run_id,
                 "root_run_id": request.root_run_id,
+                "parent_task_id": task.lineage.parent_task_id,
+                "idempotency_key": task.effective_idempotency_key,
+                "cancellation_key": (
+                    task.cancellation.cancellation_key
+                    or spec.cancellation_policy.cancellation_key
+                ),
+                "spec_version": spec.version,
                 "status": status,
                 "model_role": result.model_role if result else task.model_role,
                 "model_id": result.model_id if result else "",
                 "duration_ms": result.duration_ms if result else 0,
+                "timeout_seconds": SubAgentExecutor._task_timeout_seconds(task, spec),
+                "budget": task.budget.model_dump(mode="json"),
+                "artifact_refs": (
+                    [item.model_dump(mode="json") for item in result.artifact_refs]
+                    if result
+                    else [item.model_dump(mode="json") for item in task.artifact_refs]
+                ),
+                "needs_input": bool(result and result.status == "needs_input"),
+                "input_request": (
+                    result.input_request.model_dump(mode="json")
+                    if result and result.input_request
+                    else None
+                ),
                 "error": result.error if result else "",
             },
         })

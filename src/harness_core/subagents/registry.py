@@ -31,10 +31,15 @@ class SubAgentRegistry:
                 "version": agent.version,
                 "label": agent.label,
                 "description": agent.description,
+                "domain": agent.domain,
                 "model_role": agent.model_role,
                 "capabilities": list(agent.capabilities),
                 "tool_allowlist": list(agent.tool_allowlist),
                 "read_only": agent.read_only,
+                "timeout_seconds": agent.timeout_seconds,
+                "max_model_calls": agent.max_model_calls,
+                "max_tool_calls": agent.max_tool_calls,
+                "cancellation_policy": agent.cancellation_policy.model_dump(mode="json"),
             }
             for agent in self.list_agents()
         ]

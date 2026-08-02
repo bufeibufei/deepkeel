@@ -1,5 +1,23 @@
 # Changelog
 
+## 3.30.0
+
+- Add a unified, durable SubAgent task brief with context and artifact
+  references, stable idempotency keys, parent/child lineage, task budgets,
+  deadlines, and cooperative cancellation policy.
+- Promote `TaskBrief` as the preferred name while retaining
+  `DelegationTask` as a fully compatible public alias.
+- Extend specialist results with first-class artifact/context references and a
+  typed `needs_input` suspension contract that resumes through the parent
+  Agent's pending-action flow.
+- Standardize SubAgent event payload identity and lifecycle fields under
+  `harness-subagent-event-v1`.
+
+## 3.29.2
+
+- Recover forced visual tool contracts without weakening ordinary tool-call
+  validation.
+
 ## 3.29.1
 
 - Preserve provider-neutral image content parts when resuming a clarification checkpoint.

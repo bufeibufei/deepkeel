@@ -17,7 +17,11 @@ from harness_core.model_capabilities import (
     response_format_payload,
     structured_output_prompt,
 )
-from harness_core.subagents.contracts import DelegationTask, SubAgentSpec
+from harness_core.subagents.contracts import (
+    SUBAGENT_EVENT_SCHEMA_VERSION,
+    DelegationTask,
+    SubAgentSpec,
+)
 from harness_core.subagents.execution_types import (
     EventSink, SubAgentEmptyResponseError, _DelegationQuota,
 )
@@ -32,7 +36,11 @@ def _resolve_role(task_role: str, spec_role: str, providers: dict[str, Any]) -> 
 
 
 def _child_run_id(parent_run_id: str, delegation_id: str, task: DelegationTask) -> str:
-    identity = f"{parent_run_id}|{delegation_id}|{task.id}|{task.agent_id}"
+    identity = (
+        f"{parent_run_id}|key:{task.idempotency_key}|{task.agent_id}"
+        if task.idempotency_key
+        else f"{parent_run_id}|{delegation_id}|{task.id}|{task.agent_id}"
+    )
     digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
     parent_prefix = str(parent_run_id or "root")[:72]
     return f"{parent_prefix}:sub:{digest}"
@@ -48,6 +56,10 @@ def _valid_resume_state(
     if state.get("schema_version") != "subagent-execution-v1":
         return {}
     if str(state.get("task_id") or "") != task.id:
+        return {}
+    if state.get("idempotency_key") and str(state.get("idempotency_key")) != (
+        task.effective_idempotency_key
+    ):
         return {}
     if str(state.get("spec_version") or "") != spec.version:
         return {}
@@ -83,6 +95,8 @@ def _execution_checkpoint(
     return {
         "schema_version": "subagent-execution-v1",
         "task_id": task.id,
+        "idempotency_key": task.effective_idempotency_key,
+        "lineage": task.lineage.model_dump(mode="json"),
         "spec_version": spec.version,
         "phase": phase,
         "round_index": round_index,
@@ -96,9 +110,9 @@ def _execution_checkpoint(
     }
 
 
-def _minimum_optional(first: Any, second: Any) -> int | None:
+def _minimum_optional(*candidates: Any) -> int | None:
     values: list[int] = []
-    for value in (first, second):
+    for value in candidates:
         if value in (None, ""):
             continue
         try:
@@ -112,6 +126,8 @@ def _child_tool_context(
     context: ToolExecutionContext,
     child_run_id: str,
     spec: SubAgentSpec,
+    task: DelegationTask | None = None,
+    deadline_monotonic: float | None = None,
 ) -> tuple[ToolExecutionContext, Any | None]:
     owned_session = context.session_factory() if context.session_factory is not None else None
     parent_scope = dict(context.metadata.get("governance_scope") or {})
@@ -136,6 +152,14 @@ def _child_tool_context(
             if parent_limit is not None
             else float(limit)
         )
+    if task is not None:
+        for metric, limit in task.budget.limits.items():
+            parent_limit = budget_limits.get(metric)
+            budget_limits[metric] = (
+                min(float(parent_limit), float(limit))
+                if parent_limit is not None
+                else float(limit)
+            )
     child = ToolExecutionContext(
         run_id=child_run_id,
         user_id=context.user_id,
@@ -152,6 +176,13 @@ def _child_tool_context(
                 "tool_allowlist": list(spec.tool_allowlist),
                 "permission_scopes": effective_scopes,
                 "budget_limits": dict(budget_limits),
+                "task_id": task.id if task is not None else "",
+                "idempotency_key": (
+                    task.effective_idempotency_key if task is not None else ""
+                ),
+                "lineage": (
+                    task.lineage.model_dump(mode="json") if task is not None else {}
+                ),
             },
             "governance_scope": {
                 **parent_scope,
@@ -160,7 +191,11 @@ def _child_tool_context(
             },
         },
         budget_limits=budget_limits,
-        deadline_monotonic=context.deadline_monotonic,
+        deadline_monotonic=(
+            deadline_monotonic
+            if deadline_monotonic is not None
+            else context.deadline_monotonic
+        ),
         run_control=context.run_control,
     )
     return child, owned_session
@@ -175,9 +210,12 @@ def _consume_model_budget(
     model_call_limit: float | None,
     step_index: int,
     quota: _DelegationQuota | None = None,
+    task_quota: _DelegationQuota | None = None,
 ) -> None:
     if quota is not None:
         quota.reserve_model_call()
+    if task_quota is not None:
+        task_quota.reserve_model_call()
     if budget_ledger is None:
         return
     budget = budget_ledger.consume(
@@ -215,10 +253,15 @@ def _emit_subagent_tools(
         "title": "Subagent is gathering evidence" if status == "started" else "Subagent evidence verified",
         "summary": "; ".join(names),
         "payload": {
+            "schema_version": SUBAGENT_EVENT_SCHEMA_VERSION,
             "visible": False,
             "child_run_id": child_run_id,
             "task_id": task.id,
             "agent_id": task.agent_id,
+            "idempotency_key": task.effective_idempotency_key,
+            "root_run_id": task.lineage.root_run_id,
+            "parent_run_id": task.lineage.parent_run_id,
+            "parent_task_id": task.lineage.parent_task_id,
             "status": status,
             "tool_names": names,
             "tool_trace": list(trace or []),
@@ -240,10 +283,15 @@ def _emit_subagent_model_retry(
         "title": "Retrying specialist analysis",
         "summary": "The model returned no usable content; retrying automatically.",
         "payload": {
+            "schema_version": SUBAGENT_EVENT_SCHEMA_VERSION,
             "visible": False,
             "child_run_id": child_run_id,
             "task_id": task.id,
             "agent_id": task.agent_id,
+            "idempotency_key": task.effective_idempotency_key,
+            "root_run_id": task.lineage.root_run_id,
+            "parent_run_id": task.lineage.parent_run_id,
+            "parent_task_id": task.lineage.parent_task_id,
             "status": "retrying",
             "reason_code": "empty_model_response",
             "model_calls": model_calls,
@@ -298,13 +346,18 @@ def _task_prompt(task: DelegationTask, spec: SubAgentSpec) -> str:
     return json.dumps(
         {
             "objective": task.objective,
+            "normalized_question": task.normalized_question,
             "input": task.input_data,
             "constraints": task.constraints,
+            "context_refs": [item.model_dump(mode="json") for item in task.context_refs],
+            "artifact_refs": [item.model_dump(mode="json") for item in task.artifact_refs],
+            "expected_output": task.expected_output,
             "capabilities": spec.capabilities,
             "tool_allowlist": spec.tool_allowlist,
             "input_contract": spec.input_contract,
             "output_contract": spec.output_contract,
             "evidence_policy": spec.evidence_policy,
+            "context_policy": spec.context_policy,
             "execution_policy": {
                 "read_only": spec.read_only,
                 "allow_delegation": False,
