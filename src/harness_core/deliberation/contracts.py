@@ -15,6 +15,8 @@ class DeliberationParticipant(BaseModel):
     label: str = Field(min_length=1, max_length=80)
     display_name: str = Field(min_length=1, max_length=80)
     role: str = "participant"
+    fact_keys: list[str] = Field(default_factory=list)
+    instructions: list[str] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -26,6 +28,9 @@ class DeliberationSpec(BaseModel):
     moderator_agent_id: str = Field(min_length=1, max_length=80)
     max_rounds: int = Field(default=2, ge=1, le=3)
     max_model_calls: int = Field(default=12, ge=3, le=12)
+    min_completed_participants: int = Field(default=1, ge=1, le=3)
+    synthesis_reserve_calls: int = Field(default=1, ge=1, le=2)
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def validate_participants(self) -> "DeliberationSpec":
@@ -35,6 +40,8 @@ class DeliberationSpec(BaseModel):
             raise ValueError("deliberation participants must use unique agents")
         if len(instance_ids) != len(set(instance_ids)):
             raise ValueError("participant instance ids must be unique")
+        if self.min_completed_participants > len(self.participants):
+            raise ValueError("minimum completed participants exceeds participant count")
         return self
 
 
@@ -57,6 +64,9 @@ class DeliberationArgument(BaseModel):
     confidence: float | None = None
     duration_ms: int = 0
     child_run_id: str = ""
+    model_role: str = ""
+    model_id: str = ""
+    outcome: str = ""
     error: str = ""
 
 
@@ -73,3 +83,4 @@ class DeliberationResult(BaseModel):
     synthesis: dict[str, Any] = Field(default_factory=dict)
     model_calls: int = 0
     retry_count: int = 0
+    diagnostics: dict[str, Any] = Field(default_factory=dict)

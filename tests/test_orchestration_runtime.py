@@ -145,6 +145,71 @@ def test_deliberation_resumes_without_replaying_opening() -> None:
     assert resumed_executor.requests[0].tasks[0].id.startswith("synthesize-")
 
 
+def test_deliberation_scopes_participant_facts_and_reports_diagnostics() -> None:
+    executor = ScriptedSubAgents(first_decision="synthesize")
+    participants = _participants()
+    participants[0] = participants[0].model_copy(
+        update={
+            "fact_keys": ["record"],
+            "instructions": ["Inspect only the supplied record."],
+        }
+    )
+    result = DeliberationCoordinator(executor).run(
+        DeliberationSpec(
+            deliberation_id="review-scoped",
+            question="Review the record.",
+            facts={
+                "record": {"status": "stable"},
+                "timing": {"year": 2026},
+                "subject": {"id": "subject-1"},
+                "provenance": [{"source": "fixture"}],
+            },
+            participants=participants,
+            moderator_agent_id="review.moderator",
+        ),
+        context=_context(),
+        providers={"reasoning": object()},
+    )
+
+    opening = executor.requests[0].tasks
+    assert set(opening[0].input_data["facts"]) == {"record", "subject", "provenance"}
+    assert "Inspect only the supplied record." in opening[0].constraints
+    assert "timing" in opening[1].input_data["facts"]
+    assert result.diagnostics["completed_argument_count"] == 2
+    assert result.diagnostics["failed_argument_count"] == 0
+    assert result.diagnostics["budget"]["maximum"] == 12
+
+
+def test_deliberation_emits_explicit_stage_transitions() -> None:
+    executor = ScriptedSubAgents(first_decision="continue")
+    events: list[dict[str, Any]] = []
+    DeliberationCoordinator(executor).run(
+        DeliberationSpec(
+            deliberation_id="review-stages",
+            question="Should the plan proceed?",
+            facts={"quantity": 12},
+            participants=_participants(),
+            moderator_agent_id="review.moderator",
+        ),
+        context=_context(),
+        providers={"reasoning": object()},
+        event_sink=events.append,
+    )
+
+    stages = [
+        event["payload"]["phase"]
+        for event in events
+        if event["event_type"] == "deliberation.stage.started"
+    ]
+    assert stages == ["opening", "moderate", "rebuttal", "moderate", "synthesize"]
+    rebuttal = next(
+        event for event in events
+        if event["event_type"] == "deliberation.stage.started"
+        and event["payload"]["phase"] == "rebuttal"
+    )
+    assert rebuttal["payload"]["participant_ids"] == ["review.risk"]
+
+
 class Registry:
     def get(self, agent_id: str) -> SubAgentSpec:
         if agent_id != "review.facts":

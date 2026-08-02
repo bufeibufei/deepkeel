@@ -40,9 +40,18 @@ class DeliberationCoordinator:
         state = self._restore_state(resume_state)
         self._emit(event_sink, "deliberation.started", "Deliberation started", spec, {
             "participants": [item.model_dump(mode="json") for item in spec.participants],
+            "max_rounds": spec.max_rounds,
+            "max_model_calls": spec.max_model_calls,
         })
 
         if "opening" not in state["completed_stages"]:
+            self._emit_stage_started(
+                event_sink,
+                spec,
+                phase="opening",
+                round_index=1,
+                participants=spec.participants,
+            )
             opening, calls, retries = self._participant_batch(
                 spec,
                 phase="opening",
@@ -58,13 +67,20 @@ class DeliberationCoordinator:
             state["completed_stages"].append("opening")
             self._checkpoint(checkpoint_sink, "opening", state)
         opening = [item for item in state["arguments"] if item.phase == "opening"]
-        if not any(item.status == "completed" for item in opening):
+        completed_openings = sum(item.status == "completed" for item in opening)
+        if completed_openings < spec.min_completed_participants:
             return self._finish(spec, state, {}, "no_opening_arguments", event_sink, checkpoint_sink)
 
         round_index = max(1, max((item.round_index for item in state["arguments"]), default=1))
         moderation_key = f"moderate:{round_index}"
         moderator = state["moderation_history"][-1] if state["moderation_history"] else {}
         if moderation_key not in state["completed_stages"]:
+            self._emit_stage_started(
+                event_sink,
+                spec,
+                phase="moderate",
+                round_index=round_index,
+            )
             moderator, calls, retries = self._moderate(
                 spec,
                 state["arguments"],
@@ -83,7 +99,8 @@ class DeliberationCoordinator:
         stop_reason = "moderator_converged"
         while True:
             decision = self._moderator_decision(moderator, round_index)
-            budget_needed = len(spec.participants) + 2
+            targets = self._target_participants(spec, moderator)
+            budget_needed = len(targets) + 1 + spec.synthesis_reserve_calls
             if stop_requested():
                 stop_reason = "user_stop_and_summarize"
                 break
@@ -97,7 +114,17 @@ class DeliberationCoordinator:
             round_index += 1
             rebuttal_key = f"rebuttal:{round_index}"
             if rebuttal_key not in state["completed_stages"]:
-                targets = self._target_participants(spec, moderator)
+                self._emit_stage_started(
+                    event_sink,
+                    spec,
+                    phase="rebuttal",
+                    round_index=round_index,
+                    participants=targets,
+                    extra={
+                        "unresolved_questions": moderator.get("unresolved_questions") or [],
+                        "disagreement_graph": moderator.get("disagreement_graph") or [],
+                    },
+                )
                 rebuttals, calls, retries = self._participant_batch(
                     spec,
                     phase="rebuttal",
@@ -120,6 +147,12 @@ class DeliberationCoordinator:
 
             moderation_key = f"moderate:{round_index}"
             if moderation_key not in state["completed_stages"]:
+                self._emit_stage_started(
+                    event_sink,
+                    spec,
+                    phase="moderate",
+                    round_index=round_index,
+                )
                 moderator, calls, retries = self._moderate(
                     spec,
                     state["arguments"],
@@ -136,6 +169,12 @@ class DeliberationCoordinator:
                 self._checkpoint(checkpoint_sink, "moderating", state)
 
         if "synthesize" not in state["completed_stages"]:
+            self._emit_stage_started(
+                event_sink,
+                spec,
+                phase="synthesize",
+                round_index=round_index,
+            )
             synthesis, calls, retries = self._moderate(
                 spec,
                 state["arguments"],
@@ -198,6 +237,9 @@ class DeliberationCoordinator:
                 confidence=item.confidence if item else None,
                 duration_ms=item.duration_ms if item else 0,
                 child_run_id=item.child_run_id if item else "",
+                model_role=item.model_role if item else "",
+                model_id=item.model_id if item else "",
+                outcome=item.outcome if item else "",
                 error=item.error if item else "missing result",
             )
             arguments.append(argument)
@@ -220,7 +262,7 @@ class DeliberationCoordinator:
             objective=objective,
             input_data={
                 "question": spec.question,
-                "facts": spec.facts,
+                "facts": _participant_facts(spec.facts, participant.fact_keys),
                 "phase": phase,
                 "round_index": round_index,
                 "other_views": [item.model_dump(mode="json") for item in prior_arguments],
@@ -230,7 +272,13 @@ class DeliberationCoordinator:
                 "All participants must use the same facts and must not fabricate external facts",
                 "When facts are insufficient, use only allowed read-only tools and cite their source",
                 "Address arguments rather than identities; do not decide by vote",
+                *participant.instructions,
             ],
+            metadata={
+                "participant_instance_id": participant.participant_instance_id,
+                "participant_label": participant.label,
+                "fact_keys": list(participant.fact_keys),
+            },
         )
 
     def _moderate(self, spec, arguments, context, providers, event_sink, *, phase: str, round_index: int):
@@ -275,6 +323,7 @@ class DeliberationCoordinator:
             "decision": str(output.get("decision") or ""),
             "unresolved_questions": _string_list(output.get("unresolved_questions")),
             "target_agent_ids": _string_list(output.get("target_agent_ids")),
+            "disagreement_graph": _dict_list(output.get("disagreement_graph")),
             "convergence_score": _score(output.get("convergence_score")),
             "conditions": _string_list(output.get("conditions")),
             "action_recommendations": _string_list(output.get("action_recommendations")),
@@ -349,6 +398,7 @@ class DeliberationCoordinator:
             if completed
             else "failed"
         )
+        diagnostics = self._diagnostics(spec, state, status=status, stop_reason=reason)
         result = DeliberationResult(
             deliberation_id=spec.deliberation_id,
             status=status,
@@ -361,11 +411,13 @@ class DeliberationCoordinator:
             synthesis=synthesis,
             model_calls=state["model_calls"],
             retry_count=state["retry_count"],
+            diagnostics=diagnostics,
         )
         self._emit(sink, "deliberation.completed", "Deliberation completed", spec, {
             "status": status,
             "stop_reason": reason,
             "summary": synthesis.get("summary", ""),
+            "diagnostics": diagnostics,
         })
         state["result"] = result.model_dump(mode="json")
         state["completed_stages"] = list(dict.fromkeys([*state["completed_stages"], "completed"]))
@@ -402,6 +454,67 @@ class DeliberationCoordinator:
         sink(phase, copy.deepcopy(payload))
 
     @staticmethod
+    def _diagnostics(spec, state, *, status, stop_reason):
+        arguments = list(state.get("arguments") or [])
+        failed = [item for item in arguments if item.status != "completed"]
+        routes = []
+        seen_routes = set()
+        for item in arguments:
+            route = (item.agent_id, item.model_role, item.model_id)
+            if route in seen_routes:
+                continue
+            seen_routes.add(route)
+            routes.append({
+                "agent_id": item.agent_id,
+                "model_role": item.model_role,
+                "model_id": item.model_id,
+            })
+        return {
+            "status": status,
+            "stop_reason": stop_reason,
+            "completed_stages": list(state.get("completed_stages") or []),
+            "completed_argument_count": len(arguments) - len(failed),
+            "failed_argument_count": len(failed),
+            "failed_arguments": [
+                {
+                    "argument_id": item.argument_id,
+                    "agent_id": item.agent_id,
+                    "phase": item.phase,
+                    "round_index": item.round_index,
+                    "error": item.error,
+                }
+                for item in failed
+            ],
+            "model_routes": routes,
+            "model_calls": int(state.get("model_calls") or 0),
+            "retry_count": int(state.get("retry_count") or 0),
+            "budget": {
+                "maximum": spec.max_model_calls,
+                "remaining": max(0, spec.max_model_calls - int(state.get("model_calls") or 0)),
+                "synthesis_reserve_calls": spec.synthesis_reserve_calls,
+            },
+        }
+
+    def _emit_stage_started(
+        self,
+        sink,
+        spec,
+        *,
+        phase,
+        round_index,
+        participants=None,
+        extra=None,
+    ):
+        selected = list(participants or [])
+        self._emit(sink, "deliberation.stage.started", "Deliberation stage started", spec, {
+            "phase": phase,
+            "round_index": round_index,
+            "participant_ids": [item.agent_id for item in selected],
+            "participant_labels": [item.display_name for item in selected],
+            **(extra or {}),
+        })
+
+    @staticmethod
     def _emit(sink, event_type, title, spec, payload):
         if sink is None:
             return
@@ -415,6 +528,26 @@ class DeliberationCoordinator:
 
 def _string_list(value) -> list[str]:
     return [str(item).strip() for item in value] if isinstance(value, list) else []
+
+
+def _dict_list(value) -> list[dict[str, Any]]:
+    return [dict(item) for item in value if isinstance(item, dict)] if isinstance(value, list) else []
+
+
+def _participant_facts(facts: dict[str, Any], fact_keys: list[str]) -> dict[str, Any]:
+    if not fact_keys:
+        return copy.deepcopy(facts)
+    selected = {
+        key: copy.deepcopy(facts[key])
+        for key in fact_keys
+        if key in facts
+    }
+    # Provenance and subject identity are shared safety context, not optional
+    # analytical detail. Preserve them whenever the host supplied them.
+    for key in ("subject", "provenance", "snapshot_version", "availability"):
+        if key in facts and key not in selected:
+            selected[key] = copy.deepcopy(facts[key])
+    return selected
 
 
 def _score(value) -> float | None:

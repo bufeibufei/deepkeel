@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.31.0
+
+- Add participant-scoped fact views and instructions to the product-neutral
+  deliberation contract while preserving shared identity and provenance.
+- Reserve synthesis budget against the moderator's actual rebuttal targets
+  instead of assuming every participant must answer every round.
+- Emit explicit deliberation stage transitions and include model-route,
+  partial-failure, retry, and budget diagnostics in durable results.
+
 ## 3.30.0
 
 - Add a unified, durable SubAgent task brief with context and artifact
