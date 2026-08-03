@@ -15,6 +15,22 @@ from harness_core.graph_workflow import (
 from harness_core.runtime_api import RuntimeResultStatus
 from harness_core.runtime_policy import _budget_limits, _resolved_model_policy
 from harness_core.runtime_results import project_harness_result
+from harness_core.model import (
+    InMemoryModelInvocationStore as PublicModelInvocationStore,
+    ModelInvocation as PublicModelInvocation,
+)
+from harness_core.model_invocations import (
+    InMemoryModelInvocationStore,
+    ModelInvocation,
+)
+from harness_core.tool_execution import (
+    InMemoryToolExecutionStore,
+    ToolExecutionContext,
+)
+from harness_core.tools import (
+    InMemoryToolExecutionStore as PublicToolExecutionStore,
+    ToolExecutionContext as PublicToolExecutionContext,
+)
 from harness_core.subagents.contracts import DelegationTask
 from harness_core.subagents.execution_support import _child_run_id
 from harness_core.subagents.execution_types import _DelegationQuota
@@ -27,6 +43,13 @@ from harness_core.subagents.output_validation import (
 
 class _Provider:
     model_role = "fast"
+
+
+def test_split_model_and_tool_execution_contracts_keep_public_imports_stable() -> None:
+    assert PublicModelInvocation is ModelInvocation
+    assert PublicModelInvocationStore is InMemoryModelInvocationStore
+    assert PublicToolExecutionContext is ToolExecutionContext
+    assert PublicToolExecutionStore is InMemoryToolExecutionStore
 
 
 def test_runtime_policy_resolves_provider_roles_and_budget_limits() -> None:

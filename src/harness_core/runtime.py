@@ -10,7 +10,6 @@ from typing import Any, Callable
 from uuid import uuid4
 
 from harness_core.budget import (
-    ELAPSED_SECONDS,
     INPUT_TOKENS,
     MODEL_CALLS,
     MODEL_RETRIES,
@@ -18,7 +17,6 @@ from harness_core.budget import (
     TOOL_CALLS,
     TOOL_CONCURRENCY,
     BudgetLedger,
-    BudgetRequest,
     InMemoryBudgetLedger,
 )
 from harness_core.contracts import (
@@ -31,7 +29,7 @@ from harness_core.contracts import (
     ToolCall,
     ToolResult,
 )
-from harness_core.context import build_context_snapshot, build_initial_messages
+from harness_core.context import build_context_snapshot
 from harness_core.context_window import (
     ContextWindowManager,
     DeterministicContextWindowManager,
@@ -42,17 +40,10 @@ from harness_core.events import AgentEventPersistenceError, envelope_runtime_eve
 from harness_core.failures import RuntimeFailure, classify_runtime_failure
 from harness_core.graph import (
     GraphDurability,
-    HARNESS_GRAPH_CONTRACT_VERSION,
     HarnessGraph,
     create_harness_graph,
 )
-from harness_core.hooks import (
-    HookAction,
-    HookAudit,
-    HookInvocation,
-    HookPoint,
-    HookRunner,
-)
+from harness_core.hooks import HookAudit, HookRunner
 from harness_core.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     checkpointer_supports_async,
@@ -70,11 +61,7 @@ from harness_core.migrations import StateMigrationRegistry, default_state_migrat
 from harness_core.persistence import (
     CheckpointCompatibilityError,
     DurableCheckpointStore,
-    checkpoint_from_durable_state,
-    checkpoint_from_runtime,
     durable_state_from_result,
-    restore_run_context,
-    resume_payload_from_context,
 )
 from harness_core.capabilities import CapabilityCatalog, CapabilityContribution
 from harness_core.capability_manifest import RuntimeGeneration
@@ -91,6 +78,10 @@ from harness_core.runtime_api import (
     RuntimeResultStatus,
     RuntimeStreamEvent,
 )
+from harness_core.runtime_events import RuntimeEventEmitter
+from harness_core.runtime_graph_execution import execute_graph_turn
+from harness_core.runtime_lifecycle import run_start_lifecycle_hooks
+from harness_core.runtime_settlement import project_and_settle_runtime_result
 from harness_core.skills import SkillPolicy
 from harness_core.skill_activation import EntryToolSkillActivator
 from harness_core.scope import RuntimeScope, require_legacy_compatible_scope
@@ -118,8 +109,6 @@ from harness_core.runtime_policy import (
 )
 from harness_core.runtime_results import (
     _failed_runtime_state,
-    _new_context,
-    _skill_precondition_tool_calls,
     project_harness_result,
 )
 from harness_core.runtime_model_pipeline import build_runtime_model_gateway
@@ -311,6 +300,10 @@ class HarnessRuntime:
     @property
     def graph_compile_count(self) -> int:
         return self._graph_compile_count
+
+    @staticmethod
+    def _hook_audit_payload(audit: HookAudit) -> dict[str, Any]:
+        return _hook_audit_dict(audit)
 
     def _shared_compiled_graph(self) -> HarnessGraph:
         graph = self._compiled_graph
@@ -715,8 +708,6 @@ class HarnessRuntime:
             or short.get("turn_id")
             or f"turn-{uuid4()}"
         )
-        events: list[dict[str, Any]] = []
-        event_lock = Lock()
         event_sequence = (
             self.event_journal.latest_sequence(run_id)
             if self.event_journal is not None
@@ -731,111 +722,56 @@ class HarnessRuntime:
             _optional_int(bundle.get("run_version")) or 0,
             _optional_int(short.get("run_version")) or 0,
         )
-        telemetry_error_count = 0
-        telemetry_last_error = ""
-        answer_delta_streamed = False
+        emitter = RuntimeEventEmitter(
+            run_id=run_id,
+            thread_id=conversation_thread_id,
+            turn_id=turn_id,
+            run_version=run_version,
+            initial_sequence=event_sequence,
+            skill_id=str(skill.get("skill_id") or ""),
+            scope=runtime_scope,
+            run_control=self.run_control,
+            telemetry=self.telemetry,
+            event_journal=self.event_journal,
+            event_sink=event_sink,
+            execution_fence=execution_fence,
+        )
+        emit = emitter
 
-        def emit(event: dict[str, Any]) -> None:
-            nonlocal answer_delta_streamed, telemetry_error_count, telemetry_last_error
-            nonlocal event_sequence
-            if execution_fence is not None:
-                execution_fence.raise_if_lost()
-            self.run_control.raise_if_cancelled(run_id)
-            with event_lock:
-                event_sequence += 1
-                projected = envelope_runtime_event(
-                    event,
-                    run_id=run_id,
-                    thread_id=conversation_thread_id,
-                    turn_id=turn_id,
-                    sequence=event_sequence,
-                    run_version=run_version,
-                    scope=runtime_scope,
-                )
-                payload = as_dict(projected.get("payload"))
-                payload.setdefault("skill_id", str(skill.get("skill_id") or ""))
-                projected["payload"] = payload
-                envelope = RuntimeStreamEvent.model_validate(projected)
-                if not envelope.ephemeral and self.event_journal is not None:
-                    try:
-                        self.event_journal.append(envelope)
-                    except Exception as exc:
-                        raise AgentEventPersistenceError(
-                            f"runtime event journal append failed: {exc}"
-                        ) from exc
-                projected = envelope.model_dump(mode="json")
-                if projected.get("event_type") == "answer.delta":
-                    answer_delta_streamed = True
-                if not projected.get("ephemeral"):
-                    events.append(projected)
-            try:
-                self.telemetry.record(
-                    TelemetryRecord.from_runtime_event(
-                        projected,
-                        run_id=run_id,
-                        thread_id=conversation_thread_id,
-                        turn_id=turn_id,
-                    )
-                )
-            except Exception as exc:
-                telemetry_error_count += 1
-                telemetry_last_error = f"{type(exc).__name__}: {exc}"
-            if event_sink is not None:
-                event_sink(projected)
-
-        lifecycle_audits: list[HookAudit] = []
-        lifecycle_points = [
-            HookPoint.RUN_RESUMED if short.get("resume") else HookPoint.RUN_STARTED,
-            HookPoint.TURN_STARTED,
-            HookPoint.CONTEXT_PREPARED,
-        ]
-        context_changed = False
-        for point in lifecycle_points:
-            hook_result = await self.hook_runner.arun(
-                HookInvocation(
-                    point=point,
-                    operation_id=(
-                        f"{run_id}:{point.value}"
-                        if point is HookPoint.RUN_STARTED
-                        else f"{run_id}:{turn_id}:{point.value}"
-                    ),
-                    run_id=run_id,
-                    thread_id=conversation_thread_id,
-                    turn_id=turn_id,
-                    package_ids=tuple(
-                        contribution.package_id
-                        for contribution in self.capability_contributions
-                    ),
-                    skill_id=str(skill.get("skill_id") or ""),
-                    payload={
-                        "question": question,
-                        "context_window": dict(context_window_diagnostics),
-                    },
-                    metadata={"user_id": str(user_id or "local-device")},
-                )
+        package_ids = tuple(
+            contribution.package_id for contribution in self.capability_contributions
+        )
+        lifecycle_start = await run_start_lifecycle_hooks(
+            hook_runner=self.hook_runner,
+            emit=emit,
+            emit_audits=_emit_runtime_hook_audits,
+            run_id=run_id,
+            thread_id=conversation_thread_id,
+            turn_id=turn_id,
+            package_ids=package_ids,
+            skill_id=str(skill.get("skill_id") or ""),
+            question=question,
+            context_window=context_window_diagnostics,
+            user_id=str(user_id or "local-device"),
+            resumed=bool(short.get("resume")),
+        )
+        lifecycle_audits = list(lifecycle_start.audits)
+        if lifecycle_start.context_patch:
+            bundle.update(lifecycle_start.context_patch)
+        if lifecycle_start.stopped_reason:
+            return self._context_setup_failure(
+                question,
+                RuntimeError(lifecycle_start.stopped_reason),
+                short_context=short,
+                context_bundle=bundle,
+                user_id=user_id,
+                skill_activation=skill_activation,
+                model_policy=model_policy,
+                session=session,
+                event_sink=event_sink,
+                execution_fence=execution_fence,
             )
-            lifecycle_audits.extend(hook_result.audits)
-            _emit_runtime_hook_audits(emit, hook_result.audits)
-            if hook_result.decision.context_patch:
-                bundle.update(dict(hook_result.decision.context_patch))
-                context_changed = True
-            if hook_result.decision.action != HookAction.CONTINUE:
-                return self._context_setup_failure(
-                    question,
-                    RuntimeError(
-                        hook_result.decision.reason
-                        or f"runtime lifecycle hook stopped at {point.value}"
-                    ),
-                    short_context=short,
-                    context_bundle=bundle,
-                    user_id=user_id,
-                    skill_activation=skill_activation,
-                    model_policy=model_policy,
-                    session=session,
-                    event_sink=event_sink,
-                    execution_fence=execution_fence,
-                )
-        if context_changed:
+        if lifecycle_start.context_patch:
             prepared_context = self.context_window_manager.prepare(
                 question,
                 short,
@@ -913,148 +849,36 @@ class HarnessRuntime:
             entry_tool_skill_activator=self.entry_tool_skill_activator,
         )
 
-        recovery_source = ""
-        active_graph_thread_id = graph_thread_id
         try:
-            if short.get("recover_interrupted"):
-                if self._has_graph_checkpoint(graph_thread_id):
-                    state = dict(await graph.arecover(
-                        graph_thread_id,
-                        tool_context=tool_context,
-                        event_sink=emit,
-                        turn_context=turn_context,
-                    ))
-                    if not isinstance(state, dict) or not state:
-                        raise RuntimeError("langgraph recovery checkpoint is unavailable")
-                    recovery_source = "durable_langgraph_restart"
-                else:
-                    context = _new_context(
-                        question,
-                        run_id=run_id,
-                        thread_id=graph_thread_id,
-                        turn_id=turn_id,
-                        user_id=str(user_id or "local-device"),
-                        short_context=short,
-                        context_bundle=bundle,
-                        skill_activation=skill,
-                        model_policy=resolved_model_policy,
-                        budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
-                        input_parts=input_parts,
-                    )
-                    state = dict(await graph.ainvoke(
-                        context,
-                        tool_context=tool_context,
-                        event_sink=emit,
-                        turn_context=turn_context,
-                    ))
-                    recovery_source = "restart_replay_without_checkpoint"
-            elif short.get("resume"):
-                resume_payload = resume_payload_from_context(short)
-                try:
-                    state = dict(await graph.aresume(
-                        graph_thread_id,
-                        resume_payload,
-                        tool_context=tool_context,
-                        event_sink=emit,
-                        turn_context=turn_context,
-                    ))
-                    if not isinstance(state, dict):
-                        raise RuntimeError("langgraph checkpoint is unavailable")
-                    recovery_source = "live_langgraph"
-                except AgentEventPersistenceError:
-                    raise
-                except (RuntimeError, ValueError, AttributeError) as live_resume_error:
-                    emit({
-                        "event_type": "checkpoint.live_resume_failed",
-                        "title": "Live checkpoint resume failed",
-                        "summary": str(live_resume_error),
-                        "payload": {
-                            "error_type": type(live_resume_error).__name__,
-                            "error": str(live_resume_error),
-                            "visible": False,
-                        },
-                    })
-                    previous_runtime = short.get("previous_runtime")
-                    recovered_checkpoint = checkpoint_from_durable_state(
-                        durable_state,
-                        migrations=self.state_migrations,
-                    )
-                    if not recovered_checkpoint:
-                        recovered_checkpoint = checkpoint_from_runtime(
-                            previous_runtime if isinstance(previous_runtime, dict) else {},
-                            migrations=self.state_migrations,
-                        )
-                    if not recovered_checkpoint:
-                        raise RuntimeError(
-                            "durable checkpoint is unavailable after live LangGraph resume "
-                            f"failed: {type(live_resume_error).__name__}: {live_resume_error}"
-                        ) from live_resume_error
-                    recovery_source = (
-                        "agent_run_checkpoint"
-                        if checkpoint_from_durable_state(
-                            durable_state,
-                            migrations=self.state_migrations,
-                        )
-                        else "session_projection"
-                    )
-                    recovered_thread_id = f"{graph_thread_id}:recovered:{uuid4().hex[:8]}"
-                    recovered = restore_run_context(
-                        checkpoint=recovered_checkpoint,
-                        resume_payload=resume_payload,
-                        run_id=run_id,
-                        thread_id=recovered_thread_id,
-                        turn_id=turn_id,
-                        user_id=str(user_id or "local-device"),
-                        skill_activation=skill,
-                        model_policy=resolved_model_policy,
-                        migrations=self.state_migrations,
-                    )
-                    if not any(message.role == "user" for message in recovered.messages):
-                        recovered.messages = [
-                            *build_initial_messages(
-                                question,
-                                short,
-                                bundle,
-                                input_parts=input_parts,
-                            ),
-                            *recovered.messages,
-                        ]
-                    active_graph_thread_id = recovered_thread_id
-                    state = dict(await graph.ainvoke(
-                        recovered,
-                        tool_context=tool_context,
-                        event_sink=emit,
-                        turn_context=turn_context,
-                    ))
-            else:
-                precondition_calls = _skill_precondition_tool_calls(
-                    skill,
-                    context={**short, **bundle},
-                    tool_registry=self.tool_registry,
-                )
-                context = _new_context(
-                    question,
-                    run_id=run_id,
-                    thread_id=graph_thread_id,
-                    turn_id=turn_id,
-                    user_id=str(user_id or "local-device"),
-                    short_context=short,
-                    context_bundle=bundle,
-                    skill_activation=skill,
-                    model_policy=resolved_model_policy,
-                    budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
-                    input_parts=input_parts,
-                    pending_tool_calls=precondition_calls,
-                )
-                state = dict(await graph.ainvoke(
-                    context,
-                    tool_context=tool_context,
-                    event_sink=emit,
-                    turn_context=turn_context,
-                ))
+            graph_outcome = await execute_graph_turn(
+                graph=graph,
+                question=question,
+                run_id=run_id,
+                graph_thread_id=graph_thread_id,
+                turn_id=turn_id,
+                user_id=str(user_id or "local-device"),
+                short_context=short,
+                context_bundle=bundle,
+                skill_activation=skill,
+                model_policy=resolved_model_policy,
+                budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                input_parts=input_parts,
+                durable_state=durable_state,
+                state_migrations=self.state_migrations,
+                tool_registry=self.tool_registry,
+                tool_context=tool_context,
+                turn_context=turn_context,
+                emit=emit,
+                has_graph_checkpoint=self._has_graph_checkpoint,
+            )
+            state = graph_outcome.state
+            recovery_source = graph_outcome.recovery_source
+            active_graph_thread_id = graph_outcome.active_graph_thread_id
         except AgentEventPersistenceError:
             raise
         except Exception as exc:
+            recovery_source = ""
+            active_graph_thread_id = graph_thread_id
             failure = classify_runtime_failure(exc)
             if failure.category != "canceled":
                 emit({
@@ -1080,153 +904,36 @@ class HarnessRuntime:
                 skill_activation=skill,
                 model_policy=resolved_model_policy,
                 budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
-                events=events,
+                events=emitter.events,
                 failure=failure,
             )
-        result = project_harness_result(
-            state,
+        return await project_and_settle_runtime_result(
+            runtime=self,
+            state=state,
             question=question,
             context_bundle=bundle,
             short_context=short,
             skill_activation=skill,
-            streamed_events=events,
-            user_id=str(user_id or "local-device"),
-            answer_delta_streamed=answer_delta_streamed,
-            observation_kinds={
-                spec.name: str(spec.observation_contract.get("primary_kind") or "")
-                for spec in self.tool_registry.list_tools()
-            },
-            task_kinds={spec.name: spec.task_kind for spec in self.tool_registry.list_tools()},
-            max_steps=self.max_steps,
+            model_policy=resolved_model_policy,
             previous_diagnostics=previous_diagnostics,
-            capability_manifest=self._capability_manifest(),
-            reference_projector=self.reference_projector,
-        )
-        if recovery_source:
-            diagnostics = result.diagnostics
-            recovery = as_dict(diagnostics.get("recovery"))
-            recovery["checkpoint_source"] = recovery_source
-            diagnostics["recovery"] = recovery
-        diagnostics = result.diagnostics
-        diagnostics["context_window"] = context_window_diagnostics
-        diagnostics["hooks"] = {
-            "executions": [_hook_audit_dict(audit) for audit in lifecycle_audits],
-        }
-        execution_contract = {
-            "graph_contract_version": HARNESS_GRAPH_CONTRACT_VERSION,
-            "graph_reused": self.reuse_compiled_graph,
-            "graph_durability": self.graph_durability,
-            "graph_compile_count": self.graph_compile_count,
-            "tool_catalog_version": self.tool_registry.catalog_version(),
-            "tool_view_mode": self.tool_view_mode,
-            "tool_view": as_dict(as_dict(state.get("metadata")).get("tool_view")),
-            "checkpoint_authority": checkpoint_authority,
-            "checkpoint_policy": "runtime_boundaries",
-            "graph_checkpoint_role": "engine_recovery_only",
-            "runtime_generation_id": (
-                self.runtime_generation.generation_id
-                if self.runtime_generation is not None
-                else ""
-            ),
-        }
-        if checkpoint_load_errors:
-            execution_contract["checkpoint_load_errors"] = list(checkpoint_load_errors)
-        diagnostics["execution_contract"] = execution_contract
-        result.checkpoint["execution_contract"] = execution_contract
-        elapsed_budget = self.budget_ledger.consume(
-            BudgetRequest(
-                run_id=run_id,
-                metric=ELAPSED_SECONDS,
-                amount=max(0.0, time.monotonic() - run_started_monotonic),
-                limit=_budget_limits(resolved_model_policy).get(ELAPSED_SECONDS),
-                operation_id=f"runtime-elapsed:{turn_id}",
-                metadata={"turn_id": turn_id},
-            )
-        )
-        diagnostics["budget"] = {
-            "elapsed": elapsed_budget.as_dict(),
-            "snapshot": self.budget_ledger.snapshot(run_id).as_dict(),
-        }
-        result.checkpoint["budget_state"] = self.budget_ledger.snapshot(run_id).as_dict()
-        settlement_point = (
-            HookPoint.RUN_SUSPENDING
-            if result.status.value
-            in {"waiting_user_action", "waiting_user_input", "task_running"}
-            else HookPoint.RUN_SETTLED
-        )
-        settlement_hooks = await self.hook_runner.arun(
-            HookInvocation(
-                point=settlement_point,
-                operation_id=f"{run_id}:{turn_id}:{settlement_point.value}",
-                run_id=run_id,
-                thread_id=conversation_thread_id,
-                turn_id=turn_id,
-                package_ids=tuple(
-                    contribution.package_id
-                    for contribution in self.capability_contributions
-                ),
-                skill_id=str(skill.get("skill_id") or ""),
-                payload={
-                    "status": result.status.value,
-                    "stop_reason": result.stop_reason,
-                    "artifact_ids": [artifact.id for artifact in result.artifacts],
-                },
-                metadata={"user_id": str(user_id or "local-device")},
-            )
-        )
-        lifecycle_audits.extend(settlement_hooks.audits)
-        _emit_runtime_hook_audits(emit, settlement_hooks.audits)
-        diagnostics["hooks"]["executions"] = [
-            _hook_audit_dict(audit) for audit in lifecycle_audits
-        ]
-        try:
-            self.telemetry.record(
-                TelemetryRecord(
-                    event_name="runtime.settled",
-                    run_id=run_id,
-                    thread_id=conversation_thread_id,
-                    turn_id=turn_id,
-                    tenant_id=runtime_scope.tenant_id,
-                    user_id=runtime_scope.user_id,
-                    namespace=runtime_scope.namespace,
-                    status=result.status.value,
-                    attributes={
-                        "status": result.status.value,
-                        "stop_reason": result.stop_reason,
-                        "skill_id": str(skill.get("skill_id") or ""),
-                        "recovery_source": recovery_source,
-                    },
-                )
-            )
-        except Exception as exc:
-            telemetry_error_count += 1
-            telemetry_last_error = f"{type(exc).__name__}: {exc}"
-        if telemetry_error_count:
-            diagnostics["telemetry"] = {
-                "status": "degraded",
-                "error_count": telemetry_error_count,
-                "last_error": telemetry_last_error,
-            }
-        self._persist_runtime_snapshot(
-            result,
+            context_window_diagnostics=context_window_diagnostics,
+            emitter=emitter,
+            lifecycle_audits=lifecycle_audits,
+            package_ids=package_ids,
+            recovery_source=recovery_source,
+            checkpoint_authority=checkpoint_authority,
+            checkpoint_load_errors=checkpoint_load_errors,
+            run_started_monotonic=run_started_monotonic,
             run_id=run_id,
-            thread_id=conversation_thread_id,
-            session=session,
+            conversation_thread_id=conversation_thread_id,
+            turn_id=turn_id,
             user_id=str(user_id or "local-device"),
-            context_bundle=bundle,
+            runtime_scope=runtime_scope,
+            active_graph_thread_id=active_graph_thread_id,
+            session=session,
             execution_fence=execution_fence,
-            scope=runtime_scope,
+            emit_hook_audits=_emit_runtime_hook_audits,
         )
-        if result.status.value in {"completed", "failed", "canceled"}:
-            self.cleanup_run(
-                result,
-                run_id=run_id,
-                session=session,
-                user_id=str(user_id or "local-device"),
-                scope=runtime_scope,
-                graph_thread_ids=[active_graph_thread_id],
-            )
-        return result
 
     def cleanup_run(
         self,
