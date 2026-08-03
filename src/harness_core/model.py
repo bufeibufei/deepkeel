@@ -16,8 +16,6 @@ from harness_core.budget import (
     BudgetExceededError,
     BudgetLedger,
     BudgetRequest,
-    BudgetSnapshot,
-    UsageReport,
     preview_budget,
 )
 from harness_core.context_window import ConservativeTokenEstimator
@@ -60,6 +58,12 @@ from harness_core.model_routing import (
     ModelRouteDecision,
     ModelRouter,
     ModelStepContext,
+)
+from harness_core.model_step_execution import (
+    ModelAttemptExecutionError,
+    execute_model_attempt,
+    record_failed_attempt_usage,
+    record_successful_attempt_usage,
 )
 from harness_core.policy import (
     PolicyDeniedError,
@@ -727,191 +731,43 @@ class RoutedModelGateway:
                     on_route(route_payload)
                 raise BudgetExceededError(retry_budget)
 
-            visible_delta_emitted = False
-            streamed_output_parts: list[str] = []
-            forced_tool_name = str(step_context.forced_tool_name or "").strip()
-
-            def tracked_delta(delta: str) -> None:
-                nonlocal visible_delta_emitted
-                ensure_time_remaining(step_context.deadline_monotonic)
-                if delta:
-                    if on_text_delta is not None and not forced_tool_name:
-                        visible_delta_emitted = True
-                    streamed_output_parts.append(delta)
-                    if (
-                        max_output_tokens is not None
-                        and token_estimator.estimate("".join(streamed_output_parts))
-                        > max_output_tokens
-                    ):
-                        raise BudgetExceededError(
-                            preview_budget(
-                                BudgetSnapshot(run_id=step_context.run_id),
-                                BudgetRequest(
-                                    run_id=step_context.run_id,
-                                    metric=OUTPUT_TOKENS,
-                                    amount=token_estimator.estimate(
-                                        "".join(streamed_output_parts)
-                                    ),
-                                    limit=max_output_tokens,
-                                ),
-                            )
-                        )
-                if on_text_delta is not None and not forced_tool_name:
-                    on_text_delta(delta)
-
-            envelope: ModelInvocationEnvelope | None = None
-            claim_token = ""
             try:
-                ensure_time_remaining(step_context.deadline_monotonic)
-                if not provider.info.supports_native_tools:
-                    raise RuntimeError("provider does not support native tool calls")
-                invocation = ModelInvocation(
-                    messages=provider_messages,
+                outcome = await execute_model_attempt(
+                    provider=provider,
+                    route=route,
+                    step_context=step_context,
+                    attempt_index=attempt_index,
+                    retry_kind=retry_kind,
+                    provider_messages=provider_messages,
                     tools=tools,
                     tool_choice=_tool_choice(step_context, provider_capabilities),
                     request_timeout=request_timeout,
-                    max_output_tokens=route_payload["max_output_tokens"],
-                    reasoning_effort=route_payload["reasoning_effort"],
-                )
-                envelope = ModelInvocationEnvelope(
-                    invocation_id=(
-                        f"{step_context.run_id}:turn:{step_context.turn_id}:"
-                        f"model:{step_context.step_index}:"
-                        f"attempt:{attempt_index}"
-                    ),
-                    run_id=step_context.run_id,
-                    thread_id=step_context.thread_id,
-                    turn_id=step_context.turn_id,
-                    step_index=step_context.step_index,
-                    attempt_index=attempt_index,
-                    retry_kind=retry_kind,
-                    provider_id=provider.info.provider_id,
-                    model_id=provider.info.model_id,
-                    model_role=route.role,
-                    router_id=route.router_id,
-                    route_reason=route.reason,
+                    max_output_tokens=max_output_tokens,
+                    reasoning_effort=reasoning_effort,
                     estimated_input_tokens=estimated_input_tokens,
-                    request=invocation,
+                    route_payload=route_payload,
+                    token_estimator=token_estimator,
+                    invocation_recorder=self.invocation_recorder,
+                    invocation_store=self.invocation_store,
+                    model_health_store=self.model_health_store,
+                    invoke_provider=_ainvoke_provider,
+                    validate_turn=_validate_forced_tool_turn,
+                    on_text_delta=on_text_delta,
                 )
-                route_payload["invocation"] = envelope.public_snapshot()
-                if self.invocation_recorder is not None:
-                    try:
-                        self.invocation_recorder.record(envelope)
-                        route_payload["invocation"]["recorded"] = True
-                    except Exception as recorder_error:
-                        route_payload["invocation"]["recorded"] = False
-                        route_payload["invocation"]["recorder_error"] = type(
-                            recorder_error
-                        ).__name__
-                if self.invocation_store is not None:
-                    claim = self.invocation_store.claim(
-                        envelope,
-                        lease_seconds=max(30.0, float(request_timeout) + 30.0),
-                    )
-                    route_payload["invocation"]["claim_outcome"] = claim.outcome
-                    if claim.outcome == "replay" and claim.result is not None:
-                        turn = claim.result.model_copy(deep=True)
-                        route_payload["invocation"]["replayed"] = True
-                    elif claim.outcome == "acquired":
-                        claim_token = claim.claim_token
-                        turn = await _ainvoke_provider(
-                            provider,
-                            invocation,
-                            on_text_delta=tracked_delta,
-                        )
-                    else:
-                        detail = claim.failure_message or (
-                            "the model invocation is already executing"
-                            if claim.outcome == "in_progress"
-                            else "the model invocation cannot be safely replayed"
-                        )
-                        raise ModelInvocationUnavailable(
-                            f"model invocation {claim.outcome}: {detail}"
-                        )
-                else:
-                    turn = await _ainvoke_provider(
-                        provider,
-                        invocation,
-                        on_text_delta=tracked_delta,
-                    )
-                _validate_forced_tool_turn(turn, step_context)
-                ensure_time_remaining(step_context.deadline_monotonic)
-                self.model_health_store.record_success(
-                    provider.info.provider_id,
-                    provider.info.model_id,
+                turn = outcome.turn
+            except ModelAttemptExecutionError as attempt_error:
+                exc = attempt_error.cause
+                failed_input_budget, failed_output_budget = record_failed_attempt_usage(
+                    ledger=self.budget_ledger,
+                    policy=budget_policy,
+                    step_context=step_context,
+                    role=route.role,
+                    attempt_index=attempt_index,
+                    estimated_input_tokens=estimated_input_tokens,
+                    streamed_output=attempt_error.streamed_output,
+                    token_estimator=token_estimator,
+                    route_payload=route_payload,
                 )
-                if (
-                    self.invocation_store is not None
-                    and envelope is not None
-                    and claim_token
-                ):
-                    self.invocation_store.complete(
-                        envelope.invocation_id,
-                        claim_token=claim_token,
-                        result=turn,
-                    )
-            except Exception as exc:
-                if (
-                    self.invocation_store is not None
-                    and envelope is not None
-                    and claim_token
-                ):
-                    try:
-                        self.invocation_store.fail(
-                            envelope.invocation_id,
-                            claim_token=claim_token,
-                            failure_type=type(exc).__name__,
-                            failure_message=str(exc),
-                        )
-                    except Exception as settlement_error:
-                        route_payload["invocation"]["settlement_error"] = type(
-                            settlement_error
-                        ).__name__
-                failed_output_tokens = (
-                    token_estimator.estimate("".join(streamed_output_parts))
-                    if streamed_output_parts
-                    else 0
-                )
-                failed_usage = UsageReport(
-                    input_tokens=estimated_input_tokens,
-                    output_tokens=failed_output_tokens,
-                    total_tokens=estimated_input_tokens + failed_output_tokens,
-                    source="estimated_failure",
-                )
-                failed_input_budget = self.budget_ledger.consume(
-                    BudgetRequest(
-                        run_id=step_context.run_id,
-                        metric=INPUT_TOKENS,
-                        amount=estimated_input_tokens,
-                        limit=budget_policy.limit("max_input_tokens_total"),
-                        operation_id=(
-                            f"model-input:{step_context.step_index}:attempt:{attempt_index}"
-                        ),
-                        metadata={"role": route.role, "usage_source": "estimated_failure"},
-                    )
-                )
-                route_payload["budget_metrics"][INPUT_TOKENS] = failed_input_budget.as_dict()
-                failed_output_budget = None
-                if failed_output_tokens:
-                    failed_output_budget = self.budget_ledger.consume(
-                        BudgetRequest(
-                            run_id=step_context.run_id,
-                            metric=OUTPUT_TOKENS,
-                            amount=failed_output_tokens,
-                            limit=budget_policy.limit("max_output_tokens_total"),
-                            operation_id=(
-                                f"model-output:{step_context.step_index}:attempt:{attempt_index}"
-                            ),
-                            metadata={
-                                "role": route.role,
-                                "usage_source": "estimated_failure",
-                            },
-                        )
-                    )
-                    route_payload["budget_metrics"][OUTPUT_TOKENS] = (
-                        failed_output_budget.as_dict()
-                    )
-                route_payload["usage"] = failed_usage.as_dict()
                 if not failed_input_budget.allowed:
                     if on_route is not None:
                         on_route(route_payload)
@@ -931,13 +787,13 @@ class RoutedModelGateway:
                     ).as_dict()
                 can_retry = (
                     failure.retryable
-                    and not visible_delta_emitted
+                    and not attempt_error.visible_delta_emitted
                     and attempt_index < len(attempts)
                 )
                 if not can_retry:
                     if on_route is not None:
                         on_route(route_payload)
-                    raise
+                    raise exc
                 previous_failure = {
                     "fallback_from": route.role,
                     "failure_category": failure.category,
@@ -946,44 +802,18 @@ class RoutedModelGateway:
                 if on_route is not None:
                     on_route(route_payload)
                 continue
-            estimated_output_tokens = token_estimator.estimate(
-                {
-                    "content": turn.content,
-                    "tool_calls": [call.model_dump() for call in turn.tool_calls],
-                }
+            settled_input_budget, output_budget = record_successful_attempt_usage(
+                ledger=self.budget_ledger,
+                policy=budget_policy,
+                step_context=step_context,
+                role=route.role,
+                attempt_index=attempt_index,
+                estimated_input_tokens=estimated_input_tokens,
+                turn=turn,
+                provider_usage=_provider_usage(turn.raw),
+                token_estimator=token_estimator,
+                route_payload=route_payload,
             )
-            usage = UsageReport.from_provider(
-                _provider_usage(turn.raw),
-                estimated_input=estimated_input_tokens,
-                estimated_output=estimated_output_tokens,
-            )
-            settled_input_budget = self.budget_ledger.consume(
-                BudgetRequest(
-                    run_id=step_context.run_id,
-                    metric=INPUT_TOKENS,
-                    amount=usage.input_tokens,
-                    limit=budget_policy.limit("max_input_tokens_total"),
-                    operation_id=(
-                        f"model-input:{step_context.step_index}:attempt:{attempt_index}"
-                    ),
-                    metadata={"role": route.role, "usage_source": usage.source},
-                )
-            )
-            output_budget = self.budget_ledger.consume(
-                BudgetRequest(
-                    run_id=step_context.run_id,
-                    metric=OUTPUT_TOKENS,
-                    amount=usage.output_tokens,
-                    limit=budget_policy.limit("max_output_tokens_total"),
-                    operation_id=(
-                        f"model-output:{step_context.step_index}:attempt:{attempt_index}"
-                    ),
-                    metadata={"role": route.role, "usage_source": usage.source},
-                )
-            )
-            route_payload["budget_metrics"][INPUT_TOKENS] = settled_input_budget.as_dict()
-            route_payload["budget_metrics"][OUTPUT_TOKENS] = output_budget.as_dict()
-            route_payload["usage"] = usage.as_dict()
             if on_route is not None:
                 on_route(route_payload)
             if not settled_input_budget.allowed:

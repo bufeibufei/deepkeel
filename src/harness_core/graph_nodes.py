@@ -17,7 +17,6 @@ from harness_core.events import AgentEventPersistenceError
 from harness_core.hooks import HookAction, HookAudit, HookInvocation, HookPoint
 from harness_core.model import ModelGateway, ModelTurn, model_tools_from_registry
 from harness_core.model_failures import ModelToolContractError
-from harness_core.model_routing import ModelStepContext
 from harness_core.skills import SkillPolicy
 from harness_core.skill_activation import EntryToolActivationRequest
 from harness_core.tool_registry import ToolRegistry
@@ -32,6 +31,11 @@ from harness_core.graph_state import (
     _is_policy_confirmation, _is_suspending_call, _messages, _model_available_roles,
     _parallel_suspension_rejected, _skill_tool_parameter_overrides, _stable_tool_calls,
     HarnessGraphState, migrate_legacy_graph_state,
+)
+from harness_core.graph_model_step import (
+    build_model_metrics,
+    build_model_step_context,
+    partition_model_tool_calls,
 )
 from harness_core.graph_workflow import (
     TRUNCATED_FINISH_REASONS,
@@ -545,35 +549,12 @@ class GraphNodes:
             delta_index += 1
 
         try:
-            model_step_context = ModelStepContext(
-                    run_id=str(current.get("run_id") or ""),
-                    user_id=str(current.get("user_id") or ""),
-                    thread_id=str(current.get("thread_id") or ""),
-                    turn_id=str(current.get("turn_id") or ""),
-                    step_index=int(current.get("step_count") or 0),
-                    message_count=len(current.get("messages") or []),
-                    observation_count=len(current.get("observations") or []),
-                    tool_result_count=len(current.get("tool_results") or []),
-                    available_roles=_model_available_roles(model),
-                    observation_sources=tuple(
-                        str(item.get("source") or "")
-                        for item in (current.get("observations") or [])
-                        if isinstance(item, dict)
-                    ),
-                    tool_result_names=tuple(
-                        str(item.get("name") or "")
-                        for item in (current.get("tool_results") or [])
-                        if isinstance(item, dict)
-                    ),
-                    model_policy=dict(current.get("model_policy") or {}),
-                    skill_activation=dict(current.get("skill_activation") or {}),
-                    policy_phase=str(current.get("policy_phase") or ""),
-                    forced_tool_name=forced_tool_name,
-                    governance_scope=dict(
-                        (current.get("metadata") or {}).get("governance_scope") or {}
-                    ),
-                    deadline_monotonic=deadline_monotonic,
-                )
+            model_step_context = build_model_step_context(
+                current,
+                available_roles=_model_available_roles(model),
+                forced_tool_name=forced_tool_name,
+                deadline_monotonic=deadline_monotonic,
+            )
             async_run_turn = getattr(model, "arun_turn", None)
             try:
                 if callable(async_run_turn):
@@ -676,29 +657,15 @@ class GraphNodes:
             _emit_hook_audits(current, config, after_model.audits)
         current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
         model_latency_ms = int((time.perf_counter() - model_started_at) * 1000)
-        model_metrics: dict[str, Any] = {
-            "model_id": turn.model_id,
-            "model_role": turn.model_role,
-            "finish_reason": turn.finish_reason,
-            "latency_ms": model_latency_ms,
-            "first_token_latency_ms": _latency_ms(model_started_at, first_delta_at),
-            "delta_count": delta_index,
-            "delta_chars": delta_chars,
-            "content_chars": len(turn.content),
-            "tool_call_count": len(turn.tool_calls),
-            "route_reason": str(route_payload.get("reason") or ""),
-            "router_id": str(route_payload.get("router_id") or ""),
-            "policy": route_payload.get("policy") if isinstance(route_payload.get("policy"), dict) else {},
-            "budget": route_payload.get("budget") if isinstance(route_payload.get("budget"), dict) else {},
-            "budget_metrics": (
-                route_payload.get("budget_metrics")
-                if isinstance(route_payload.get("budget_metrics"), dict)
-                else {}
-            ),
-            "usage": route_payload.get("usage") if isinstance(route_payload.get("usage"), dict) else {},
-            "max_output_tokens": route_payload.get("max_output_tokens"),
-            "forced_tool_name": forced_tool_name,
-        }
+        model_metrics = build_model_metrics(
+            turn,
+            route_payload,
+            latency_ms=model_latency_ms,
+            first_token_latency_ms=_latency_ms(model_started_at, first_delta_at),
+            delta_count=delta_index,
+            delta_chars=delta_chars,
+            forced_tool_name=forced_tool_name,
+        )
         _emit(
             current,
             config,
@@ -724,20 +691,12 @@ class GraphNodes:
         registered_tool_names = {
             spec.name for spec in tool_registry.list_tools()
         }
-        tool_calls = [
-            call
-            for call in reported_tool_calls
-            if not workflow_is_finalizing
-            or call.name in exposed_tool_names
-            or call.name not in registered_tool_names
-        ]
-        rejected_tool_calls = [
-            call
-            for call in reported_tool_calls
-            if workflow_is_finalizing
-            and call.name in registered_tool_names
-            and call.name not in exposed_tool_names
-        ]
+        tool_calls, rejected_tool_calls = partition_model_tool_calls(
+            reported_tool_calls,
+            workflow_is_finalizing=workflow_is_finalizing,
+            exposed_tool_names=exposed_tool_names,
+            registered_tool_names=registered_tool_names,
+        )
         if rejected_tool_calls:
             rejected_names = [call.name for call in rejected_tool_calls]
             metadata = current.setdefault("metadata", {})

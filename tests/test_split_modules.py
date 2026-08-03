@@ -1,11 +1,19 @@
 from __future__ import annotations
 
+import ast
+from pathlib import Path
+
 import pytest
 
-from harness_core.contracts import AgentMessage, RunContext, RunStatus
+from harness_core.contracts import AgentMessage, RunContext, RunStatus, ToolCall
 from harness_core.control import InMemoryRunControl
 from harness_core.failures import RunCanceledError
 from harness_core.graph_nodes import GraphNodes
+from harness_core.graph_model_step import (
+    build_model_metrics,
+    build_model_step_context,
+    partition_model_tool_calls,
+)
 from harness_core.graph_state import _state_from_context
 from harness_core.graph_workflow import (
     _route_after_model,
@@ -22,6 +30,7 @@ from harness_core.model import (
 from harness_core.model_invocations import (
     InMemoryModelInvocationStore,
     ModelInvocation,
+    ModelTurn,
 )
 from harness_core.tool_execution import (
     InMemoryToolExecutionStore,
@@ -150,6 +159,79 @@ def test_graph_nodes_honors_cooperative_cancellation() -> None:
 
     with pytest.raises(RunCanceledError):
         nodes.ensure_active({"run_id": "run-1"})
+
+
+def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> None:
+    state = {
+        "run_id": "run-1",
+        "user_id": "user-1",
+        "thread_id": "thread-1",
+        "turn_id": "turn-1",
+        "messages": [{"role": "user", "content": "hello"}],
+        "observations": [{"source": "tool-a"}],
+        "tool_results": [{"name": "tool-a"}],
+        "model_policy": {"mode": "adaptive"},
+        "metadata": {"governance_scope": {"tenant_id": "tenant-1"}},
+    }
+    context = build_model_step_context(
+        state,
+        available_roles=("fast", "reasoning"),
+        forced_tool_name="tool-a",
+        deadline_monotonic=123.0,
+    )
+    assert context.available_roles == ("fast", "reasoning")
+    assert context.observation_sources == ("tool-a",)
+    assert context.governance_scope == {"tenant_id": "tenant-1"}
+
+    accepted, rejected = partition_model_tool_calls(
+        [
+            ToolCall(id="allowed", name="tool-a", arguments={}),
+            ToolCall(id="hidden", name="tool-b", arguments={}),
+        ],
+        workflow_is_finalizing=True,
+        exposed_tool_names={"tool-a"},
+        registered_tool_names={"tool-a", "tool-b"},
+    )
+    assert [call.name for call in accepted] == ["tool-a"]
+    assert [call.name for call in rejected] == ["tool-b"]
+
+    metrics = build_model_metrics(
+        ModelTurn(content="ready", model_id="m1", model_role="fast"),
+        {"usage": {"input_tokens": 4}, "budget_metrics": {"model_calls": {}}},
+        latency_ms=50,
+        first_token_latency_ms=10,
+        delta_count=2,
+        delta_chars=5,
+        forced_tool_name="",
+    )
+    assert metrics["content_chars"] == 5
+    assert metrics["usage"] == {"input_tokens": 4}
+
+
+@pytest.mark.parametrize(
+    ("path", "class_name", "method_name", "maximum_lines"),
+    [
+        ("src/harness_core/model.py", "RoutedModelGateway", "arun_turn", 400),
+        ("src/harness_core/graph_nodes.py", "GraphNodes", "amodel_node", 620),
+    ],
+)
+def test_central_execution_methods_stay_within_ratcheted_size_budget(
+    path: str,
+    class_name: str,
+    method_name: str,
+    maximum_lines: int,
+) -> None:
+    tree = ast.parse(Path(path).read_text(encoding="utf-8"))
+    target = next(
+        method
+        for node in tree.body
+        if isinstance(node, ast.ClassDef) and node.name == class_name
+        for method in node.body
+        if isinstance(method, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and method.name == method_name
+    )
+    assert target.end_lineno is not None
+    assert target.end_lineno - target.lineno + 1 <= maximum_lines
 
 
 def test_subagent_quota_reserves_calls_atomically() -> None:

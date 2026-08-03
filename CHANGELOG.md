@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.33.0
+
+- Split model-attempt invocation, replay settlement, streaming accounting, and
+  token usage from the routed model gateway without changing the public SDK.
+- Extract Graph model-step context, metrics, and tool-disclosure projections
+  from the central node implementation.
+- Add ratcheted structural tests so the central model and Graph execution
+  methods cannot silently grow back into monolithic control paths.
+
 ## 3.32.1
 
 - Recover an opt-in explicit workflow's unique required entry tool when a

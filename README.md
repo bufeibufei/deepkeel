@@ -340,7 +340,7 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v3`; the current package version is
-`3.29.2` and the additive SDK surface is `3.13.0`. Consumers import from
+`3.33.0` and the additive SDK surface is `3.13.0`. Consumers import from
 `harness_core.runtime_sdk`,
 `harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
 orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
