@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.34.0
+
+- Add orthogonal L1/L2/L3 context contracts for scope, visibility, retention,
+  representation, authority, subject provenance, and source references.
+- Plan context against candidate model limits before routing and apply the
+  selected provider's exact context and output limits at every model step.
+- Replace fixed message-count truncation with token-aware atomic compaction,
+  deterministic working checkpoints, subject quarantine, and context manifests.
+
 ## 3.33.0
 
 - Split model-attempt invocation, replay settlement, streaming accounting, and

@@ -12,6 +12,8 @@ from harness_core.budget import (
     TOOL_CONCURRENCY,
 )
 from harness_core.model import ModelProviderAdapter
+from harness_core.context_contracts import ModelContextProfile
+from harness_core.model_capabilities import model_capabilities_for_provider
 from harness_core.type_narrowing import as_dict
 
 def _resolved_model_policy(
@@ -102,6 +104,48 @@ def _model_providers(
         catalog.setdefault(role, provider)
         catalog.setdefault("reasoning", provider)
     return catalog
+
+
+def _conservative_model_context_profile(
+    providers: dict[str, Any],
+    model_policy: dict[str, Any],
+) -> ModelContextProfile:
+    """Plan before routing with limits safe for every configured candidate."""
+
+    context_windows: list[int] = []
+    output_limits: list[int] = []
+    model_ids: list[str] = []
+    sources: list[str] = []
+    for candidate in providers.values():
+        info = getattr(candidate, "info", None)
+        if callable(info):
+            info = info()
+        capabilities = getattr(info, "capabilities", None)
+        if capabilities is None:
+            capabilities = model_capabilities_for_provider(candidate)
+        context_window = getattr(capabilities, "context_window_tokens", None)
+        output_limit = getattr(capabilities, "max_output_tokens", None)
+        if context_window:
+            context_windows.append(int(context_window))
+        if output_limit:
+            output_limits.append(int(output_limit))
+        model_id = str(getattr(info, "model_id", "") or getattr(candidate, "model", ""))
+        if model_id:
+            model_ids.append(model_id)
+        source = str(getattr(capabilities, "source", "") or "")
+        if source:
+            sources.append(source)
+
+    return ModelContextProfile(
+        model_id=",".join(dict.fromkeys(model_ids)),
+        model_role="pre_route",
+        context_window_tokens=min(context_windows) if context_windows else None,
+        max_output_tokens=max(output_limits) if output_limits else None,
+        source=(
+            "pre_route_conservative:"
+            + ",".join(dict.fromkeys(sources or ["runtime_unknown"]))
+        ),
+    )
 
 
 def _budget_limits(model_policy: dict[str, Any]) -> dict[str, float]:

@@ -60,7 +60,7 @@ from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUB
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "3.13.0"
+    assert PUBLIC_API_VERSION == "3.14.0"
     assert tuple(harness_core.__all__) == (
         "HARNESS_CORE_CONTRACT_VERSION",
         "HARNESS_CORE_VERSION",
@@ -706,7 +706,7 @@ def test_runtime_exposes_context_window_diagnostics_without_prompt_payloads() ->
     )
 
     diagnostics = result.diagnostics["context_window"]
-    assert diagnostics["schema_version"] == "harness-context-window-v2"
+    assert diagnostics["schema_version"] == "harness-context-window-v3"
     assert diagnostics["final_tokens"] > 0
     assert "facts" not in diagnostics
     assert any(

@@ -19,6 +19,8 @@ from harness_core.budget import (
     preview_budget,
 )
 from harness_core.context_window import ConservativeTokenEstimator
+from harness_core.context_compaction import prepare_model_input_context
+from harness_core.context_contracts import ModelContextProfile
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from harness_core.model_failures import (
@@ -607,12 +609,37 @@ class RoutedModelGateway:
                 messages,
                 system_prompt=attempt_system_prompt,
             )
-            estimated_input_tokens = token_estimator.estimate(
-                {"messages": provider_messages, "tools": tools}
+            provider_capabilities = getattr(
+                provider.info,
+                "capabilities",
+                ModelCapabilities(source="adapter_unknown"),
             )
             per_call_input_limit = budget_policy.limit(
                 "max_input_tokens_per_call",
                 role=route.role,
+            )
+            prepared_model_context = prepare_model_input_context(
+                provider_messages,
+                tools,
+                profile=ModelContextProfile(
+                    model_id=provider.info.model_id,
+                    model_role=route.role,
+                    context_window_tokens=provider_capabilities.context_window_tokens,
+                    max_output_tokens=provider_capabilities.max_output_tokens,
+                    source=provider_capabilities.source,
+                ),
+                configured_input_limit=(
+                    int(per_call_input_limit)
+                    if per_call_input_limit is not None
+                    else None
+                ),
+                estimator=token_estimator,
+                thread_id=step_context.thread_id,
+                subject_id=str(step_context.governance_scope.get("subject_id") or ""),
+            )
+            provider_messages = prepared_model_context.messages
+            estimated_input_tokens = token_estimator.estimate(
+                {"messages": provider_messages, "tools": tools}
             )
             if per_call_input_limit is not None and estimated_input_tokens > per_call_input_limit:
                 raise BudgetExceededError(
@@ -655,11 +682,6 @@ class RoutedModelGateway:
                 if policy.allowed and attempt_index > 1
                 else None
             )
-            provider_capabilities = getattr(
-                provider.info,
-                "capabilities",
-                ModelCapabilities(source="adapter_unknown"),
-            )
             max_output_tokens = _remaining_output_tokens(
                 budget_policy,
                 self.budget_ledger.snapshot(step_context.run_id),
@@ -696,6 +718,7 @@ class RoutedModelGateway:
                     "max_output_tokens": provider_capabilities.max_output_tokens,
                     "capability_source": provider_capabilities.source,
                 },
+                "context_manifest": prepared_model_context.diagnostics,
                 "required_capabilities": {
                     "native_tools": bool(tools or step_context.forced_tool_name),
                     "forced_tool_choice": bool(step_context.forced_tool_name),
@@ -1093,7 +1116,9 @@ def provider_messages_from_agent(
 ) -> list[dict[str, Any]]:
     result: list[dict[str, Any]] = []
     if system_prompt:
-        result.append({"role": "system", "content": system_prompt})
+        result.append(
+            {"role": "system", "content": system_prompt, "_context_tier": "L1"}
+        )
     for message in messages:
         content: str | list[dict[str, Any]] = message.content
         if message.content_parts:
@@ -1114,6 +1139,9 @@ def provider_messages_from_agent(
                 parts.append({"type": "image_url", "image_url": image_url})
             content = parts
         payload: dict[str, Any] = {"role": message.role, "content": content}
+        context_tier = str(message.metadata.get("context_tier") or "").strip().upper()
+        if context_tier in {"L1", "L2", "L3"}:
+            payload["_context_tier"] = context_tier
         if message.name:
             payload["name"] = message.name
         if message.tool_call_id:

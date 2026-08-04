@@ -100,6 +100,7 @@ from harness_core.ui import project_run_ui_state
 from harness_core.version import HARNESS_CORE_CONTRACT_VERSION, HARNESS_CORE_VERSION
 from harness_core.runtime_policy import (
     _budget_limits,
+    _conservative_model_context_profile,
     _max_elapsed_seconds,
     _merge_skill_activation,
     _model_providers,
@@ -604,6 +605,23 @@ class HarnessRuntime:
         run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
         bundle = context_bundle if isinstance(context_bundle, dict) else {}
+        resolved_model_policy = _resolved_model_policy(
+            model_policy,
+            provider=provider,
+            providers=providers,
+            max_steps=self.max_steps,
+        )
+        model_providers = _model_providers(provider, providers, resolved_model_policy)
+        model_context_profile = _conservative_model_context_profile(
+            model_providers,
+            resolved_model_policy,
+        )
+        configured_input_limit = int(
+            as_dict(resolved_model_policy.get("budget")).get(
+                "max_input_tokens_per_call"
+            )
+            or 0
+        )
         context_window_diagnostics: dict[str, Any] = {}
         try:
             if self.context_builder is not None:
@@ -617,6 +635,8 @@ class HarnessRuntime:
                         f"context contributor {contributor_id} must return a mapping"
                     )
                 bundle = contributed
+            bundle["_model_context_profile"] = model_context_profile.as_dict()
+            bundle["_configured_input_limit"] = configured_input_limit
             prepared_context = self.context_window_manager.prepare(
                 question,
                 short,
@@ -673,12 +693,6 @@ class HarnessRuntime:
                 event_sink=event_sink,
                 execution_fence=execution_fence,
             )
-        resolved_model_policy = _resolved_model_policy(
-            model_policy,
-            provider=provider,
-            providers=providers,
-            max_steps=self.max_steps,
-        )
         max_elapsed_seconds = _max_elapsed_seconds(resolved_model_policy)
         deadline_monotonic = (
             time.monotonic() + max_elapsed_seconds
@@ -772,6 +786,8 @@ class HarnessRuntime:
                 execution_fence=execution_fence,
             )
         if lifecycle_start.context_patch:
+            bundle["_model_context_profile"] = model_context_profile.as_dict()
+            bundle["_configured_input_limit"] = configured_input_limit
             prepared_context = self.context_window_manager.prepare(
                 question,
                 short,
@@ -780,7 +796,6 @@ class HarnessRuntime:
             bundle = prepared_context.context_bundle
             context_window_diagnostics = dict(prepared_context.diagnostics)
 
-        model_providers = _model_providers(provider, providers, resolved_model_policy)
         model_gateway = build_runtime_model_gateway(
             model_providers,
             router=self.model_router,

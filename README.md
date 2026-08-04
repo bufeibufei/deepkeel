@@ -176,20 +176,36 @@ legacy snapshot upgrades belong to the Host context adapter; incompatible
 snapshot versions fail explicitly rather than being guessed by Core.
 
 Before model execution, the injected `ContextWindowManager` converts recent
-conversation history into role messages exactly once and applies a deterministic
-input budget. The default manager reserves output capacity, limits history and
-individual messages, then compacts generic context sections in stable priority
-order. It performs no hidden model summarization and exposes only token counts,
-dropped section names and truncation counts through diagnostics. Products can
-replace the estimator or policy without changing the React loop.
+conversation history into role messages exactly once. It plans against the
+smallest configured candidate before routing, then the routed model step applies
+the concrete provider's context window, output reserve, tool-schema reserve and
+per-call budget. History is token-bounded rather than count-bounded; no fixed
+message or character limit is enabled by default.
+
+Context is classified independently along tier, scope, visibility, retention,
+representation and authority axes. `L1` is pinned control and authoritative
+subject context, `L2` is the active run/thread working set, and `L3` is retrieved
+memory or evidence that may be omitted first. `runtime` visibility keeps secrets
+and diagnostic state out of model input. Subject-mismatched `L1`/`L2` items are
+quarantined instead of merely logged. Tool calls and their results are compacted
+as atomic groups.
+
+When L2 exceeds the selected model budget, the default compactor retains the
+recent raw event suffix and creates a source-linked `ContextCheckpoint`. Raw
+events remain authoritative; the checkpoint is a derived, reproducible cache
+with a covered event range and first retained event ID. The `context_manifest`
+and per-model `context_manifest` diagnostics expose tier token usage, decisions,
+validation failures and compaction metadata without logging prompt payloads.
+Products can replace the estimator, planner, compactor or summary cache without
+changing the React loop.
 
 Hosts may additionally provide `ContextSegment` entries for important sections.
-A segment belongs to `runtime_constitution`, `turn_context`, `working_memory`,
-or `retrieved_context`. It can declare retention priority, whether it is required, provenance,
-a per-section ceiling and a precomputed summary. Under pressure, required
-segments receive budget first and an eligible cached summary is preferred over
-blind truncation. Core never generates or persists that summary itself, so its
-content and invalidation policy remain explicit Host responsibilities.
+Legacy layer names (`runtime_constitution`, `turn_context`, `working_memory`, and
+`retrieved_context`) remain diagnostic projections; tier and the orthogonal
+attributes are the assembly contract. A segment can still declare provenance,
+a per-section ceiling and a precomputed summary. Under pressure, pinned and
+protected segments receive budget first, L3 is discarded before recent L2, and
+an eligible cached summary is preferred over blind truncation.
 `ContextSummaryCache` makes this lifecycle testable: every record is bound to a
 Host-provided source fingerprint, and a source change becomes a cache miss
 rather than silently reusing stale context. The default in-memory adapter is
@@ -340,7 +356,7 @@ remote_search = McpServerSpec(
 ```
 
 The frozen public contract is `harness-core-v3`; the current package version is
-`3.33.0` and the additive SDK surface is `3.13.0`. Consumers import from
+`3.34.0` and the additive SDK surface is `3.14.0`. Consumers import from
 `harness_core.runtime_sdk`,
 `harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
 orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
