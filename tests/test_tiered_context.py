@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import pytest
+
 from harness_core.context import build_initial_messages
 from harness_core.context_compaction import (
     DeterministicWorkingContextCompactor,
     prepare_model_input_context,
 )
-from harness_core.context_contracts import ContextItem, ModelContextProfile
+from harness_core.context_contracts import ContextCheckpoint, ContextItem, ModelContextProfile
+from harness_core.context_compaction import ContextInputBudgetError
 from harness_core.context_validation import validate_context_items
 from harness_core.context_planning import ContextBudgetPlanner
 from harness_core.context_window import (
@@ -212,3 +215,123 @@ def test_dynamic_system_repair_message_keeps_chronological_position() -> None:
     )
 
     assert result.messages[-1]["content"] == "call required tool"
+
+
+def test_oversized_tool_exchange_never_leaves_orphan_tool_result() -> None:
+    estimator = ConservativeTokenEstimator()
+    group = [
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {"id": "call-1", "name": "search", "arguments": {"query": "x" * 800}}
+            ],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call-1",
+            "content": "result " * 800,
+        },
+    ]
+
+    result = DeterministicWorkingContextCompactor(estimator).compact(
+        group,
+        token_budget=120,
+    )
+
+    assert result.retained_messages == [] or [item["role"] for item in result.retained_messages] == [
+        "assistant",
+        "tool",
+    ]
+
+
+def test_protected_current_request_is_never_silently_truncated() -> None:
+    messages = [
+        {"role": "system", "content": "policy", "_context_tier": "L1"},
+        {
+            "role": "user",
+            "content": "important request " * 2_000,
+            "_context_protected": True,
+        },
+    ]
+
+    try:
+        prepare_model_input_context(
+            messages,
+            [],
+            profile=ModelContextProfile(context_window_tokens=1_000, max_output_tokens=200),
+        )
+    except ContextInputBudgetError as exc:
+        assert "protected context" in str(exc)
+    else:
+        raise AssertionError("protected request must fail instead of being truncated")
+
+
+def test_prepare_model_input_protects_current_turn_tool_observations() -> None:
+    messages = [
+        {"role": "user", "content": "current request"},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [{"id": "call-1", "name": "search", "arguments": {}}],
+        },
+        {"role": "tool", "tool_call_id": "call-1", "content": "x" * 400},
+    ]
+
+    with pytest.raises(ContextInputBudgetError):
+        prepare_model_input_context(
+            messages,
+            [],
+            profile=ModelContextProfile(
+                context_window_tokens=180,
+                max_output_tokens=32,
+            ),
+        )
+
+
+def test_context_window_removes_current_request_from_history_before_budgeting() -> None:
+    manager = DeterministicContextWindowManager()
+
+    result = manager.prepare(
+        "current question",
+        {},
+        {
+            "recent_messages": [
+                {"id": "old", "role": "assistant", "content": "previous answer"},
+                {"id": "current", "role": "user", "content": "current question"},
+            ]
+        },
+    )
+
+    assert [item["id"] for item in result.context_bundle["recent_messages"]] == ["old"]
+    assert result.diagnostics["current_message_removed_from_history"] is True
+
+
+def test_checkpoint_compaction_chains_previous_checkpoint_without_marking_answers_done() -> None:
+    previous = ContextCheckpoint(
+        checkpoint_id="checkpoint-1",
+        thread_id="thread-1",
+        subject_id="subject-1",
+        goal="finish the report",
+        done=("validated input",),
+        covered_event_range=("m-1", "m-2"),
+        source_fingerprint="previous-fingerprint",
+    )
+    messages = [
+        {"id": "m-3", "role": "assistant", "content": "unverified draft"},
+        {"id": "m-4", "role": "user", "content": "keep the original scope"},
+        {"id": "m-5", "role": "user", "content": "continue", "_context_protected": True},
+    ]
+
+    result = DeterministicWorkingContextCompactor().compact(
+        messages,
+        token_budget=20,
+        thread_id="thread-1",
+        subject_id="subject-1",
+        previous_checkpoint=previous,
+    )
+
+    assert result.checkpoint is not None
+    assert result.checkpoint.previous_checkpoint_id == "checkpoint-1"
+    assert result.checkpoint.goal == "finish the report"
+    assert result.checkpoint.done == ("validated input",)

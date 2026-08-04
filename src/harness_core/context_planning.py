@@ -13,7 +13,7 @@ class ContextPlanningPolicy:
     minimum_safety_margin_tokens: int = 512
     safety_margin_ratio: float = 0.03
     l2_minimum_tokens: int = 2_048
-    maximum_output_reserve_ratio: float = 0.35
+    maximum_output_reserve_ratio: float = 0.80
 
 
 class ContextBudgetPlanner:

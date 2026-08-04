@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol
 
 from harness_core.context_compaction import DeterministicWorkingContextCompactor
 from harness_core.context_contracts import (
+    ContextCheckpoint,
     ContextAuthority,
     ContextDecision,
     ContextItem,
@@ -220,6 +221,16 @@ class DeterministicContextWindowManager:
         if not isinstance(raw_history, list):
             raw_history = runtime_context.get("recent_messages")
         raw_history = raw_history if isinstance(raw_history, list) else []
+        current_message_removed = False
+        if raw_history:
+            latest = raw_history[-1]
+            if (
+                isinstance(latest, dict)
+                and str(latest.get("role") or "") == "user"
+                and str(latest.get("content") or "").strip() == str(question or "").strip()
+            ):
+                raw_history = raw_history[:-1]
+                current_message_removed = True
         # History is represented as messages, never duplicated inside the system context JSON.
         runtime_context.pop("recent_messages", None)
         explicit_segments = bundle.pop("context_segments", None)
@@ -237,9 +248,10 @@ class DeterministicContextWindowManager:
             token_budget=history_budget,
             thread_id=str(bundle.get("thread_id") or bundle.get("ask_thread_id") or ""),
             subject_id=_active_subject_id(bundle, runtime_context),
+            previous_checkpoint=_checkpoint_from_runtime_context(runtime_context),
         )
         if history_checkpoint is not None:
-            runtime_context["working_context_checkpoint"] = history_checkpoint.as_dict()
+            runtime_context["conversation_summary"] = history_checkpoint.as_dict()
         history_tokens = self.estimator.estimate(history) if history else 0
         context_budget = max(
             0,
@@ -336,6 +348,7 @@ class DeterministicContextWindowManager:
             "reserved_output_tokens": budget_plan.output_reserve_tokens,
             "input_budget_tokens": input_budget_tokens,
             "question_tokens": question_tokens,
+            "current_message_removed_from_history": current_message_removed,
             "original_tokens": original_tokens,
             "final_tokens": final_tokens,
             "context_budget_tokens": context_budget,
@@ -387,6 +400,7 @@ class DeterministicContextWindowManager:
         token_budget: int,
         thread_id: str,
         subject_id: str,
+        previous_checkpoint: ContextCheckpoint | None = None,
     ) -> tuple[list[dict[str, Any]], Any, dict[str, Any]]:
         valid = [
             item
@@ -416,6 +430,7 @@ class DeterministicContextWindowManager:
             token_budget=max(0, int(token_budget)),
             thread_id=thread_id,
             subject_id=subject_id,
+            previous_checkpoint=previous_checkpoint,
         )
         return compacted.retained_messages, compacted.checkpoint, {
             "history_original_count": len(valid),
@@ -1084,3 +1099,11 @@ def context_fingerprint(value: Any) -> str:
         default=str,
     )
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _checkpoint_from_runtime_context(runtime_context: dict[str, Any]) -> ContextCheckpoint | None:
+    for key in ("conversation_summary", "working_context_checkpoint"):
+        checkpoint = ContextCheckpoint.from_mapping(runtime_context.get(key))
+        if checkpoint is not None:
+            return checkpoint
+    return None

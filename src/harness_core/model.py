@@ -625,7 +625,12 @@ class RoutedModelGateway:
                     model_id=provider.info.model_id,
                     model_role=route.role,
                     context_window_tokens=provider_capabilities.context_window_tokens,
-                    max_output_tokens=provider_capabilities.max_output_tokens,
+                    max_output_tokens=_remaining_output_tokens(
+                        budget_policy, self.budget_ledger.snapshot(step_context.run_id),
+                        route.role,
+                        capabilities=provider_capabilities,
+                        estimated_input_tokens=0,
+                    ),
                     source=provider_capabilities.source,
                 ),
                 configured_input_limit=(
@@ -1142,6 +1147,11 @@ def provider_messages_from_agent(
         context_tier = str(message.metadata.get("context_tier") or "").strip().upper()
         if context_tier in {"L1", "L2", "L3"}:
             payload["_context_tier"] = context_tier
+        if str(message.metadata.get("context_retention") or "").strip().lower() in {
+            "pinned",
+            "protected",
+        }:
+            payload["_context_protected"] = True
         if message.name:
             payload["name"] = message.name
         if message.tool_call_id:

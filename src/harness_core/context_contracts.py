@@ -126,6 +126,50 @@ class ContextCheckpoint:
     previous_checkpoint_id: str = ""
     summary_version: str = "context-checkpoint-v1"
 
+    @classmethod
+    def from_mapping(cls, value: Any) -> "ContextCheckpoint | None":
+        raw = value if isinstance(value, dict) else {}
+        if not raw or str(raw.get("schema_version") or raw.get("summary_version") or "") not in {
+            "context-checkpoint-v1",
+            "context-checkpoint-v2",
+        }:
+            return None
+        progress: dict[str, Any] = (
+            dict(raw["progress"])
+            if isinstance(raw.get("progress"), dict)
+            else {}
+        )
+        covered = raw.get("covered_event_range")
+        covered_range = (
+            (str(covered[0] or ""), str(covered[1] or ""))
+            if isinstance(covered, (list, tuple)) and len(covered) >= 2
+            else ("", "")
+        )
+        return cls(
+            checkpoint_id=str(raw.get("checkpoint_id") or ""),
+            thread_id=str(raw.get("thread_id") or ""),
+            subject_id=str(raw.get("subject_id") or ""),
+            goal=str(raw.get("goal") or ""),
+            constraints_and_preferences=_string_tuple(raw.get("constraints_and_preferences")),
+            done=_string_tuple(progress.get("done") or raw.get("done")),
+            in_progress=_string_tuple(progress.get("in_progress") or raw.get("in_progress")),
+            blocked=_string_tuple(progress.get("blocked") or raw.get("blocked")),
+            key_decisions=_string_tuple(raw.get("key_decisions")),
+            pending_actions=_string_tuple(raw.get("pending_actions")),
+            open_questions=_string_tuple(raw.get("open_questions")),
+            critical_facts=_dict_tuple(raw.get("critical_facts")),
+            artifacts=_dict_tuple(raw.get("artifacts")),
+            failed_attempts=_string_tuple(raw.get("failed_attempts")),
+            next_steps=_string_tuple(raw.get("next_steps")),
+            covered_event_range=covered_range,
+            first_kept_event_id=str(raw.get("first_kept_event_id") or ""),
+            source_fingerprint=str(raw.get("source_fingerprint") or ""),
+            previous_checkpoint_id=str(raw.get("previous_checkpoint_id") or ""),
+            summary_version=str(
+                raw.get("summary_version") or raw.get("schema_version") or "context-checkpoint-v1"
+            ),
+        )
+
     def as_dict(self) -> dict[str, Any]:
         return {
             "checkpoint_id": self.checkpoint_id,
@@ -179,3 +223,15 @@ def _positive_int_or_none(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return parsed if parsed > 0 else None
+
+
+def _string_tuple(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(str(item) for item in value if str(item or "").strip())
+
+
+def _dict_tuple(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, (list, tuple)):
+        return ()
+    return tuple(dict(item) for item in value if isinstance(item, dict))

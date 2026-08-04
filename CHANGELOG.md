@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.35.0
+
+- Protect the canonical current turn and complete tool-call exchanges from
+  silent model-context truncation, failing clearly when they cannot fit.
+- Chain subject-aware working checkpoints across repeated compactions without
+  treating assistant prose as completed work or losing middle history.
+- Align input planning with the actual per-call output budget and expose
+  checkpoint lineage, coverage, and subject diagnostics.
+
 ## 3.34.0
 
 - Add orthogonal L1/L2/L3 context contracts for scope, visibility, retention,

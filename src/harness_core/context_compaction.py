@@ -41,6 +41,7 @@ class WorkingContextCompactor(Protocol):
         thread_id: str = "",
         subject_id: str = "",
         previous_checkpoint: ContextCheckpoint | None = None,
+        protect_marked_messages: bool = True,
     ) -> ContextCompactionResult: ...
 
 
@@ -62,6 +63,7 @@ class DeterministicWorkingContextCompactor:
         thread_id: str = "",
         subject_id: str = "",
         previous_checkpoint: ContextCheckpoint | None = None,
+        protect_marked_messages: bool = True,
     ) -> ContextCompactionResult:
         valid = [copy.deepcopy(item) for item in messages if _valid_message(item)]
         original_tokens = self.estimator.estimate(valid) if valid else 0
@@ -79,22 +81,43 @@ class DeterministicWorkingContextCompactor:
             )
 
         groups = _atomic_message_groups(valid)
-        retained_groups: list[list[dict[str, Any]]] = []
-        used = 0
-        for group in reversed(groups):
+        protected_indexes = {
+            index
+            for index, group in enumerate(groups)
+            if protect_marked_messages and any(bool(item.get("_context_protected")) for item in group)
+        }
+        protected_tokens = sum(self.estimator.estimate(groups[index]) for index in protected_indexes)
+        if protected_tokens > token_budget:
+            raise ContextInputBudgetError(
+                "protected context exceeds the selected model input budget"
+            )
+        selected_indexes = set(protected_indexes)
+        used = protected_tokens
+        for index in range(len(groups) - 1, -1, -1):
+            if index in selected_indexes:
+                continue
+            group = groups[index]
             cost = self.estimator.estimate(group)
-            if retained_groups and used + cost > token_budget:
-                break
-            if not retained_groups and cost > token_budget:
-                retained_groups.append(_compact_oversized_group(group, token_budget, self.estimator))
-                used = self.estimator.estimate(retained_groups[-1])
-                break
-            retained_groups.append(group)
-            used += cost
-        retained_groups.reverse()
+            if used + cost <= token_budget:
+                selected_indexes.add(index)
+                used += cost
+                continue
+            remaining = max(0, token_budget - used)
+            compacted = _compact_oversized_group(group, remaining, self.estimator)
+            if compacted:
+                groups[index] = compacted
+                selected_indexes.add(index)
+                used += self.estimator.estimate(compacted)
+            break
+        retained_groups = [groups[index] for index in sorted(selected_indexes)]
         retained = [item for group in retained_groups for item in group]
-        omitted_count = max(0, len(valid) - len(retained))
-        omitted = valid[:omitted_count]
+        omitted = [
+            item
+            for index, group in enumerate(groups)
+            if index not in selected_indexes
+            for item in group
+        ]
+        omitted_count = len(omitted)
         checkpoint = previous_checkpoint
         if omitted:
             checkpoint = _checkpoint_from_messages(
@@ -114,7 +137,17 @@ class DeterministicWorkingContextCompactor:
                 "omitted_count": omitted_count,
                 "atomic_group_count": len(groups),
                 "retained_group_count": len(retained_groups),
+                "protected_group_count": len(protected_indexes),
                 "checkpoint_id": checkpoint.checkpoint_id if checkpoint is not None else "",
+                "previous_checkpoint_id": (
+                    checkpoint.previous_checkpoint_id if checkpoint is not None else ""
+                ),
+                "subject_id": checkpoint.subject_id if checkpoint is not None else subject_id,
+                "covered_event_range": (
+                    list(checkpoint.covered_event_range)
+                    if checkpoint is not None
+                    else []
+                ),
                 "first_kept_event_id": (
                     checkpoint.first_kept_event_id if checkpoint is not None else ""
                 ),
@@ -166,6 +199,17 @@ def prepare_model_input_context(
             and str(item.get("_context_tier") or "") in {"L1", "L2", "L3"}
         )
     ]
+    current_turn_start = next(
+        (
+            index
+            for index in range(len(conversation) - 1, -1, -1)
+            if str(conversation[index].get("role") or "") == "user"
+        ),
+        None,
+    )
+    if current_turn_start is not None:
+        for message in conversation[current_turn_start:]:
+            message["_context_protected"] = True
     l1_tokens = estimator.estimate(l1_messages) if l1_messages else 0
     plan = planner.plan(
         profile,
@@ -234,6 +278,10 @@ def prepare_model_input_context(
         [_strip_internal_context_metadata(item) for item in messages]
     )
     final_tokens = estimator.estimate(final)
+    if final_tokens > plan.available_input_tokens:
+        raise ContextInputBudgetError(
+            "prepared context exceeds the selected model input budget"
+        )
     return ModelInputContextResult(
         messages=final,
         diagnostics={
@@ -386,16 +434,27 @@ def _compact_oversized_group(
     result = copy.deepcopy(group)
     if not result or budget <= 0:
         return []
-    per_message = max(16, budget // len(result))
+    # Preserve every envelope in an atomic group. Dropping the assistant tool
+    # call while retaining its result creates provider-invalid history.
+    structural = copy.deepcopy(result)
+    for message in structural:
+        if isinstance(message.get("content"), str):
+            message["content"] = ""
+    if estimator.estimate(structural) > budget:
+        return []
+    per_message = max(1, budget // len(result))
     for message in result:
         content = message.get("content")
         if not isinstance(content, str) or estimator.estimate(content) <= per_message:
             continue
         message["content"] = _head_tail(content, per_message, estimator)
         message["context_compacted"] = True
-    while len(result) > 1 and estimator.estimate(result) > budget:
-        result.pop(0)
-    return result
+    if estimator.estimate(result) > budget:
+        for message in result:
+            if isinstance(message.get("content"), str) and message.get("content"):
+                message["content"] = "[context compacted]"
+                message["context_compacted"] = True
+    return result if estimator.estimate(result) <= budget else []
 
 
 def _head_tail(value: str, budget: int, estimator: TokenEstimatorLike) -> str:
@@ -431,11 +490,6 @@ def _checkpoint_from_messages(
         for item in omitted
         if str(item.get("role") or "") == "user"
     ]
-    assistant_messages = [
-        _message_excerpt(item)
-        for item in omitted
-        if str(item.get("role") or "") == "assistant"
-    ]
     critical_facts = tuple(previous_checkpoint.critical_facts) if previous_checkpoint else ()
     critical_facts += tuple(
         {
@@ -444,27 +498,43 @@ def _checkpoint_from_messages(
             "role": str(item.get("role") or ""),
         }
         for item in omitted[-8:]
+        if str(item.get("role") or "") in {"user", "tool"}
         if _message_excerpt(item)
     )
     fingerprint = hashlib.sha256(
-        json.dumps(omitted, ensure_ascii=False, sort_keys=True, default=str).encode("utf-8")
+        json.dumps(
+            {
+                "previous": previous_checkpoint.source_fingerprint if previous_checkpoint else "",
+                "events": omitted,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            default=str,
+        ).encode("utf-8")
     ).hexdigest()
     return ContextCheckpoint(
         checkpoint_id=f"context-{fingerprint[:20]}",
         thread_id=thread_id,
         subject_id=subject_id,
-        goal=(user_messages[-1] if user_messages else previous_checkpoint.goal if previous_checkpoint else ""),
-        done=tuple(
-            dict.fromkeys(
-                (*(previous_checkpoint.done if previous_checkpoint else ()), *assistant_messages[-4:])
-            )
+        goal=(previous_checkpoint.goal if previous_checkpoint and previous_checkpoint.goal else user_messages[-1] if user_messages else ""),
+        constraints_and_preferences=(
+            previous_checkpoint.constraints_and_preferences if previous_checkpoint else ()
         ),
+        done=previous_checkpoint.done if previous_checkpoint else (),
+        in_progress=previous_checkpoint.in_progress if previous_checkpoint else (),
+        blocked=previous_checkpoint.blocked if previous_checkpoint else (),
+        key_decisions=previous_checkpoint.key_decisions if previous_checkpoint else (),
+        pending_actions=previous_checkpoint.pending_actions if previous_checkpoint else (),
+        open_questions=previous_checkpoint.open_questions if previous_checkpoint else (),
         critical_facts=critical_facts[-16:],
+        artifacts=previous_checkpoint.artifacts if previous_checkpoint else (),
+        failed_attempts=previous_checkpoint.failed_attempts if previous_checkpoint else (),
+        next_steps=previous_checkpoint.next_steps if previous_checkpoint else (),
         covered_event_range=(
             previous_checkpoint.covered_event_range[0]
             if previous_checkpoint and previous_checkpoint.covered_event_range[0]
             else first_id,
-            last_id,
+            last_id or (previous_checkpoint.covered_event_range[1] if previous_checkpoint else ""),
         ),
         first_kept_event_id=first_kept_id,
         source_fingerprint=fingerprint,
