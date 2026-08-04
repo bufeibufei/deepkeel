@@ -19,7 +19,11 @@ from harness_core.budget import (
     preview_budget,
 )
 from harness_core.context_window import ConservativeTokenEstimator
-from harness_core.context_compaction import prepare_model_input_context
+from harness_core.context_compaction import (
+    ContextInputBudgetError,
+    ModelInputContextResult,
+    prepare_model_input_context,
+)
 from harness_core.context_contracts import ModelContextProfile
 from harness_core.contracts import AgentMessage, ToolCall
 from harness_core.deadlines import ensure_time_remaining, remaining_timeout_ceiling
@@ -618,29 +622,17 @@ class RoutedModelGateway:
                 "max_input_tokens_per_call",
                 role=route.role,
             )
-            prepared_model_context = prepare_model_input_context(
+            prepared_model_context = _prepare_model_context(
                 provider_messages,
                 tools,
-                profile=ModelContextProfile(
-                    model_id=provider.info.model_id,
-                    model_role=route.role,
-                    context_window_tokens=provider_capabilities.context_window_tokens,
-                    max_output_tokens=_remaining_output_tokens(
-                        budget_policy, self.budget_ledger.snapshot(step_context.run_id),
-                        route.role,
-                        capabilities=provider_capabilities,
-                        estimated_input_tokens=0,
-                    ),
-                    source=provider_capabilities.source,
-                ),
-                configured_input_limit=(
-                    int(per_call_input_limit)
-                    if per_call_input_limit is not None
-                    else None
-                ),
-                estimator=token_estimator,
-                thread_id=step_context.thread_id,
-                subject_id=str(step_context.governance_scope.get("subject_id") or ""),
+                provider=provider,
+                route=route,
+                provider_capabilities=provider_capabilities,
+                budget_policy=budget_policy,
+                budget_ledger=self.budget_ledger,
+                step_context=step_context,
+                per_call_input_limit=per_call_input_limit,
+                token_estimator=token_estimator,
             )
             provider_messages = prepared_model_context.messages
             estimated_input_tokens = token_estimator.estimate(
@@ -1023,6 +1015,65 @@ def _model_call_limit(model_policy: dict[str, Any]) -> float | None:
         return float(value) if value is not None else None
     except (TypeError, ValueError):
         return None
+
+
+def _prepare_model_context(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]],
+    *,
+    provider: ModelProviderAdapter | AsyncModelProviderAdapter,
+    route: ModelRouteDecision,
+    provider_capabilities: ModelCapabilities,
+    budget_policy: BudgetPolicy,
+    budget_ledger: BudgetLedger,
+    step_context: ModelStepContext,
+    per_call_input_limit: float | None,
+    token_estimator: ConservativeTokenEstimator,
+) -> ModelInputContextResult:
+    output_tokens = _remaining_output_tokens(
+        budget_policy,
+        budget_ledger.snapshot(step_context.run_id),
+        route.role,
+        capabilities=provider_capabilities,
+        estimated_input_tokens=0,
+    )
+    try:
+        return prepare_model_input_context(
+            messages,
+            tools,
+            profile=ModelContextProfile(
+                model_id=provider.info.model_id,
+                model_role=route.role,
+                context_window_tokens=provider_capabilities.context_window_tokens,
+                max_output_tokens=output_tokens,
+                source=provider_capabilities.source,
+            ),
+            configured_input_limit=(
+                int(per_call_input_limit) if per_call_input_limit is not None else None
+            ),
+            estimator=token_estimator,
+            thread_id=step_context.thread_id,
+            subject_id=str(step_context.governance_scope.get("subject_id") or ""),
+        )
+    except ContextInputBudgetError as exc:
+        limit = int(
+            per_call_input_limit
+            or provider_capabilities.context_window_tokens
+            or 1
+        )
+        estimated = token_estimator.estimate({"messages": messages, "tools": tools})
+        raise BudgetExceededError(
+            preview_budget(
+                budget_ledger.snapshot(step_context.run_id),
+                BudgetRequest(
+                    run_id=step_context.run_id,
+                    metric=INPUT_TOKENS,
+                    amount=max(limit + 1, estimated),
+                    limit=limit,
+                    metadata={"reason": ContextInputBudgetError.code},
+                ),
+            )
+        ) from exc
 
 
 def _remaining_output_tokens(

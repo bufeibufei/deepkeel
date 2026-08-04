@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.35.1
+
+- Preserve the public `BudgetExceededError` contract when protected current
+  context cannot fit, while recording the context-budget failure reason.
+
 ## 3.35.0
 
 - Protect the canonical current turn and complete tool-call exchanges from
