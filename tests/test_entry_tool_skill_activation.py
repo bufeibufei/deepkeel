@@ -1,11 +1,11 @@
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     HarnessRuntimeBuilder,
     ModelInvocation,
     ModelProviderInfo,
     ModelTurn,
     RuntimePorts,
 )
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     EntryToolActivationDecision,
     EntryToolActivationRequest,
     ToolExecutionContext,
@@ -13,7 +13,7 @@ from harness_core.extension_sdk import (
     ToolRegistry,
     ToolSpec,
 )
-from harness_core.runtime_sdk import PendingAction, RuntimeRequest, ToolCall, ToolResult
+from deepkeel.runtime_sdk import PendingAction, RuntimeRequest, ToolCall, ToolResult
 
 
 class EntryToolModel:

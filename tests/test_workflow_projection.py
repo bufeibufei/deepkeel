@@ -1,4 +1,4 @@
-from harness_core.runtime_sdk import workflow_projection
+from deepkeel.runtime_sdk import workflow_projection
 
 
 def test_workflow_projection_normalizes_lifecycle_and_progress() -> None:

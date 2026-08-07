@@ -4,20 +4,20 @@ from dataclasses import dataclass
 
 import pytest
 
-from harness_core.composition import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.extension_sdk import (
+from deepkeel.composition import HarnessRuntimeBuilder, RuntimePorts
+from deepkeel.extension_sdk import (
     CapabilityContribution,
     CapabilityInstallContext,
     CapabilityManifest,
     CapabilityPackSpec,
     RuntimeGeneration,
 )
-from harness_core.runtime_sdk import RuntimeRequest
-from harness_core.runtime_sdk import InMemoryDurableCheckpointStore
-from harness_core.policy import DefaultPolicyEngine
-from harness_core.model import ModelTurn
-from harness_core.tool_registry import ToolRegistry, ToolSpec
-from harness_core.tools import ToolExecutor
+from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import InMemoryDurableCheckpointStore
+from deepkeel.policy import DefaultPolicyEngine
+from deepkeel.model import ModelTurn
+from deepkeel.tool_registry import ToolRegistry, ToolSpec
+from deepkeel.tools import ToolExecutor
 
 
 class ScriptedNativeProvider:

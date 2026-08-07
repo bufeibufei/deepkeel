@@ -1,4 +1,4 @@
-from harness_core.memory_sdk import (
+from deepkeel.memory_sdk import (
     MemoryClaim,
     MemoryEvidence,
     MemoryMutation,

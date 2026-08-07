@@ -8,8 +8,8 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from harness_core.adapter_sdk import HarnessRuntimeBuilder
-from harness_core.runtime_sdk import RuntimeRequest
+from deepkeel.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.runtime_sdk import RuntimeRequest
 
 
 class BenchmarkProvider:
@@ -102,7 +102,7 @@ def _percentile(values: list[float], quantile: float) -> float:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Run the Harness Core concurrency baseline.")
+    parser = argparse.ArgumentParser(description="Run the DeepKeel concurrency baseline.")
     parser.add_argument("--requests", type=int, default=300)
     parser.add_argument("--workers", type=int, default=32)
     parser.add_argument("--min-success-rate", type=float, default=1.0)

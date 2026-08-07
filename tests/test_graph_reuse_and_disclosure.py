@@ -4,27 +4,27 @@ import asyncio
 
 from langgraph.checkpoint.memory import InMemorySaver
 
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     HarnessRuntimeBuilder,
     LangGraphCheckpointerAdapter,
     RuntimePorts,
 )
-from harness_core.contracts import Artifact, ToolCall, ToolResult
-from harness_core.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
-from harness_core.policy import DefaultPolicyEngine, PolicyRequest
-from harness_core.runtime_sdk import RuntimeRequest
-from harness_core.skills import SkillPolicy
-from harness_core.graph_state import (
+from deepkeel.contracts import Artifact, ToolCall, ToolResult
+from deepkeel.extension_sdk import ToolExecutor, ToolRegistry, ToolSpec
+from deepkeel.policy import DefaultPolicyEngine, PolicyRequest
+from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.skills import SkillPolicy
+from deepkeel.graph_state import (
     _allowed_tool_names,
     _stable_tool_calls,
     _upsert_artifact,
 )
-from harness_core.tool_disclosure import (
+from deepkeel.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
     install_tool_discovery,
     resolve_tool_view,
 )
-from harness_core.tools import ToolExecutionContext
+from deepkeel.tools import ToolExecutionContext
 
 
 class PromptEchoProvider:

@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from harness_core.contracts import ToolCall, ToolResult
-from harness_core.tool_registry import ToolRegistry, ToolSpec
-from harness_core.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.contracts import ToolCall, ToolResult
+from deepkeel.tool_registry import ToolRegistry, ToolSpec
+from deepkeel.tools import ToolExecutionContext, ToolExecutor
 
 
 def test_tool_executor_applies_authoritative_context_argument_bindings() -> None:

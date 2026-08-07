@@ -1,6 +1,6 @@
 # Production Readiness
 
-Harness Agent Core owns execution semantics. A production Host owns durable
+DeepKeel owns execution semantics. A production Host owns durable
 infrastructure, identity, deployment, and operator-facing APIs.
 
 ## Required Host adapters
@@ -20,7 +20,7 @@ durable implementations for:
 - `CancellableRunControl`
 - `CapabilityPackageStore` when packages can be changed at runtime
 
-Run every applicable verifier in `harness_core.adapter_sdk` against the same
+Run every applicable verifier in `deepkeel.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
 isolate identical run identifiers belonging to different user scopes.
 

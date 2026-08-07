@@ -1,1 +1,1 @@
-"""Runnable, product-neutral Harness Agent Core examples."""
+"""Runnable, product-neutral DeepKeel examples."""

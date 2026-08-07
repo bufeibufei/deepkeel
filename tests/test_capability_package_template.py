@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     CapabilityBudgetSpec,
     CapabilityContribution,
     CapabilityInstallContext,
@@ -13,13 +13,13 @@ from harness_core.extension_sdk import (
     certify_capability_package,
     validate_capability_pack,
 )
-from harness_core.runtime_sdk import (
+from deepkeel.runtime_sdk import (
     EvalCase,
     EvalExpectation,
     RuntimeRequest,
 )
-from harness_core.composition import HarnessRuntimeBuilder
-from harness_core.model import ModelTurn
+from deepkeel.composition import HarnessRuntimeBuilder
+from deepkeel.model import ModelTurn
 
 
 MANIFEST = CapabilityManifest(

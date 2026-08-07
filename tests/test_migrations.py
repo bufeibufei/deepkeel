@@ -5,12 +5,12 @@ from pathlib import Path
 
 import pytest
 
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     StateMigrationError,
     StateMigrationRegistry,
     default_state_migrations,
 )
-from harness_core.persistence import (
+from deepkeel.persistence import (
     CHECKPOINT_SCHEMA_VERSION,
     checkpoint_from_durable_state,
     restore_run_context,

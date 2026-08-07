@@ -1,5 +1,5 @@
-from harness_core.contracts import ToolResult
-from harness_core.tool_lifecycle import completes_workflow_transition
+from deepkeel.contracts import ToolResult
+from deepkeel.tool_lifecycle import completes_workflow_transition
 
 
 def _result(status: str) -> ToolResult:

@@ -1,4 +1,4 @@
-from harness_core.references import DefaultReferenceProjector
+from deepkeel.references import DefaultReferenceProjector
 
 
 def test_default_reference_projector_is_tool_and_domain_neutral():

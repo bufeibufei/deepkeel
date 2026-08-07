@@ -1,5 +1,5 @@
 from examples.inventory_pack import INVENTORY_MANIFEST, InventoryCapabilityPack
-from harness_core.extension_sdk import validate_capability_pack
+from deepkeel.extension_sdk import validate_capability_pack
 
 
 def test_product_neutral_inventory_example_passes_conformance() -> None:

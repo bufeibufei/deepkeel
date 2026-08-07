@@ -6,15 +6,15 @@ import json
 from pathlib import Path
 
 import pytest
-import harness_core
-import harness_core.adapter_sdk as adapter_sdk
-import harness_core.extension_sdk as extension_sdk
-import harness_core.mcp_sdk as mcp_sdk
-import harness_core.memory_sdk as memory_sdk
-import harness_core.orchestration_sdk as orchestration_sdk
-import harness_core.runtime_sdk as runtime_sdk
+import deepkeel
+import deepkeel.adapter_sdk as adapter_sdk
+import deepkeel.extension_sdk as extension_sdk
+import deepkeel.mcp_sdk as mcp_sdk
+import deepkeel.memory_sdk as memory_sdk
+import deepkeel.orchestration_sdk as orchestration_sdk
+import deepkeel.runtime_sdk as runtime_sdk
 
-from harness_core.runtime_sdk import (
+from deepkeel.runtime_sdk import (
     Artifact,
     InMemoryRuntimeStateStore,
     PendingAction,
@@ -24,7 +24,7 @@ from harness_core.runtime_sdk import (
     ToolCall,
     ToolResult,
 )
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
@@ -36,7 +36,7 @@ from harness_core.extension_sdk import (
     ToolSpec,
     validate_capability_pack,
 )
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     BudgetPolicy,
     BudgetRequest,
     ContextSegment,
@@ -54,16 +54,16 @@ from harness_core.adapter_sdk import (
     TelemetryRecord,
     UsageReport,
 )
-from harness_core.handoffs import HandoffSpec
-from harness_core.subagents import SubAgentSpec
-from harness_core.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
+from deepkeel.handoffs import HandoffSpec
+from deepkeel.subagents import SubAgentSpec
+from deepkeel.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "3.14.0"
-    assert tuple(harness_core.__all__) == (
-        "HARNESS_CORE_CONTRACT_VERSION",
-        "HARNESS_CORE_VERSION",
+    assert PUBLIC_API_VERSION == "4.0.0"
+    assert tuple(deepkeel.__all__) == (
+        "DEEPKEEL_CONTRACT_VERSION",
+        "DEEPKEEL_VERSION",
         "adapter_sdk",
         "extension_sdk",
         "mcp_sdk",
@@ -72,13 +72,13 @@ def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
         "runtime_sdk",
     )
     root_runtime_symbols = {
-        "HARNESS_CORE_CONTRACT_VERSION",
-        "HARNESS_CORE_VERSION",
+        "DEEPKEEL_CONTRACT_VERSION",
+        "DEEPKEEL_VERSION",
     }
-    assert (set(harness_core.__all__) & PUBLIC_API_SYMBOLS) == root_runtime_symbols
+    assert (set(deepkeel.__all__) & PUBLIC_API_SYMBOLS) == root_runtime_symbols
 
 
-def test_public_api_matches_the_frozen_v3_snapshot() -> None:
+def test_public_api_matches_the_frozen_v4_snapshot() -> None:
     serialized = json.dumps(
         PUBLIC_API_BY_LAYER,
         sort_keys=True,
@@ -86,11 +86,11 @@ def test_public_api_matches_the_frozen_v3_snapshot() -> None:
     ).encode("utf-8")
     actual = hashlib.sha256(serialized).hexdigest()
     expected = (
-        Path(__file__).with_name("public_api_v3.sha256").read_text(encoding="ascii").strip()
+        Path(__file__).with_name("public_api_v4.sha256").read_text(encoding="ascii").strip()
     )
 
     assert actual == expected, (
-        "public API changed; review compatibility and update the v3 snapshot only "
+        "public API changed; review compatibility and update the v4 snapshot only "
         "for an intentional contract release"
     )
 

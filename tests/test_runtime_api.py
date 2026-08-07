@@ -3,9 +3,9 @@ import inspect
 import pytest
 from pydantic import ValidationError
 
-from harness_core.runtime_sdk import HarnessRuntime, RuntimeRequest, RuntimeResultStatus
-from harness_core.contracts import Artifact, FinalAnswer, Observation, RunContext
-from harness_core.runtime_api import RuntimeResult, RuntimeStreamEvent
+from deepkeel.runtime_sdk import HarnessRuntime, RuntimeRequest, RuntimeResultStatus
+from deepkeel.contracts import Artifact, FinalAnswer, Observation, RunContext
+from deepkeel.runtime_api import RuntimeResult, RuntimeStreamEvent
 
 
 def _runtime_result(

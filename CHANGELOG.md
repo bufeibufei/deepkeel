@@ -1,5 +1,17 @@
 # Changelog
 
+## 4.0.0rc1
+
+- Rename the project, distribution, and Python namespace to DeepKeel.
+- Establish Apache-2.0 licensing and public community policies.
+- Decouple Core release verification from any product Host repository.
+- Restore automatic cross-platform CI and add Python 3.14 verification.
+- Publish a frozen DeepKeel v4 SDK surface and product-neutral quickstarts.
+- Preserve the existing `harness-core-v3` Capability Pack protocol so branding
+  does not force a persisted contract migration.
+
+Versions through 3.35.1 were published as the pre-DeepKeel engineering lineage.
+
 ## 3.35.1
 
 - Preserve the public `BudgetExceededError` contract when protected current
@@ -476,7 +488,7 @@
 - Added versioned Runtime, Extension, and Adapter SDKs plus a machine-readable
   public API manifest.
 - Added workspace packaging so the Host depends on the installable
-  `harness-agent-core` distribution rather than scanning Core source files.
+  `deepkeel` distribution rather than scanning Core source files.
 - Removed the legacy `register(ToolExecutor)` Capability Pack path; v2 packs
   must declare `CapabilityPackSpec` and implement `install(context)`.
 - Added clean wheel and sdist conformance runs across Windows/Linux and Python
@@ -511,7 +523,7 @@
   projected runtime results.
 - Moved product-neutral contract, event, persistence, failure and model-routing
   tests under package ownership.
-- Renamed the distribution to the product-neutral `harness-agent-core` name and
+- Renamed the distribution to the product-neutral `deepkeel` name and
   added a standalone extraction-ready CI workflow.
 
 ## 1.2.0

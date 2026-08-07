@@ -2,7 +2,7 @@
 
 import pytest
 
-from harness_core.events import event_runtime_status, is_answer_delta, project_runtime_event
+from deepkeel.events import event_runtime_status, is_answer_delta, project_runtime_event
 
 
 def test_runtime_event_projection_keeps_source_identity_and_sse_delta_contract():

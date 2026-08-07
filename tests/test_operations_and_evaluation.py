@@ -5,7 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from harness_core.runtime_sdk import (
+from deepkeel.runtime_sdk import (
     Artifact,
     EvalCase,
     EvalExpectation,
@@ -26,7 +26,7 @@ from harness_core.runtime_sdk import (
     ToolResult,
     evaluate_runtime_result,
 )
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     AsyncRuntimeStateStoreAdapter,
     InMemoryTelemetry,
     TelemetryRecord,

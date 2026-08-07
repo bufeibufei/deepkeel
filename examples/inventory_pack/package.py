@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     CapabilityContribution,
     CapabilityInstallContext,
     CapabilityManifest,
@@ -10,8 +10,8 @@ from harness_core.extension_sdk import (
     capability_pack_spec_from_manifest,
     load_capability_manifest,
 )
-from harness_core.runtime_sdk import ToolCall, ToolResult
-from harness_core.extension_sdk import ToolExecutionContext
+from deepkeel.runtime_sdk import ToolCall, ToolResult
+from deepkeel.extension_sdk import ToolExecutionContext
 
 
 INVENTORY_MANIFEST = load_capability_manifest(

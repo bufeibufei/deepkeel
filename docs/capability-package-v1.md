@@ -1,7 +1,7 @@
 # Capability Package V1
 
 A Capability Package is the only supported boundary for adding business
-behavior to Harness Agent Core. The package owns domain tools, Skills,
+behavior to DeepKeel. The package owns domain tools, Skills,
 artifacts, handoffs, prompts, UI projection metadata, and evaluation cases.
 It must not import a Host API layer, ORM model, web framework, or private Core
 module.

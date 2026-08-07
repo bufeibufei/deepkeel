@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field, ValidationError
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     ToolSpec,
     clarification_from_validation_error,
     clarification_tool_result,
 )
-from harness_core.runtime_sdk import ToolCall
-from harness_core.clarifications import clarification_for_missing_arguments
+from deepkeel.runtime_sdk import ToolCall
+from deepkeel.clarifications import clarification_for_missing_arguments
 
 
 def test_missing_argument_clarification_uses_labels_groups_and_formats() -> None:

@@ -1,4 +1,4 @@
-from harness_core.runtime_sdk import FailureDiagnosis, diagnose_failure
+from deepkeel.runtime_sdk import FailureDiagnosis, diagnose_failure
 
 
 def test_failure_diagnosis_classifies_event_sequence_conflict() -> None:

@@ -2,14 +2,14 @@ from __future__ import annotations
 
 import pytest
 
-from harness_core.composition import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.event_journal import (
+from deepkeel.composition import HarnessRuntimeBuilder, RuntimePorts
+from deepkeel.event_journal import (
     EventJournalConflict,
     InMemoryRuntimeEventJournal,
 )
-from harness_core.events import envelope_runtime_event, normalize_runtime_event
-from harness_core.runtime_api import RuntimeEventEnvelope
-from harness_core.runtime_sdk import RuntimeRequest
+from deepkeel.events import envelope_runtime_event, normalize_runtime_event
+from deepkeel.runtime_api import RuntimeEventEnvelope
+from deepkeel.runtime_sdk import RuntimeRequest
 
 
 class ScriptedProvider:

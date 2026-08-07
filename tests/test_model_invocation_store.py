@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from harness_core.composition import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.model import (
+from deepkeel.composition import HarnessRuntimeBuilder, RuntimePorts
+from deepkeel.model import (
     InMemoryModelInvocationStore,
     ModelInvocation,
     ModelInvocationConflict,
@@ -11,7 +11,7 @@ from harness_core.model import (
     ModelProviderInfo,
     ModelTurn,
 )
-from harness_core.runtime_api import RuntimeRequest
+from deepkeel.runtime_api import RuntimeRequest
 
 
 class CountingProvider:

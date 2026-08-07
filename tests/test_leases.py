@@ -6,7 +6,7 @@ from threading import Event
 
 import pytest
 
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     HarnessRuntimeBuilder,
     InMemoryRunLeaseStore,
     RunLeaseConflict,
@@ -14,12 +14,12 @@ from harness_core.adapter_sdk import (
     RuntimePorts,
     verify_run_lease_store_contract,
 )
-from harness_core.runtime_sdk import RuntimeRequest
-from harness_core.runtime_sdk import InMemoryRuntimeStateStore, RuntimeStateConflict
-from harness_core.state_store import RuntimeStateMutation
-from harness_core.tool_registry import ToolRegistry, ToolSpec
-from harness_core.tools import ToolExecutionContext, ToolExecutor
-from harness_core.contracts import ToolCall, ToolResult
+from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import InMemoryRuntimeStateStore, RuntimeStateConflict
+from deepkeel.state_store import RuntimeStateMutation
+from deepkeel.tool_registry import ToolRegistry, ToolSpec
+from deepkeel.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.contracts import ToolCall, ToolResult
 
 
 class BlockingProvider:

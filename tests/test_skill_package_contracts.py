@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     ArtifactPresentationSpec,
     CompiledSkillSpec,
     SkillPackageManifest,

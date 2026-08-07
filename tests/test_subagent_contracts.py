@@ -5,8 +5,8 @@ from typing import Any, cast
 
 import pytest
 
-from harness_core.events import event_runtime_status
-from harness_core.orchestration_sdk import (
+from deepkeel.events import event_runtime_status
+from deepkeel.orchestration_sdk import (
     SUBAGENT_EVENT_SCHEMA_VERSION,
     DelegationBatchResult,
     DelegationRequest,
@@ -23,9 +23,9 @@ from harness_core.orchestration_sdk import (
     TaskBrief,
     delegation_tool_parameters_schema,
 )
-from harness_core.runtime_sdk import ToolCall
-from harness_core.extension_sdk import ToolExecutionContext
-from harness_core.subagents.execution_support import _child_run_id
+from deepkeel.runtime_sdk import ToolCall
+from deepkeel.extension_sdk import ToolExecutionContext
+from deepkeel.subagents.execution_support import _child_run_id
 
 
 class RecordingStore:

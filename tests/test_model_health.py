@@ -3,13 +3,13 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from harness_core.budget import InMemoryBudgetLedger
-from harness_core.contracts import AgentMessage, MessageContentPart
-from harness_core.model import RoutedModelGateway, _json_arguments
-from harness_core.model_failures import ModelToolArgumentsError, ModelToolContractError
-from harness_core.model_health import InMemoryModelHealthStore
-from harness_core.model_routing import ModelStepContext
-from harness_core.policy import DefaultPolicyEngine
+from deepkeel.budget import InMemoryBudgetLedger
+from deepkeel.contracts import AgentMessage, MessageContentPart
+from deepkeel.model import RoutedModelGateway, _json_arguments
+from deepkeel.model_failures import ModelToolArgumentsError, ModelToolContractError
+from deepkeel.model_health import InMemoryModelHealthStore
+from deepkeel.model_routing import ModelStepContext
+from deepkeel.policy import DefaultPolicyEngine
 
 
 class ProviderError(Exception):

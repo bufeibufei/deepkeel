@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 import pytest
 from pydantic import ValidationError
 
-from harness_core.contracts import (
+from deepkeel.contracts import (
     AgentMessage,
     Artifact,
     FinalAnswer,

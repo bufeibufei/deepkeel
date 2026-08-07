@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     ToolExecutionContext,
     ToolExecutor,
     ToolRegistry,
     ToolSpec,
 )
-from harness_core.runtime_sdk import ToolCall, ToolResult
-from harness_core.tools import InMemoryToolExecutionStore
+from deepkeel.runtime_sdk import ToolCall, ToolResult
+from deepkeel.tools import InMemoryToolExecutionStore
 
 
 class FailingClaimStore:

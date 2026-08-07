@@ -1,10 +1,10 @@
-from harness_core.budget import BudgetPolicy, BudgetSnapshot, OUTPUT_TOKENS
-from harness_core.model import (
+from deepkeel.budget import BudgetPolicy, BudgetSnapshot, OUTPUT_TOKENS
+from deepkeel.model import (
     _context_output_capacity,
     _reasoning_effort,
     _remaining_output_tokens,
 )
-from harness_core.model_capabilities import ModelCapabilities
+from deepkeel.model_capabilities import ModelCapabilities
 
 
 def test_generation_limit_uses_smallest_physical_and_user_boundary() -> None:

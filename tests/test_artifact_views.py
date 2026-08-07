@@ -1,6 +1,6 @@
 import pytest
 
-from harness_core.runtime_sdk import Artifact, project_artifact_view
+from deepkeel.runtime_sdk import Artifact, project_artifact_view
 
 
 PRESENTATION = {

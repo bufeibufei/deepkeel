@@ -1,4 +1,4 @@
-from harness_core.graph_state import _apply_resume_payload
+from deepkeel.graph_state import _apply_resume_payload
 
 
 def test_clarification_resume_appends_provider_neutral_image_parts():

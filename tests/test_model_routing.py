@@ -1,6 +1,6 @@
 """Step-routing tests owned by the standalone runtime package."""
 
-from harness_core.model_routing import AdaptiveStepModelRouter, ModelStepContext
+from deepkeel.model_routing import AdaptiveStepModelRouter, ModelStepContext
 
 
 def _context(**overrides):

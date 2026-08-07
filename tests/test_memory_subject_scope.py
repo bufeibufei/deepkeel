@@ -1,4 +1,4 @@
-from harness_core.memory_sdk import MemoryQuery
+from deepkeel.memory_sdk import MemoryQuery
 
 
 def test_memory_query_can_scope_retrieval_to_a_subject() -> None:

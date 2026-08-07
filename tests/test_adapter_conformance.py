@@ -1,4 +1,4 @@
-from harness_core.adapter_sdk import (
+from deepkeel.adapter_sdk import (
     InMemoryBudgetLedger,
     InMemoryModelInvocationStore,
     InMemoryRuntimeEventJournal,
@@ -12,14 +12,14 @@ from harness_core.adapter_sdk import (
     verify_capability_package_store_contract,
     verify_budget_ledger_contract,
 )
-from harness_core.extension_sdk import InMemoryCapabilityPackageStore
-from harness_core.runtime_sdk import (
+from deepkeel.extension_sdk import InMemoryCapabilityPackageStore
+from deepkeel.runtime_sdk import (
     InMemoryDurableCheckpointStore,
     InMemoryRuntimeStateStore,
 )
-from harness_core.adapter_sdk import InMemoryRunLeaseStore
-from harness_core.tools import InMemoryToolExecutionStore
-from harness_core.runtime_sdk import normalize_runtime_event
+from deepkeel.adapter_sdk import InMemoryRunLeaseStore
+from deepkeel.tools import InMemoryToolExecutionStore
+from deepkeel.runtime_sdk import normalize_runtime_event
 
 
 def test_runtime_state_store_reference_adapter_passes_contract() -> None:

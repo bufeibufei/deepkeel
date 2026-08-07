@@ -1,6 +1,6 @@
 import pytest
 
-from harness_core.runtime_sdk import (
+from deepkeel.runtime_sdk import (
     TaskLifecycle,
     project_run_ui_state,
     task_lifecycle,

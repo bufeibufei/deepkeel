@@ -6,8 +6,8 @@ import json
 from pathlib import Path
 from typing import Any
 
-import harness_core
-from harness_core.mcp_sdk import (
+import deepkeel
+from deepkeel.mcp_sdk import (
     McpCallResult,
     McpClientPool,
     McpNormalizedResult,
@@ -16,8 +16,8 @@ from harness_core.mcp_sdk import (
     McpToolBinding,
     McpToolProvider,
 )
-from harness_core.adapter_sdk import RuntimePorts
-from harness_core.extension_sdk import (
+from deepkeel.adapter_sdk import RuntimePorts
+from deepkeel.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
@@ -29,14 +29,14 @@ from harness_core.extension_sdk import (
     ToolRegistry,
     ToolSpec,
 )
-from harness_core.orchestration_sdk import (
+from deepkeel.orchestration_sdk import (
     DelegationRequest,
     DelegationTask,
     SubAgentExecutor,
     SubAgentRegistry,
     SubAgentSpec,
 )
-from harness_core.runtime_sdk import (
+from deepkeel.runtime_sdk import (
     Artifact,
     InMemoryRunControl,
     Observation,
@@ -45,7 +45,7 @@ from harness_core.runtime_sdk import (
     ToolCall,
     ToolResult,
 )
-from harness_core.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.adapter_sdk import HarnessRuntimeBuilder
 
 
 def _tool_turn(call_id: str, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -572,14 +572,14 @@ def verify_mcp_and_subagent() -> None:
 
 
 def verify_installation_isolation() -> None:
-    package_path = Path(harness_core.__file__).resolve()
-    assert "packages/harness_core/src" not in package_path.as_posix()
+    package_path = Path(deepkeel.__file__).resolve()
+    assert "packages/deepkeel/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert harness_core.HARNESS_CORE_VERSION == "3.32.1"
-    assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
-    assert tuple(harness_core.__all__) == (
-        "HARNESS_CORE_CONTRACT_VERSION",
-        "HARNESS_CORE_VERSION",
+    assert deepkeel.DEEPKEEL_VERSION == "4.0.0rc1"
+    assert deepkeel.DEEPKEEL_CONTRACT_VERSION == "harness-core-v3"
+    assert tuple(deepkeel.__all__) == (
+        "DEEPKEEL_CONTRACT_VERSION",
+        "DEEPKEEL_VERSION",
         "adapter_sdk",
         "extension_sdk",
         "mcp_sdk",
@@ -596,7 +596,7 @@ def main() -> None:
     verify_wait_resume_async_and_cancel()
     verify_skill_artifact_and_reference_contracts()
     verify_mcp_and_subagent()
-    print("installed harness-agent-core conformance: passed")
+    print("installed deepkeel conformance: passed")
 
 
 if __name__ == "__main__":

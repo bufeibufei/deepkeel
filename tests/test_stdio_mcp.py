@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from harness_core.mcp_sdk import (
+from deepkeel.mcp_sdk import (
     McpProtocolError,
     McpServerSpec,
     McpTimeoutError,

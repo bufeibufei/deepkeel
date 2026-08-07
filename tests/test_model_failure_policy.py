@@ -1,12 +1,12 @@
-from harness_core.budget import InMemoryBudgetLedger
-from harness_core.model import (
+from deepkeel.budget import InMemoryBudgetLedger
+from deepkeel.model import (
     MODEL_FAILURE_AUTO_FALLBACK,
     MODEL_FAILURE_FAIL_FAST,
     MODEL_FAILURE_RETRY_SELECTED,
     RoutedModelGateway,
 )
-from harness_core.model_routing import ModelRouteDecision
-from harness_core.policy import DefaultPolicyEngine
+from deepkeel.model_routing import ModelRouteDecision
+from deepkeel.policy import DefaultPolicyEngine
 
 
 class FakeProvider:

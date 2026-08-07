@@ -1,6 +1,6 @@
 from collections import UserDict
 
-from harness_core.type_narrowing import (
+from deepkeel.type_narrowing import (
     as_dict,
     as_dict_list,
     as_list,

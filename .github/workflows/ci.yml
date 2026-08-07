@@ -1,14 +1,26 @@
-name: Harness Core CI
+name: DeepKeel CI
 
 on:
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepkeel-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   verify:
+    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12", "3.13"]
+        python-version: ["3.12", "3.13", "3.14"]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -16,19 +28,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
           enable-cache: true
-      - name: Install package and test dependencies
-        run: uv sync --extra test
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra test
       - name: Verify formatting and imports
         run: uv run ruff check src tests verification
-      - name: Verify Core type contracts
-        run: uv run mypy src/harness_core
-      - name: Run package-owned tests with coverage
+      - name: Verify public type contracts
+        run: uv run mypy src/deepkeel
+      - name: Run tests with coverage
         run: >-
           uv run pytest -q
-          --cov=harness_core
+          --cov=deepkeel
           --cov-report=term-missing
           --cov-fail-under=80
       - name: Build wheel and source distribution
         run: uv build --clear
-      - name: Verify wheel and sdist in clean environments
+      - name: Verify clean wheel and sdist installation
         run: uv run python verification/verify_distributions.py dist

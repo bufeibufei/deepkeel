@@ -1,9 +1,10 @@
 [project]
-name = "harness-agent-core"
-version = "3.35.1"
-description = "Product-neutral Harness Agent runtime core."
+name = "deepkeel"
+version = "4.0.0rc1"
+description = "Durable, observable, capability-driven harness runtime for production-grade AI agents."
 readme = "README.md"
 requires-python = ">=3.12"
+license = "Apache-2.0"
 authors = [
   { name = "bufeibufei", email = "bufeibufei@users.noreply.github.com" },
 ]
@@ -14,6 +15,7 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "Typing :: Typed",
 ]
 dependencies = [
@@ -25,8 +27,10 @@ dependencies = [
 ]
 
 [project.urls]
-Repository = "https://github.com/bufeibufei/harness-agent-core"
-Issues = "https://github.com/bufeibufei/harness-agent-core/issues"
+Repository = "https://github.com/bufeibufei/deepkeel"
+Issues = "https://github.com/bufeibufei/deepkeel/issues"
+Documentation = "https://github.com/bufeibufei/deepkeel/tree/main/docs"
+Changelog = "https://github.com/bufeibufei/deepkeel/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 test = [
@@ -43,10 +47,10 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["harness_core*"]
+include = ["deepkeel*"]
 
 [tool.setuptools.package-data]
-harness_core = ["py.typed"]
+deepkeel = ["py.typed"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

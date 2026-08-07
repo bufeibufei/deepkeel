@@ -4,32 +4,32 @@ import asyncio
 
 import pytest
 
-from harness_core.capability_manifest import (
+from deepkeel.capability_manifest import (
     CapabilityManifest,
     RuntimeGeneration,
     validate_manifest_set,
 )
-from harness_core.context_window import (
+from deepkeel.context_window import (
     ContextSegment,
     ContextWindowPolicy,
     DeterministicContextWindowManager,
 )
-from harness_core.contracts import ToolCall, ToolResult
-from harness_core.hooks import (
+from deepkeel.contracts import ToolCall, ToolResult
+from deepkeel.hooks import (
     HookDecision,
     HookPoint,
     HookRunner,
     HookSpec,
 )
-from harness_core.skills import SkillPolicy
-from harness_core.tool_disclosure import (
+from deepkeel.skills import SkillPolicy
+from deepkeel.tool_disclosure import (
     ToolDescriptor,
     ToolDiscoveryPort,
     discover_tools,
     resolve_tool_view,
 )
-from harness_core.tool_registry import ToolRegistry, ToolSpec
-from harness_core.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.tool_registry import ToolRegistry, ToolSpec
+from deepkeel.tools import ToolExecutionContext, ToolExecutor
 
 
 def _tool(name: str, *, exposure_mode: str = "discoverable") -> ToolSpec:
@@ -177,7 +177,7 @@ def _manifest(
     return CapabilityManifest(
         id=package_id,
         version=version,
-        core_version=">=3.16.0,<4.0.0",
+        core_version=">=4.0.0rc1,<5.0.0",
         entrypoint=f"{package_id}:Pack",
         dependencies=dependencies or {},
         tools=tools,

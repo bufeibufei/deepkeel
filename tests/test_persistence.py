@@ -3,16 +3,16 @@
 import pytest
 from pydantic import ValidationError
 
-from harness_core.persistence import (
+from deepkeel.persistence import (
     CheckpointCompatibilityError,
     checkpoint_from_durable_state,
     checkpoint_from_runtime,
     durable_state_from_result,
     restore_run_context,
 )
-from harness_core.contracts import FinalAnswer, RunContext
-from harness_core.ui import project_run_ui_state
-from harness_core.runtime_api import RuntimeResult, RuntimeResultStatus
+from deepkeel.contracts import FinalAnswer, RunContext
+from deepkeel.ui import project_run_ui_state
+from deepkeel.runtime_api import RuntimeResult, RuntimeResultStatus
 
 
 def test_restore_run_context_appends_one_correlated_tool_observation():

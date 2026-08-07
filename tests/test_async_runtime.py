@@ -3,14 +3,14 @@ from __future__ import annotations
 import asyncio
 import time
 
-from harness_core.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
-from harness_core.contracts import AgentMessage, RunContext, ToolCall, ToolResult
-from harness_core.graph import HarnessGraph
-from harness_core.model import ModelInvocation, ModelProviderInfo, ModelTurn
-from harness_core.runtime_sdk import InMemoryRunControl
-from harness_core.runtime_sdk import RuntimeRequest
-from harness_core.tool_registry import ToolRegistry, ToolSpec
-from harness_core.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
+from deepkeel.contracts import AgentMessage, RunContext, ToolCall, ToolResult
+from deepkeel.graph import HarnessGraph
+from deepkeel.model import ModelInvocation, ModelProviderInfo, ModelTurn
+from deepkeel.runtime_sdk import InMemoryRunControl
+from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.tool_registry import ToolRegistry, ToolSpec
+from deepkeel.tools import ToolExecutionContext, ToolExecutor
 
 
 class StreamingProvider:

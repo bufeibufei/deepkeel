@@ -5,7 +5,7 @@ import time
 
 import pytest
 
-from harness_core.hooks import (
+from deepkeel.hooks import (
     HookAction,
     HookDecision,
     HookExecutionError,

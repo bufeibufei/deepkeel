@@ -1,4 +1,4 @@
-from harness_core.runtime_sdk import RecoveryOutcome, classify_recovery_outcome
+from deepkeel.runtime_sdk import RecoveryOutcome, classify_recovery_outcome
 
 
 def test_recovery_outcome_distinguishes_success_and_typed_exhaustion() -> None:

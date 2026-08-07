@@ -1,6 +1,8 @@
-name: Harness Core Release
+name: DeepKeel Release
 
 on:
+  push:
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
@@ -9,25 +11,19 @@ on:
         type: string
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  host-contract:
-    uses: bufeibufei/kuitianjiandi/.github/workflows/harness-core.yml@codex/dev-unified-20260727
-    with:
-      core_ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-      host_ref: codex/dev-unified-20260727
-    secrets:
-      HARNESS_CORE_DEPLOY_KEY: ${{ secrets.HARNESS_CORE_DEPLOY_KEY }}
-      PRODUCT_HOST_DEPLOY_KEY: ${{ secrets.PRODUCT_HOST_DEPLOY_KEY }}
-
-  release:
-    needs: host-contract
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
       - uses: astral-sh/setup-uv@v6
         with:
@@ -37,17 +33,56 @@ jobs:
         run: uv sync --frozen --extra test
       - name: Verify tag and package versions
         env:
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: uv run python verification/release_contract.py --tag "$RELEASE_TAG"
       - name: Run release verification
         run: |
           uv run ruff check src tests verification
-          uv run mypy src/harness_core
-          uv run pytest -q
+          uv run mypy src/deepkeel
+          uv run pytest -q --cov=deepkeel --cov-fail-under=80
           uv build --clear
           uv run python verification/verify_distributions.py dist
+      - name: Attest release artifacts
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: dist/*
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deepkeel-distributions
+          path: dist/*
+          if-no-files-found: error
+
+  github-release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deepkeel-distributions
+          path: dist
       - name: Publish GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          PRERELEASE=""
+          case "$RELEASE_TAG" in *-rc.*) PRERELEASE="--prerelease" ;; esac
+          gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes $PRERELEASE
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/deepkeel/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: deepkeel-distributions
+          path: dist
+      - name: Publish through PyPI Trusted Publishing
+        uses: pypa/gh-action-pypi-publish@release/v1

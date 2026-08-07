@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import pytest
 
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     CapabilityBudgetSpec,
     CapabilityManifest,
     CapabilityPackageConflict,

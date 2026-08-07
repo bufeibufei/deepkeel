@@ -11,7 +11,7 @@ import zipfile
 from pathlib import Path
 
 
-PACKAGE_IMPORT_ROOT = "harness_core"
+PACKAGE_IMPORT_ROOT = "deepkeel"
 FORBIDDEN_ROOTS = {
     "app",
     "catalog",
@@ -59,7 +59,7 @@ def _assert_distribution_contents(artifact: Path) -> None:
         ]
     assert f"src/{PACKAGE_IMPORT_ROOT}/__init__.py" in members
     assert f"src/{PACKAGE_IMPORT_ROOT}/py.typed" in members
-    assert "tests/public_api_v3.sha256" in members
+    assert "tests/public_api_v4.sha256" in members
     forbidden = sorted(
         name for name in members if name.split("/", 1)[0] in FORBIDDEN_ROOTS
     )
@@ -73,7 +73,7 @@ def _python_in(environment: Path) -> Path:
 
 
 def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
-    with tempfile.TemporaryDirectory(prefix=f"harness-core-{artifact.suffix[1:]}-") as raw:
+    with tempfile.TemporaryDirectory(prefix=f"deepkeel-{artifact.suffix[1:]}-") as raw:
         root = Path(raw)
         environment = root / "venv"
         run_directory = root / "run"
@@ -105,7 +105,7 @@ def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Verify Harness Core wheel and sdist in clean environments."
+        description="Verify DeepKeel wheel and sdist in clean environments."
     )
     parser.add_argument("dist", type=Path)
     args = parser.parse_args()

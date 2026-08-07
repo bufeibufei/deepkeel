@@ -2,7 +2,7 @@ import logging
 
 from datetime import UTC, datetime, timedelta
 
-from harness_core.telemetry import (
+from deepkeel.telemetry import (
     CompositeTelemetry,
     InMemoryTelemetry,
     LoggingTelemetry,
@@ -108,7 +108,7 @@ def test_logging_telemetry_emits_structured_trace_payload(caplog):
     telemetry = LoggingTelemetry()
     record = TelemetryRecord(event_name="tool.completed", run_id="run-logging")
 
-    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+    with caplog.at_level(logging.INFO, logger="deepkeel.telemetry"):
         telemetry.record(record)
 
     assert "harness_telemetry" in caplog.text
@@ -123,11 +123,11 @@ def test_logging_telemetry_suppresses_ephemeral_stream_events_by_default(caplog)
         ephemeral=True,
     )
 
-    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+    with caplog.at_level(logging.INFO, logger="deepkeel.telemetry"):
         LoggingTelemetry().record(record)
     assert "harness_telemetry" not in caplog.text
 
-    with caplog.at_level(logging.INFO, logger="harness_core.telemetry"):
+    with caplog.at_level(logging.INFO, logger="deepkeel.telemetry"):
         LoggingTelemetry(include_ephemeral=True).record(record)
     assert "harness_telemetry" in caplog.text
 

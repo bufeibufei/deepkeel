@@ -3,21 +3,21 @@
 from types import SimpleNamespace
 from urllib.error import URLError
 
-from harness_core.budget import BudgetDecision, BudgetExceededError
-from harness_core.failures import (
+from deepkeel.budget import BudgetDecision, BudgetExceededError
+from deepkeel.failures import (
     RunCanceledError,
     RunDeadlineExceededError,
     classify_runtime_failure,
     failure_from_code,
 )
-from harness_core.model_failures import (
+from deepkeel.model_failures import (
     ModelToolArgumentsError,
     ModelToolContractError,
     classify_model_failure,
     provider_fingerprint,
 )
-from harness_core.persistence import CheckpointCompatibilityError
-from harness_core.policy import PolicyDecision, PolicyDeniedError
+from deepkeel.persistence import CheckpointCompatibilityError
+from deepkeel.policy import PolicyDecision, PolicyDeniedError
 
 
 def test_runtime_failure_contract_separates_user_copy_from_internal_detail():

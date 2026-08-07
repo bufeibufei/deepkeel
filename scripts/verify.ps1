@@ -6,37 +6,37 @@ Push-Location $repoRoot
 try {
     & uv sync --extra test
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core dependency sync failed."
+        throw "DeepKeel dependency sync failed."
     }
 
     & uv run ruff check src tests verification
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core lint contracts failed."
+        throw "DeepKeel lint contracts failed."
     }
 
-    & uv run mypy src/harness_core
+    & uv run mypy src/deepkeel
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core type contracts failed."
+        throw "DeepKeel type contracts failed."
     }
 
-    & uv run pytest -q --cov=harness_core --cov-report=term --cov-fail-under=80
+    & uv run pytest -q --cov=deepkeel --cov-report=term --cov-fail-under=80
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core package contract tests failed."
+        throw "DeepKeel package contract tests failed."
     }
 
     & uv run python verification/concurrency_benchmark.py --requests 300 --workers 32
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core concurrency baseline failed."
+        throw "DeepKeel concurrency baseline failed."
     }
 
     & uv build --out-dir $outputRoot --clear
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core distribution build failed."
+        throw "DeepKeel distribution build failed."
     }
 
     & uv run python verification/verify_distributions.py $outputRoot
     if ($LASTEXITCODE -ne 0) {
-        throw "Harness Core clean-install conformance failed."
+        throw "DeepKeel clean-install conformance failed."
     }
 }
 finally {

@@ -1,10 +1,40 @@
-# Harness Agent Core
+# DeepKeel
 
-`harness-agent-core` is a product-neutral runtime kernel for tool-using agents.
-It owns the model/tool loop, runtime contracts,
-governance ports, interruption, recovery, ToolProvider integration and
-Capability Pack composition. MCP transports and bounded orchestration are
-optional SDK modules rather than required runtime concepts.
+**A durable, observable, capability-driven harness runtime for production-grade
+AI agents.**
+
+DeepKeel owns the model/tool loop, typed runtime contracts, interruption,
+recovery, context engineering, governance ports, ToolProvider integration,
+Capability Pack composition, MCP adapters and bounded SubAgent orchestration.
+It deliberately does not own product APIs, database models, business prompts,
+host tools or frontend rendering.
+
+```bash
+pip install --pre deepkeel
+python examples/quickstart/main.py
+```
+
+DeepKeel is designed for Hosts that need more than a demo loop: durable run
+identity, resumable user handoffs, progressive tool disclosure, model routing,
+L1/L2/L3 context planning, policy and budget enforcement, typed events,
+artifacts, trace diagnostics and replaceable persistence adapters.
+
+## Start here
+
+- [Architecture](docs/architecture.md)
+- [Runtime lifecycle](docs/runtime-lifecycle.md)
+- [Capability Packages](docs/capability-package-v1.md)
+- [Context management](docs/context-management.md)
+- [Durable execution](docs/durable-execution.md)
+- [Model providers](docs/model-provider.md)
+- [Observability](docs/observability.md)
+- [Production readiness](docs/production-readiness.md)
+- [API stability](docs/api-stability.md)
+
+The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
+The [inventory package](examples/inventory_pack) demonstrates product-neutral
+tools and artifacts. The [durable approval example](examples/durable_approval)
+demonstrates suspension and resume.
 
 Production deployments should follow
 [`docs/production-readiness.md`](docs/production-readiness.md), replace every
@@ -23,8 +53,8 @@ non-domain example is available in
 There is no implicit registration or legacy Pack adapter in the v3 contract.
 
 ```python
-from harness_core.adapter_sdk import HarnessRuntimeBuilder
-from harness_core.extension_sdk import (
+from deepkeel.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
     CapabilityInstallContext,
@@ -64,7 +94,7 @@ applies install/enable/disable/upgrade/rollback operations through
 started.
 
 ```python
-from harness_core.extension_sdk import (
+from deepkeel.extension_sdk import (
     CapabilityPackageManager,
     InMemoryCapabilityPackageStore,
 )
@@ -94,7 +124,7 @@ contracts. Product hosts project `RuntimeResult` into their own API, event and
 persistence DTOs without passing those mappings back into Core.
 
 ```python
-from harness_core.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import RuntimeRequest
 
 result = runtime.run(
     RuntimeRequest(
@@ -113,7 +143,7 @@ user dimensions. Legacy `user_id` adapters remain supported for the default
 scope and fail closed when asked to represent a tenant they cannot isolate.
 
 ```python
-from harness_core.runtime_sdk import RuntimeRequest, RuntimeScope
+from deepkeel.runtime_sdk import RuntimeRequest, RuntimeScope
 
 request = RuntimeRequest(
     question="Inspect this account",
@@ -139,7 +169,7 @@ async for event in runtime.astream(request, provider=provider):
 ```
 
 Thread-safe synchronous persistence adapters can be exposed to async Host
-control paths through the opt-in bridges in `harness_core.adapter_sdk`.
+control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
 Production async database drivers should implement the corresponding
 `Async*Store` protocol directly instead of using thread offload.
 
@@ -251,7 +281,7 @@ diagnostics and emitted as privacy-safe `budget.usage.recorded` events. Prompts
 and response text are never included in this governance payload.
 
 ```python
-from harness_core.adapter_sdk import BudgetPolicy
+from deepkeel.adapter_sdk import BudgetPolicy
 
 policy = BudgetPolicy.from_mapping({
     "max_input_tokens_total": 100_000,
@@ -313,8 +343,8 @@ Run the package-owned contract suite with:
 ```powershell
 uv sync --extra test
 uv run ruff check src tests verification
-uv run mypy src/harness_core
-uv run pytest -q --cov=harness_core --cov-fail-under=80
+uv run mypy src/deepkeel
+uv run pytest -q --cov=deepkeel --cov-fail-under=80
 ```
 
 Build and verify both distributions from the repository root with:
@@ -344,7 +374,7 @@ endpoints, and expired HTTP sessions are re-initialized once before surfacing a
 transport failure.
 
 ```python
-from harness_core.mcp_sdk import McpServerSpec
+from deepkeel.mcp_sdk import McpServerSpec
 
 remote_search = McpServerSpec(
     id="remote-search",
@@ -355,13 +385,13 @@ remote_search = McpServerSpec(
 )
 ```
 
-The frozen public contract is `harness-core-v3`; the current package version is
-`3.35.1` and the additive SDK surface is `3.14.0`. Consumers import from
-`harness_core.runtime_sdk`,
-`harness_core.extension_sdk`, or `harness_core.adapter_sdk`; optional bounded
-orchestration and MCP adapters live in `harness_core.orchestration_sdk` and
-`harness_core.mcp_sdk`. The versioned public
-symbol manifest is available from `harness_core.public_api`; the package root
+The Capability Pack contract remains `harness-core-v3`; the DeepKeel release
+candidate is `4.0.0rc1` and the public SDK surface is `4.0.0`. Consumers import from
+`deepkeel.runtime_sdk`,
+`deepkeel.extension_sdk`, or `deepkeel.adapter_sdk`; optional bounded
+orchestration and MCP adapters live in `deepkeel.orchestration_sdk` and
+`deepkeel.mcp_sdk`. The versioned public
+symbol manifest is available from `deepkeel.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
 suite stores a frozen API fingerprint, so contract changes require an explicit
 compatibility review.

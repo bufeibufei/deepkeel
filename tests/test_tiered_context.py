@@ -2,16 +2,16 @@ from __future__ import annotations
 
 import pytest
 
-from harness_core.context import build_initial_messages
-from harness_core.context_compaction import (
+from deepkeel.context import build_initial_messages
+from deepkeel.context_compaction import (
     DeterministicWorkingContextCompactor,
     prepare_model_input_context,
 )
-from harness_core.context_contracts import ContextCheckpoint, ContextItem, ModelContextProfile
-from harness_core.context_compaction import ContextInputBudgetError
-from harness_core.context_validation import validate_context_items
-from harness_core.context_planning import ContextBudgetPlanner
-from harness_core.context_window import (
+from deepkeel.context_contracts import ContextCheckpoint, ContextItem, ModelContextProfile
+from deepkeel.context_compaction import ContextInputBudgetError
+from deepkeel.context_validation import validate_context_items
+from deepkeel.context_planning import ContextBudgetPlanner
+from deepkeel.context_window import (
     ConservativeTokenEstimator,
     ContextWindowPolicy,
     DeterministicContextWindowManager,

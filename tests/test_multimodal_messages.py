@@ -1,13 +1,13 @@
 import pytest
 from pydantic import ValidationError
 
-from harness_core.budget import InMemoryBudgetLedger
-from harness_core.context import build_initial_messages
-from harness_core.model import RoutedModelGateway, provider_messages_from_agent
-from harness_core.model_capabilities import ModelCapabilities
-from harness_core.model_routing import ModelStepContext
-from harness_core.policy import DefaultPolicyEngine
-from harness_core.runtime_sdk import AgentMessage, MessageContentPart, RuntimeRequest
+from deepkeel.budget import InMemoryBudgetLedger
+from deepkeel.context import build_initial_messages
+from deepkeel.model import RoutedModelGateway, provider_messages_from_agent
+from deepkeel.model_capabilities import ModelCapabilities
+from deepkeel.model_routing import ModelStepContext
+from deepkeel.policy import DefaultPolicyEngine
+from deepkeel.runtime_sdk import AgentMessage, MessageContentPart, RuntimeRequest
 
 
 def _image_part(reference_id: str = "attachment-1") -> MessageContentPart:

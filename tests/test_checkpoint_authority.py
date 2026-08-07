@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-from harness_core.runtime import HarnessRuntime
-from harness_core.state_store import RunStateSnapshot
-from harness_core.tool_registry import ToolRegistry
-from harness_core.tools import ToolExecutor
+from deepkeel.runtime import HarnessRuntime
+from deepkeel.state_store import RunStateSnapshot
+from deepkeel.tool_registry import ToolRegistry
+from deepkeel.tools import ToolExecutor
 
 
 class RuntimeStateStore:

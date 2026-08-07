@@ -1,6 +1,6 @@
 # Contributing
 
-Harness Agent Core is an independent product-neutral runtime. Changes must not
+DeepKeel is an independent product-neutral runtime. Changes must not
 import host application modules, database models, web handlers or business
 capability implementations.
 
@@ -9,6 +9,10 @@ Before submitting a change, run from the repository root:
 ```powershell
 .\scripts\verify.ps1
 ```
+
+On macOS or Linux, run the equivalent commands from `.github/workflows/ci.yml`
+with `uv`. Pull requests must target `main`; official tags are created from
+`main` only.
 
 Public SDK changes must be intentional. Update the API version, compatibility
 notes, public API snapshot and changelog together. Runtime behavior changes

@@ -5,45 +5,45 @@ from pathlib import Path
 
 import pytest
 
-from harness_core.contracts import AgentMessage, RunContext, RunStatus, ToolCall
-from harness_core.control import InMemoryRunControl
-from harness_core.failures import RunCanceledError
-from harness_core.graph_nodes import GraphNodes
-from harness_core.graph_model_step import (
+from deepkeel.contracts import AgentMessage, RunContext, RunStatus, ToolCall
+from deepkeel.control import InMemoryRunControl
+from deepkeel.failures import RunCanceledError
+from deepkeel.graph_nodes import GraphNodes
+from deepkeel.graph_model_step import (
     build_model_metrics,
     build_model_step_context,
     partition_model_tool_calls,
 )
-from harness_core.graph_state import _state_from_context
-from harness_core.graph_workflow import (
+from deepkeel.graph_state import _state_from_context
+from deepkeel.graph_workflow import (
     _route_after_model,
     _route_after_tools,
     _route_from_start,
 )
-from harness_core.runtime_api import RuntimeResultStatus
-from harness_core.runtime_policy import _budget_limits, _resolved_model_policy
-from harness_core.runtime_results import project_harness_result
-from harness_core.model import (
+from deepkeel.runtime_api import RuntimeResultStatus
+from deepkeel.runtime_policy import _budget_limits, _resolved_model_policy
+from deepkeel.runtime_results import project_harness_result
+from deepkeel.model import (
     InMemoryModelInvocationStore as PublicModelInvocationStore,
     ModelInvocation as PublicModelInvocation,
 )
-from harness_core.model_invocations import (
+from deepkeel.model_invocations import (
     InMemoryModelInvocationStore,
     ModelInvocation,
     ModelTurn,
 )
-from harness_core.tool_execution import (
+from deepkeel.tool_execution import (
     InMemoryToolExecutionStore,
     ToolExecutionContext,
 )
-from harness_core.tools import (
+from deepkeel.tools import (
     InMemoryToolExecutionStore as PublicToolExecutionStore,
     ToolExecutionContext as PublicToolExecutionContext,
 )
-from harness_core.subagents.contracts import DelegationTask
-from harness_core.subagents.execution_support import _child_run_id
-from harness_core.subagents.execution_types import _DelegationQuota
-from harness_core.subagents.output_validation import (
+from deepkeel.subagents.contracts import DelegationTask
+from deepkeel.subagents.execution_support import _child_run_id
+from deepkeel.subagents.execution_types import _DelegationQuota
+from deepkeel.subagents.output_validation import (
     _confidence,
     _json_object,
     _validate_input,
@@ -211,8 +211,8 @@ def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> N
 @pytest.mark.parametrize(
     ("path", "class_name", "method_name", "maximum_lines"),
     [
-        ("src/harness_core/model.py", "RoutedModelGateway", "arun_turn", 400),
-        ("src/harness_core/graph_nodes.py", "GraphNodes", "amodel_node", 620),
+        ("src/deepkeel/model.py", "RoutedModelGateway", "arun_turn", 400),
+        ("src/deepkeel/graph_nodes.py", "GraphNodes", "amodel_node", 620),
     ],
 )
 def test_central_execution_methods_stay_within_ratcheted_size_budget(

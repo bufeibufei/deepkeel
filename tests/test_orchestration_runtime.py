@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from harness_core.orchestration_sdk import (
+from deepkeel.orchestration_sdk import (
     DelegationBatchResult,
     DeliberationCoordinator,
     DeliberationParticipant,
@@ -11,8 +11,8 @@ from harness_core.orchestration_sdk import (
     SubAgentResult,
     SubAgentSpec,
 )
-from harness_core.runtime_sdk import ToolCall
-from harness_core.extension_sdk import ToolExecutionContext
+from deepkeel.runtime_sdk import ToolCall
+from deepkeel.extension_sdk import ToolExecutionContext
 
 
 class ScriptedSubAgents:

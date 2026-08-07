@@ -2,8 +2,8 @@ import json
 
 import pytest
 
-from harness_core.contracts import AgentMessage
-from harness_core.model_capabilities import (
+from deepkeel.contracts import AgentMessage
+from deepkeel.model_capabilities import (
     InMemoryModelCapabilityRegistry,
     ModelCapabilities,
     ModelCapabilityUnsatisfiedError,
@@ -11,9 +11,9 @@ from harness_core.model_capabilities import (
     ResponseFormat,
     negotiate_structured_output,
 )
-from harness_core.model import ModelInvocation, NativeChatProviderAdapter
-from harness_core.model_routing import ModelStepContext
-from harness_core.subagents.execution_support import _invoke_provider
+from deepkeel.model import ModelInvocation, NativeChatProviderAdapter
+from deepkeel.model_routing import ModelStepContext
+from deepkeel.subagents.execution_support import _invoke_provider
 
 
 SCHEMA = {

@@ -1,4 +1,4 @@
-from harness_core.handoffs import HandoffRegistry, HandoffSpec, standardize_pending_action_payload
+from deepkeel.handoffs import HandoffRegistry, HandoffSpec, standardize_pending_action_payload
 
 
 def test_capability_can_register_handoff_without_changing_runtime_core():

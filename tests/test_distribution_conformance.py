@@ -1,6 +1,6 @@
 """Run the clean-install scenarios as package-owned coverage tests."""
 
-import harness_core
+import deepkeel
 
 try:
     from verification.installed_conformance import (
@@ -11,7 +11,7 @@ try:
         verify_wait_resume_async_and_cancel,
     )
 except ModuleNotFoundError:
-    from packages.harness_core.verification.installed_conformance import (
+    from packages.deepkeel.verification.installed_conformance import (
         verify_mcp_and_subagent,
         verify_runtime_and_streaming,
         verify_skill_artifact_and_reference_contracts,
@@ -41,11 +41,11 @@ def test_mcp_and_subagent_conformance() -> None:
 
 
 def test_source_installation_identity_conformance() -> None:
-    assert harness_core.HARNESS_CORE_VERSION == "3.35.1"
-    assert harness_core.HARNESS_CORE_CONTRACT_VERSION == "harness-core-v3"
-    assert tuple(harness_core.__all__) == (
-        "HARNESS_CORE_CONTRACT_VERSION",
-        "HARNESS_CORE_VERSION",
+    assert deepkeel.DEEPKEEL_VERSION == "4.0.0rc1"
+    assert deepkeel.DEEPKEEL_CONTRACT_VERSION == "harness-core-v3"
+    assert tuple(deepkeel.__all__) == (
+        "DEEPKEEL_CONTRACT_VERSION",
+        "DEEPKEEL_VERSION",
         "adapter_sdk",
         "extension_sdk",
         "mcp_sdk",
@@ -53,14 +53,14 @@ def test_source_installation_identity_conformance() -> None:
         "orchestration_sdk",
         "runtime_sdk",
     )
-    from harness_core.version import (
+    from deepkeel.version import (
         EVENT_SCHEMA_VERSION,
         PACKAGE_VERSION,
         RUNTIME_CONTRACT_VERSION,
         SDK_API_VERSION,
     )
 
-    assert PACKAGE_VERSION == "3.35.1"
+    assert PACKAGE_VERSION == "4.0.0rc1"
     assert RUNTIME_CONTRACT_VERSION == "harness-core-v3"
     assert EVENT_SCHEMA_VERSION == "harness-runtime-event-v1"
-    assert SDK_API_VERSION == "3.14.0"
+    assert SDK_API_VERSION == "4.0.0"

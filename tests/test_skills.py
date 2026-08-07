@@ -1,5 +1,5 @@
-from harness_core.skills import SkillPolicy
-from harness_core.workflow_policy import evaluate_workflow_completion
+from deepkeel.skills import SkillPolicy
+from deepkeel.workflow_policy import evaluate_workflow_completion
 
 
 def test_workflow_skill_policy_preserves_durable_constraints():
