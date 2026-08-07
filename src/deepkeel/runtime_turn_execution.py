@@ -227,7 +227,13 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         emit = emitter
 
         memory_recall = as_dict(bundle.get("memory_recall"))
-        if memory_recall:
+        # Resume must preserve run.resumed as the first newly persisted event.
+        # Recall is deliberately skipped on resume and remains available in
+        # diagnostics, so emitting a second skip event adds no recovery value.
+        emit_memory_recall = not bool(
+            short.get("resume") or short.get("recover_interrupted")
+        )
+        if memory_recall and emit_memory_recall:
             emit(
                 {
                     "event_type": "memory.recall.decided",

@@ -33,9 +33,11 @@ recent working history, pending action and Skill metadata. It returns one of:
 `MemoryPort`, applies a bounded TTL cache, injects projected records into L3 and
 fails open when memory infrastructure is unavailable. A policy can also disable
 the runtime memory-search tool for an opted-out or unsafe subject scope. Recall
-decisions and outcomes are emitted as internal `memory.recall.*` events and are
-copied into runtime diagnostics; prompts and raw sensitive records are not
-added to public telemetry by the coordinator.
+decisions and outcomes are emitted as internal `memory.recall.*` events for new
+turns and copied into runtime diagnostics. Resume paths preserve
+`run.resumed` as their first event and keep the skipped-recall decision in
+diagnostics only. Prompts and raw sensitive records are not added to public
+telemetry by the coordinator.
 
 The coordinator supports `legacy`, `shadow` and `enforced` rollout modes.
 `legacy` and `shadow` preserve eager prefetch behavior while Hosts compare
