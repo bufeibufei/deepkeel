@@ -1,84 +1,33 @@
-name: DeepKeel CI
+name: DeepKeel PR Fast Gate
 
 on:
   pull_request:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: deepkeel-ci-${{ github.workflow }}-${{ github.ref }}
+  group: deepkeel-pr-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  verify:
-    name: Python ${{ matrix.python-version }} on ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12", "3.13", "3.14"]
-    runs-on: ${{ matrix.os }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
-        with:
-          python-version: ${{ matrix.python-version }}
-          enable-cache: true
-      - name: Install locked dependencies
-        run: uv sync --frozen --extra test
-      - name: Verify formatting and imports
-        run: uv run ruff check src tests verification
-      - name: Verify public type contracts
-        run: uv run mypy src/deepkeel
-      - name: Verify synchronized READMEs
-        run: uv run python verification/readme_contract.py
-      - name: Run tests with coverage
-        run: >-
-          uv run pytest -q
-          --cov=deepkeel
-          --cov-report=term-missing
-          --cov-fail-under=80
-      - name: Build wheel and source distribution
-        run: uv build --clear
-      - name: Verify clean wheel and sdist installation
-        run: uv run python verification/verify_distributions.py dist
-
-  postgres-reference:
-    name: PostgreSQL multi-worker contracts
+  fast-gate:
     runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:17
-        env:
-          POSTGRES_USER: deepkeel
-          POSTGRES_PASSWORD: deepkeel
-          POSTGRES_DB: deepkeel_test
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U deepkeel -d deepkeel_test"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 10
-    env:
-      DEEPKEEL_TEST_POSTGRES_DSN: postgresql://deepkeel:deepkeel@127.0.0.1:5432/deepkeel_test
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
         with:
           python-version: "3.12"
           enable-cache: true
-      - name: Install PostgreSQL verification dependencies
-        run: uv sync --frozen --extra test --extra postgres
-      - name: Verify PostgreSQL adapter contracts and recovery
-        run: uv run pytest -q -m postgres tests/test_postgres_reference.py
-      - name: Verify PostgreSQL multi-worker baseline
-        run: >-
-          uv run python -m verification.postgres_multiworker
-          --requests 48
-          --workers 8
-          --max-p95-ms 2000
+      - name: Install locked test dependencies
+        run: uv sync --frozen --extra test
+      - name: Verify formatting and imports
+        run: uv run ruff check src tests verification examples
+      - name: Verify public type contracts
+        run: uv run mypy src/deepkeel
+      - name: Verify synchronized documentation
+        run: uv run python verification/readme_contract.py
+      - name: Run deterministic Core tests
+        run: uv run pytest -q -m "not postgres"

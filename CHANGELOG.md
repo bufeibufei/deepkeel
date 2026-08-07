@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.0.0 - 2026-08-08
+
 - Add explicit development, testing, and production runtime profiles. Production
   composition now fails closed unless progressive tool disclosure is enforced.
 - Promote `HarnessRuntimeBuilder` to the stable Runtime SDK. The Adapter SDK

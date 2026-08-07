@@ -9,6 +9,11 @@ try {
         throw "DeepKeel dependency sync failed."
     }
 
+    & uv run deepkeel doctor
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel runtime diagnostics failed."
+    }
+
     & uv run ruff check src tests verification
     if ($LASTEXITCODE -ne 0) {
         throw "DeepKeel lint contracts failed."

@@ -39,6 +39,10 @@ def verify_release_workflow(repo_root: Path) -> None:
         'gh release upload "$RELEASE_TAG" dist/*',
         "--clobber",
         'gh release create "$RELEASE_TAG" dist/*',
+        "needs: production-gate",
+        "verification.postgres_multiworker",
+        "verification/concurrency_benchmark.py",
+        "skip-existing: true",
     )
     missing = [fragment for fragment in required_fragments if fragment not in workflow]
     if missing:

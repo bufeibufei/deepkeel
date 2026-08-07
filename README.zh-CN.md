@@ -9,10 +9,10 @@ DeepKeel 负责模型与工具的单循环执行、类型化运行契约、中�
 SubAgent 编排。它不负责产品 API、业务数据库模型、领域提示词、宿主工具
 或前端页面。
 
-当前发布候选版本为 `4.0.0rc2`，安装命令如下：
+当前稳定版本为 `4.0.0`，安装命令如下：
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
 python examples/quickstart/main.py
 ```
 

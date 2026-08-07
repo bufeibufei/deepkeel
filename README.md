@@ -12,7 +12,7 @@ It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
 python examples/quickstart/main.py
 ```
 
@@ -422,8 +422,8 @@ remote_search = McpServerSpec(
 )
 ```
 
-The Capability Pack contract remains `harness-core-v3`; the DeepKeel release
-candidate is `4.0.0rc2` and the public SDK surface is `4.0.0`. Consumers import
+The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
+release and public SDK surface are `4.0.0`. Consumers import
 only from `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`,
 `deepkeel.adapter_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, or
 `deepkeel.orchestration_sdk`. The versioned public

@@ -13,8 +13,55 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: deepkeel-release-${{ inputs.tag || github.ref }}
+  cancel-in-progress: false
+
 jobs:
+  production-gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: deepkeel
+          POSTGRES_PASSWORD: deepkeel
+          POSTGRES_DB: deepkeel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deepkeel -d deepkeel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEEPKEEL_TEST_POSTGRES_DSN: postgresql://deepkeel:deepkeel@127.0.0.1:5432/deepkeel_test
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra test --extra postgres
+      - name: Verify fault and recovery contracts
+        run: uv run pytest -q tests/test_fault_injection.py tests/test_checkpoint_authority.py
+      - name: Verify PostgreSQL contracts
+        run: uv run pytest -q -m postgres tests/test_postgres_reference.py
+      - name: Verify PostgreSQL multi-worker recovery
+        run: >-
+          uv run python -m verification.postgres_multiworker
+          --requests 64 --workers 12 --max-p95-ms 2000
+      - name: Verify Core concurrency baseline
+        run: >-
+          uv run python verification/concurrency_benchmark.py
+          --requests 300 --workers 32 --min-success-rate 1 --max-p95-ms 2000
+
   build:
+    needs: production-gate
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -98,3 +145,5 @@ jobs:
           path: dist
       - name: Publish through PyPI Trusted Publishing
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

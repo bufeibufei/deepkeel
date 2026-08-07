@@ -1,6 +1,6 @@
 [project]
 name = "deepkeel"
-version = "4.0.0rc2"
+version = "4.0.0"
 description = "Durable, observable, capability-driven harness runtime for production-grade AI agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -10,7 +10,7 @@ authors = [
 ]
 keywords = ["agent", "harness", "langgraph", "mcp", "runtime"]
 classifiers = [
-  "Development Status :: 4 - Beta",
+  "Development Status :: 5 - Production/Stable",
   "Intended Audience :: Developers",
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3.12",
