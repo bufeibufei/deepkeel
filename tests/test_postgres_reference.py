@@ -9,32 +9,45 @@ import pytest
 
 from deepkeel.adapter_sdk import (
     RunLeaseConflict,
+    verify_budget_ledger_contract,
     verify_durable_checkpoint_store_contract,
+    verify_model_invocation_store_contract,
     verify_run_lease_store_contract,
     verify_runtime_event_journal_contract,
     verify_runtime_state_store_contract,
+    verify_tool_execution_store_contract,
+    verify_trace_store_contract,
 )
+from deepkeel.failures import RunCanceledError
 from deepkeel.runtime_sdk import (
+    HarnessRuntimeBuilder,
     RuntimeEventEnvelope,
     RuntimeStateConflict,
     RuntimeStateMutation,
 )
-from verification.postgres_reference import (
+from deepkeel.contrib.postgres import (
+    PostgresBudgetLedger,
+    PostgresDatabase,
     PostgresDurableCheckpointStore,
-    PostgresReferenceDatabase,
+    PostgresModelHealthStore,
+    PostgresModelInvocationStore,
+    PostgresRunControl,
     PostgresRunLeaseStore,
+    PostgresRuntimeBundle,
     PostgresRuntimeEventJournal,
     PostgresRuntimeStateStore,
+    PostgresToolExecutionStore,
+    PostgresTraceStore,
 )
 
 
 @pytest.fixture
-def postgres_database() -> Iterator[PostgresReferenceDatabase]:
+def postgres_database() -> Iterator[PostgresDatabase]:
     pytest.importorskip("psycopg")
     dsn = str(os.environ.get("DEEPKEEL_TEST_POSTGRES_DSN") or "").strip()
     if not dsn:
         pytest.skip("DEEPKEEL_TEST_POSTGRES_DSN is not configured")
-    database = PostgresReferenceDatabase(
+    database = PostgresDatabase(
         dsn,
         schema=f"deepkeel_test_{uuid4().hex[:12]}",
     )
@@ -47,7 +60,7 @@ def postgres_database() -> Iterator[PostgresReferenceDatabase]:
 
 @pytest.mark.postgres
 def test_postgres_reference_adapters_satisfy_core_contracts(
-    postgres_database: PostgresReferenceDatabase,
+    postgres_database: PostgresDatabase,
 ) -> None:
     verify_runtime_state_store_contract(
         PostgresRuntimeStateStore(postgres_database),
@@ -67,11 +80,72 @@ def test_postgres_reference_adapters_satisfy_core_contracts(
         run_id=f"checkpoint-{uuid4().hex}",
         user_id="contract-user",
     )
+    verify_model_invocation_store_contract(
+        PostgresModelInvocationStore(postgres_database),
+        run_id=f"model-{uuid4().hex}",
+    )
+    verify_tool_execution_store_contract(
+        PostgresToolExecutionStore(postgres_database),
+        run_id=f"tool-{uuid4().hex}",
+    )
+    verify_budget_ledger_contract(
+        PostgresBudgetLedger(postgres_database),
+        run_id=f"budget-{uuid4().hex}",
+    )
+    verify_trace_store_contract(
+        PostgresTraceStore(postgres_database),
+        run_id=f"trace-{uuid4().hex}",
+    )
+
+
+@pytest.mark.postgres
+def test_postgres_shared_health_and_cancellation(
+    postgres_database: PostgresDatabase,
+) -> None:
+    health = PostgresModelHealthStore(
+        postgres_database,
+        failure_threshold=2,
+        cooldown_seconds=60,
+    )
+    assert health.snapshot("provider", "model").is_available()
+    assert health.record_failure("provider", "model", category="timeout").is_available()
+    assert not health.record_failure("provider", "model", category="timeout").is_available()
+    assert health.record_success("provider", "model").is_available()
+
+    control = PostgresRunControl(postgres_database)
+    run_id = f"cancel-{uuid4().hex}"
+    control.raise_if_cancelled(run_id)
+    control.cancel(run_id)
+    with pytest.raises(RunCanceledError):
+        control.raise_if_cancelled(run_id)
+    control.release(run_id)
+    control.raise_if_cancelled(run_id)
+
+
+@pytest.mark.postgres
+def test_postgres_bundle_satisfies_production_worker_gate(
+    postgres_database: PostgresDatabase,
+) -> None:
+    bundle = PostgresRuntimeBundle.create(
+        postgres_database.dsn,
+        schema=postgres_database.schema,
+        initialize=False,
+    )
+    ports = bundle.runtime_ports(
+        checkpointer=object(),
+        run_lease_owner_id="conformance-worker",
+    )
+    report = (
+        HarnessRuntimeBuilder(profile="production")
+        .with_ports(ports)
+        .production_readiness()
+    )
+    assert report.ready, report.as_dict()
 
 
 @pytest.mark.postgres
 def test_independent_workers_share_recovery_state_and_event_cursor(
-    postgres_database: PostgresReferenceDatabase,
+    postgres_database: PostgresDatabase,
 ) -> None:
     run_id = f"recovery-{uuid4().hex}"
     worker_a_state = PostgresRuntimeStateStore(postgres_database)
@@ -117,7 +191,7 @@ def test_independent_workers_share_recovery_state_and_event_cursor(
 
 @pytest.mark.postgres
 def test_multiworker_lease_and_optimistic_state_races_have_one_winner(
-    postgres_database: PostgresReferenceDatabase,
+    postgres_database: PostgresDatabase,
 ) -> None:
     lease_run_id = f"lease-race-{uuid4().hex}"
 
@@ -169,7 +243,7 @@ def test_multiworker_lease_and_optimistic_state_races_have_one_winner(
 
 @pytest.mark.postgres
 def test_postgres_state_transaction_rolls_back_injected_crash(
-    postgres_database: PostgresReferenceDatabase,
+    postgres_database: PostgresDatabase,
 ) -> None:
     run_id = f"rollback-{uuid4().hex}"
 

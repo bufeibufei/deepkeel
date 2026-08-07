@@ -35,7 +35,7 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
-- [PostgreSQL reference adapters](docs/postgresql-reference.md)
+- [PostgreSQL adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
 - [Release process](docs/releasing.md)
 

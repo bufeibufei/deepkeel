@@ -3,14 +3,14 @@ from __future__ import annotations
 from uuid import uuid4
 
 from deepkeel.adapter_sdk import RunLease, RunLeaseConflict, RunLeaseLost
-from verification.postgres_reference.database import PostgresReferenceDatabase
-from verification.postgres_reference.support import lease_from_row, validated_ttl
+from deepkeel.contrib.postgres.database import PostgresDatabase
+from deepkeel.contrib.postgres.support import lease_from_row, validated_ttl
 
 
 class PostgresRunLeaseStore:
     """Database-time lease ownership with monotonic fencing generations."""
 
-    def __init__(self, database: PostgresReferenceDatabase) -> None:
+    def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
 
     def claim(
@@ -115,3 +115,4 @@ class PostgresRunLeaseStore:
                 )
                 row = cursor.fetchone()
         return lease_from_row(row) if row is not None else None
+

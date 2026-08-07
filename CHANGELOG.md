@@ -7,6 +7,9 @@
 - Promote `HarnessRuntimeBuilder` to the stable Runtime SDK. The Adapter SDK
   keeps a transitional import attribute, but it is no longer its canonical API
   owner.
+- Package PostgreSQL worker adapters under `deepkeel.contrib.postgres`, covering
+  canonical state, checkpoints, events, leases, model/tool idempotency, budget,
+  model health, cancellation, and scoped traces behind one composition bundle.
 
 ## 4.0.0rc2
 

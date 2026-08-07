@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from deepkeel.adapter_sdk import EventJournalConflict
 from deepkeel.runtime_sdk import RuntimeEventEnvelope
-from verification.postgres_reference.database import PostgresReferenceDatabase
-from verification.postgres_reference.support import advisory_lock, fingerprint, json_value
+from deepkeel.contrib.postgres.database import PostgresDatabase
+from deepkeel.contrib.postgres.support import advisory_lock, fingerprint, json_value
 
 
 class PostgresRuntimeEventJournal:
     """Append-only cursor journal safe for independent runtime workers."""
 
-    def __init__(self, database: PostgresReferenceDatabase) -> None:
+    def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
 
     def append(self, event: RuntimeEventEnvelope) -> RuntimeEventEnvelope:
@@ -89,3 +89,4 @@ class PostgresRuntimeEventJournal:
                 )
                 rows = cursor.fetchall()
         return tuple(RuntimeEventEnvelope.model_validate(row["envelope"]) for row in rows)
+

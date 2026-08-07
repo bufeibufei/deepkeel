@@ -10,8 +10,8 @@ from deepkeel.runtime_sdk import (
     RuntimeStateMutation,
     RuntimeStateReceipt,
 )
-from verification.postgres_reference.database import PostgresReferenceDatabase
-from verification.postgres_reference.support import (
+from deepkeel.contrib.postgres.database import PostgresDatabase
+from deepkeel.contrib.postgres.support import (
     advisory_lock,
     aggregate_from_row,
     assert_current_fence,
@@ -29,7 +29,7 @@ class PostgresRuntimeStateStore:
 
     def __init__(
         self,
-        database: PostgresReferenceDatabase,
+        database: PostgresDatabase,
         *,
         failure_injector: Callable[[str], None] | None = None,
     ) -> None:
@@ -313,3 +313,4 @@ class PostgresRuntimeStateStore:
     def _fail_at(self, stage: str) -> None:
         if self._failure_injector is not None:
             self._failure_injector(stage)
+

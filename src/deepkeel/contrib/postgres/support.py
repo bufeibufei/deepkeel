@@ -120,3 +120,4 @@ def validated_ttl(value: float) -> float:
     if ttl <= 0:
         raise ValueError("ttl_seconds must be positive")
     return ttl
+

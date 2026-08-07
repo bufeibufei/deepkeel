@@ -1,16 +1,17 @@
-"""Product-neutral PostgreSQL reference adapters for DeepKeel ports.
+"""Compatibility imports for the packaged PostgreSQL adapters.
 
-These adapters intentionally live outside ``src/deepkeel``. They are executable
-contract examples, not a database dependency imposed on runtime consumers.
+New integrations should import from :mod:`deepkeel.contrib.postgres`.
 """
 
-from verification.postgres_reference.adapters import (
+from deepkeel.contrib.postgres import (
+    PostgresDatabase,
     PostgresDurableCheckpointStore,
     PostgresRunLeaseStore,
     PostgresRuntimeEventJournal,
     PostgresRuntimeStateStore,
 )
-from verification.postgres_reference.database import PostgresReferenceDatabase
+
+PostgresReferenceDatabase = PostgresDatabase
 
 __all__ = [
     "PostgresDurableCheckpointStore",

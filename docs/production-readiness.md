@@ -47,12 +47,11 @@ Run every applicable verifier in `deepkeel.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
 isolate identical run identifiers belonging to different user scopes.
 
-The executable reference in `verification/postgres_reference` demonstrates
-transaction boundaries and database constraints for canonical state, the
-runtime event journal, run leases with fencing generations, and portable
-durable checkpoints. It is intentionally not packaged as a Core dependency.
-See [PostgreSQL reference adapters](postgresql-reference.md) for the contract
-test and multi-worker recovery baseline.
+The optional `deepkeel[postgres]` integration packages transaction boundaries
+and database constraints for canonical state, the runtime event journal, run
+leases with fencing generations, and portable durable checkpoints. See
+[PostgreSQL adapters](postgresql-reference.md) for the contract test and
+multi-worker recovery baseline.
 
 Use `RuntimeScope` as the canonical tenant, namespace, and user boundary.
 Legacy adapters may continue to receive `user_id` for the default scope, but
