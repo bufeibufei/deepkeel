@@ -94,6 +94,16 @@ async def acleanup_run(
         for thread_id in thread_ids:
             try:
                 await async_delete_thread(thread_id)
+            except NotImplementedError:
+                if not callable(delete_thread):
+                    errors[f"langgraph:{thread_id}"] = (
+                        "async checkpoint deletion is not implemented and no sync fallback exists"
+                    )
+                    continue
+                try:
+                    delete_thread(thread_id)
+                except Exception as exc:
+                    errors[f"langgraph:{thread_id}"] = str(exc)
             except Exception as exc:
                 errors[f"langgraph:{thread_id}"] = str(exc)
         cleanup["langgraph"] = (

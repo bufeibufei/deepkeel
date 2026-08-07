@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from threading import Event as ThreadEvent
+from types import SimpleNamespace
 
 import pytest
 
@@ -18,6 +19,7 @@ from deepkeel.state_store import InMemoryRuntimeStateStore
 from deepkeel.runtime_streaming import BoundedRuntimeStreamBridge
 from deepkeel.runtime_sdk import InMemoryRunControl
 from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_persistence import acleanup_run
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
 from deepkeel.tools import ToolExecutionContext, ToolExecutor
 
@@ -205,6 +207,43 @@ def test_arun_uses_native_async_persistence_and_lease_ports_on_host_loop() -> No
     assert lease is None
     assert used_loops and all(loop is host_loop for loop in used_loops)
     assert [operation for operation, _ in checkpoint_store.operations] == ["delete"]
+
+
+def test_async_cleanup_falls_back_when_checkpointer_only_implements_sync_delete() -> None:
+    class SyncDeleteCheckpointer:
+        def __init__(self) -> None:
+            self.deleted: list[str] = []
+
+        async def adelete_thread(self, _thread_id: str) -> None:
+            raise NotImplementedError
+
+        def delete_thread(self, thread_id: str) -> None:
+            self.deleted.append(thread_id)
+
+    checkpointer = SyncDeleteCheckpointer()
+    cleared: list[str] = []
+    released: list[str] = []
+    runtime = SimpleNamespace(
+        async_checkpoint_store=None,
+        checkpoint_store=None,
+        checkpointer=checkpointer,
+        budget_ledger=SimpleNamespace(clear=cleared.append),
+        run_control=SimpleNamespace(release=released.append),
+    )
+
+    cleanup = asyncio.run(
+        acleanup_run(
+            runtime,
+            None,
+            run_id="sync-delete-run",
+            graph_thread_ids=["sync-delete-graph"],
+        )
+    )
+
+    assert cleanup == {"durable": "not_configured", "langgraph": "deleted"}
+    assert checkpointer.deleted == ["sync-delete-run", "sync-delete-graph"]
+    assert cleared == ["sync-delete-run"]
+    assert released == ["sync-delete-run"]
 
 
 def test_arun_consults_async_checkpoint_fallback_for_resume_without_state_store() -> None:
