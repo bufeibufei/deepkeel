@@ -69,9 +69,14 @@ jobs:
         run: |
           PRERELEASE=""
           case "$RELEASE_TAG" in *-rc.*) PRERELEASE="--prerelease" ;; esac
-          gh release create "$RELEASE_TAG" dist/* --verify-tag --generate-notes $PRERELEASE
+          gh release create "$RELEASE_TAG" dist/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --generate-notes \
+            $PRERELEASE
 
   pypi:
+    if: ${{ vars.PYPI_TRUSTED_PUBLISHING == 'enabled' }}
     needs: build
     runs-on: ubuntu-latest
     environment:

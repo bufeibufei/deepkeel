@@ -10,9 +10,13 @@ It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install --pre deepkeel
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.1"
 python examples/quickstart/main.py
 ```
+
+PyPI publication uses Trusted Publishing and is enabled independently after
+the publisher is configured for this repository. Git tags and GitHub release
+artifacts remain the source of truth for release candidates.
 
 DeepKeel is designed for Hosts that need more than a demo loop: durable run
 identity, resumable user handoffs, progressive tool disclosure, model routing,
