@@ -19,6 +19,10 @@ from deepkeel.budget import (
     BudgetRequest,
     InMemoryBudgetLedger,
 )
+from deepkeel.async_ports import (
+    AsyncToolExecutionStore,
+    AsyncToolExecutionStoreAdapter,
+)
 from deepkeel.clarifications import clarification_for_missing_arguments, clarification_tool_result
 from deepkeel.contracts import Observation, PendingAction, ToolCall, ToolResult
 from deepkeel.deadlines import ensure_time_remaining
@@ -78,6 +82,7 @@ class ToolExecutor:
         preflight: ToolPreflight | None = None,
         max_parallel_tools: int = 4,
         execution_store: ToolExecutionStore | None = None,
+        async_execution_store: AsyncToolExecutionStore | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         hook_runner: HookRunner | None = None,
@@ -87,7 +92,21 @@ class ToolExecutor:
         self.registry = registry
         self.preflight = preflight
         self.max_parallel_tools = max(1, int(max_parallel_tools))
-        self.execution_store = execution_store or InMemoryToolExecutionStore()
+        if execution_store is not None and async_execution_store is not None:
+            raise ValueError(
+                "configure either execution_store or async_execution_store, not both"
+            )
+        self.execution_store = (
+            execution_store
+            if execution_store is not None
+            else None if async_execution_store is not None else InMemoryToolExecutionStore()
+        )
+        self.async_execution_store = async_execution_store
+        if async_execution_store is not None:
+            self._execution_store = async_execution_store
+        else:
+            assert self.execution_store is not None
+            self._execution_store = AsyncToolExecutionStoreAdapter(self.execution_store)
         self.policy_engine = policy_engine or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or InMemoryBudgetLedger()
         self.hook_runner = hook_runner
@@ -307,7 +326,7 @@ class ToolExecutor:
         )
         reexecution_safe = _tool_reexecution_safe(spec)
         try:
-            claim = self.execution_store.claim(
+            claim = await self._execution_store.claim(
                 run_id=context.run_id,
                 call=normalized,
                 lease_seconds=lease_seconds,
@@ -323,7 +342,7 @@ class ToolExecutor:
             )
         if claim.status == "replay":
             try:
-                persisted = self.execution_store.replay(claim)
+                persisted = await self._execution_store.replay(claim)
             except Exception as exc:
                 failed = _failed_result(
                     normalized,
@@ -405,7 +424,7 @@ class ToolExecutor:
         settlement_error = None
         for settlement_attempt in range(3):
             try:
-                self.execution_store.settle(claim, result)
+                await self._execution_store.settle(claim, result)
                 settlement_error = None
                 break
             except Exception as exc:
@@ -656,9 +675,13 @@ class ToolExecutor:
             }
             return _with_runtime_metrics(result, started_at, phase="budget", executed=False)
         try:
-            raw = handler(call, context)
-            if inspect.isawaitable(raw):
-                raw = await raw
+            native_execute = getattr(handler, "aexecute", None)
+            if callable(native_execute):
+                raw = await native_execute(call, context)
+            else:
+                raw = handler(call, context)
+                if inspect.isawaitable(raw):
+                    raw = await raw
             context.raise_if_fence_lost()
             context.run_control.raise_if_cancelled(context.run_id, force=True)
             ensure_time_remaining(context.deadline_monotonic)

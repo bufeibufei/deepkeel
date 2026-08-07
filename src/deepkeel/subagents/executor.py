@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -84,6 +85,34 @@ class SubAgentExecutor(SubAgentBoundedExecutionMixin):
         self.max_parallel = max(1, min(int(max_parallel), 3))
         self.max_depth = max(1, min(int(max_depth), 1))
         self.model_capabilities = model_capabilities or InMemoryModelCapabilityRegistry()
+
+    async def aexecute_many(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: EventSink | None = None,
+    ) -> DelegationBatchResult:
+        """Non-blocking compatibility bridge for the synchronous provider loop.
+
+        Native async orchestration implementations can satisfy the same method
+        directly; this default keeps existing synchronous providers off the
+        Host event loop while preserving their thread-local execution model.
+        """
+
+        if context.session is not None and context.session_factory is None:
+            raise RuntimeError(
+                "async subagent execution requires session_factory when a session is bound"
+            )
+        thread_context = context.fork(session=None) if context.session is not None else context
+        return await asyncio.to_thread(
+            self.execute_many,
+            request,
+            context=thread_context,
+            providers=providers,
+            event_sink=event_sink,
+        )
 
     def execute_many(
         self,

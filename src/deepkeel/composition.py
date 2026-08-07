@@ -8,6 +8,7 @@ from deepkeel.async_ports import (
     AsyncRunLeaseStore,
     AsyncRuntimeEventJournal,
     AsyncRuntimeStateStore,
+    AsyncToolExecutionStore,
 )
 from deepkeel.budget import BudgetLedger
 from deepkeel.capabilities import (
@@ -97,6 +98,7 @@ class RuntimePortChanges(TypedDict, total=False):
     budget_ledger: BudgetLedger | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
+    async_tool_execution_store: AsyncToolExecutionStore | None
     tool_preflight: ToolPreflight | None
     secret_provider: SecretProvider | None
     telemetry: TelemetryPort | None
@@ -136,6 +138,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     model_health_store: ModelHealthStore | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
+    async_tool_execution_store: AsyncToolExecutionStore | None
     tool_preflight: ToolPreflight | None
     telemetry: TelemetryPort | None
     context_builder: ContextBuilder | None
@@ -177,6 +180,7 @@ class RuntimePersistencePorts:
     async_run_lease_store: AsyncRunLeaseStore | None = None
     model_invocation_store: ModelInvocationStore | None = None
     tool_execution_store: ToolExecutionStore | None = None
+    async_tool_execution_store: AsyncToolExecutionStore | None = None
     run_lease_owner_id: str = ""
     run_lease_ttl_seconds: float = 60.0
 
@@ -241,6 +245,7 @@ class RuntimePorts:
     budget_ledger: BudgetLedger | None = None
     run_control: RunControl | None = None
     tool_execution_store: ToolExecutionStore | None = None
+    async_tool_execution_store: AsyncToolExecutionStore | None = None
     tool_preflight: ToolPreflight | None = None
     secret_provider: SecretProvider | None = None
     telemetry: TelemetryPort | None = None
@@ -433,6 +438,7 @@ class HarnessRuntimeBuilder:
             preflight=self._ports.tool_preflight,
             max_parallel_tools=self._max_parallel_tools,
             execution_store=self._ports.tool_execution_store,
+            async_execution_store=self._ports.async_tool_execution_store,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
         )

@@ -13,7 +13,7 @@ from typing import Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from deepkeel.memory_sdk import MemoryPort, MemoryQuery, MemorySearchPage
+from deepkeel.memory_sdk import AsyncMemoryPort, MemoryPort, MemoryQuery, MemorySearchPage
 from deepkeel.type_narrowing import as_dict, as_list
 
 
@@ -110,6 +110,10 @@ class MemoryRecallPolicy(Protocol):
     def decide(self, request: MemoryRecallRequest) -> MemoryRecallDecision: ...
 
 
+class AsyncMemoryRecallPolicy(Protocol):
+    async def adecide(self, request: MemoryRecallRequest) -> MemoryRecallDecision: ...
+
+
 class MemoryRecallCoordinator(Protocol):
     async def prepare(
         self,
@@ -128,8 +132,8 @@ class DefaultMemoryRecallCoordinator:
     def __init__(
         self,
         *,
-        policy: MemoryRecallPolicy,
-        memory_port: MemoryPort,
+        policy: MemoryRecallPolicy | AsyncMemoryRecallPolicy,
+        memory_port: MemoryPort | AsyncMemoryPort,
         projector: MemoryRecallProjector | None = None,
         enforcement: MemoryRecallEnforcement = "enforced",
         runtime_search_tool_name: str = "memory.search",
@@ -156,7 +160,7 @@ class DefaultMemoryRecallCoordinator:
         request = MemoryRecallRequest.from_context(question, short_context, bundle)
         started = time.perf_counter()
         try:
-            decision = self.policy.decide(request)
+            decision = await self._decide(request)
         except Exception as exc:
             decision = MemoryRecallDecision(
                 mode="agent_decide",
@@ -244,10 +248,26 @@ class DefaultMemoryRecallCoordinator:
         cached = self._cache_get(key)
         if cached is not None:
             return cached, True
-        page = await asyncio.to_thread(self.memory_port.search, query)
+        native_search = getattr(self.memory_port, "asearch", None)
+        if callable(native_search):
+            page = await native_search(query)
+        else:
+            search = getattr(self.memory_port, "search", None)
+            if not callable(search):
+                raise TypeError("memory port must implement search() or asearch()")
+            page = await asyncio.to_thread(search, query)
         validated = MemorySearchPage.model_validate(page)
         self._cache_put(key, validated)
         return validated.model_copy(deep=True), False
+
+    async def _decide(self, request: MemoryRecallRequest) -> MemoryRecallDecision:
+        native_decide = getattr(self.policy, "adecide", None)
+        if callable(native_decide):
+            return MemoryRecallDecision.model_validate(await native_decide(request))
+        decide = getattr(self.policy, "decide", None)
+        if not callable(decide):
+            raise TypeError("memory recall policy must implement decide() or adecide()")
+        return MemoryRecallDecision.model_validate(await asyncio.to_thread(decide, request))
 
     def _cache_get(self, key: str) -> MemorySearchPage | None:
         if self.cache_ttl_seconds <= 0:
@@ -315,6 +335,7 @@ def _portable_memory_page(page: MemorySearchPage) -> Mapping[str, Any]:
 
 
 MEMORY_RECALL_API = (
+    "AsyncMemoryRecallPolicy",
     "DefaultMemoryRecallCoordinator",
     "MemoryRecallCoordinator",
     "MemoryRecallDecision",

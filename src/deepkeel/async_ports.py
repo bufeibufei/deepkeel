@@ -16,6 +16,11 @@ from deepkeel.state_store import (
     RuntimeStateStore,
 )
 from deepkeel.telemetry import TracePage, TraceQuery, TraceStore
+from deepkeel.contracts import ToolCall, ToolResult
+from deepkeel.tool_execution import (
+    ToolExecutionClaim,
+    ToolExecutionStore,
+)
 
 
 T = TypeVar("T")
@@ -109,6 +114,24 @@ class AsyncRunLeaseStore(Protocol):
     async def release(self, lease: RunLease) -> None: ...
 
     async def inspect(self, run_id: str) -> RunLease | None: ...
+
+
+class AsyncToolExecutionStore(Protocol):
+    """Native async idempotency boundary for tool side effects."""
+
+    async def claim(
+        self,
+        *,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim: ...
+
+    async def replay(self, claim: ToolExecutionClaim) -> ToolResult: ...
+
+    async def settle(self, claim: ToolExecutionClaim, result: ToolResult) -> None: ...
 
 
 async def run_sync_adapter(
@@ -252,3 +275,34 @@ class AsyncRunLeaseStoreAdapter:
 
     async def inspect(self, run_id: str) -> RunLease | None:
         return await run_sync_adapter(self.store.inspect, run_id)
+
+
+class AsyncToolExecutionStoreAdapter:
+    """Opt-in bridge for thread-safe synchronous tool execution stores."""
+
+    def __init__(self, store: ToolExecutionStore) -> None:
+        self.store = store
+
+    async def claim(
+        self,
+        *,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim:
+        return await run_sync_adapter(
+            self.store.claim,
+            run_id=run_id,
+            call=call,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+        )
+
+    async def replay(self, claim: ToolExecutionClaim) -> ToolResult:
+        return await run_sync_adapter(self.store.replay, claim)
+
+    async def settle(self, claim: ToolExecutionClaim, result: ToolResult) -> None:
+        await run_sync_adapter(self.store.settle, claim, result)

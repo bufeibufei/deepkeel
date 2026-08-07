@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import hashlib
 from typing import Any, Protocol
 
@@ -15,7 +16,7 @@ from deepkeel.contracts import (
     ToolResultStatus,
 )
 from deepkeel.skills import DelegationPolicy
-from deepkeel.subagents.contracts import DelegationRequest
+from deepkeel.subagents.contracts import DelegationBatchResult, DelegationRequest
 from deepkeel.subagents.executor import SubAgentExecutor
 from deepkeel.tools import ToolExecutionContext
 
@@ -31,19 +32,65 @@ class DelegationDispatcher(Protocol):
     ) -> dict[str, Any]: ...
 
 
+class AsyncDelegationDispatcher(Protocol):
+    async def adispatch(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: Any = None,
+    ) -> dict[str, Any]: ...
+
+
+class DelegationExecutor(Protocol):
+    registry: Any
+
+    def execute_many(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: Any = None,
+    ) -> DelegationBatchResult: ...
+
+
+class AsyncDelegationExecutor(Protocol):
+    registry: Any
+
+    async def aexecute_many(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: Any = None,
+    ) -> DelegationBatchResult: ...
+
+
 class DelegationToolHandler:
     """Domain-neutral adapter exposing bounded delegation as one harness tool."""
 
     def __init__(
         self,
-        executor: SubAgentExecutor,
+        executor: SubAgentExecutor | DelegationExecutor | AsyncDelegationExecutor,
         *,
-        dispatcher: DelegationDispatcher | None = None,
+        dispatcher: DelegationDispatcher | AsyncDelegationDispatcher | None = None,
     ) -> None:
         self.executor = executor
         self.dispatcher = dispatcher
 
     def __call__(self, call: ToolCall, context: ToolExecutionContext) -> ToolResult:
+        """Synchronous compatibility entry point for non-async hosts."""
+
+        return asyncio.run(self.aexecute(call, context))
+
+    async def aexecute(
+        self,
+        call: ToolCall,
+        context: ToolExecutionContext,
+    ) -> ToolResult:
         try:
             request = DelegationRequest.model_validate(
                 {
@@ -88,7 +135,7 @@ class DelegationToolHandler:
                     "background subagent execution is unavailable in this host"
                 )
             if should_dispatch_background and self.dispatcher is not None:
-                dispatched = self.dispatcher.dispatch(
+                dispatched = await self._adispatch(
                     request,
                     context=context,
                     providers=providers,
@@ -105,7 +152,7 @@ class DelegationToolHandler:
                     data=dispatched,
                     metadata={"visible_label": "Specialist collaboration in progress"},
                 )
-            batch = self.executor.execute_many(
+            batch = await self._aexecute_many(
                 request,
                 context=context,
                 providers=providers,
@@ -172,6 +219,72 @@ class DelegationToolHandler:
                 "completed_inline": True,
                 "parent_projection": True,
             },
+        )
+
+    async def _adispatch(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: Any = None,
+    ) -> dict[str, Any]:
+        if self.dispatcher is None:
+            raise RuntimeError("delegation dispatcher is unavailable")
+        native_dispatch = getattr(self.dispatcher, "adispatch", None)
+        if callable(native_dispatch):
+            return await native_dispatch(
+                request,
+                context=context,
+                providers=providers,
+                event_sink=event_sink,
+            )
+        sync_dispatch = getattr(self.dispatcher, "dispatch", None)
+        if not callable(sync_dispatch):
+            raise RuntimeError("delegation dispatcher has no executable entry point")
+        if context.session is not None and context.session_factory is None:
+            raise RuntimeError(
+                "async delegation dispatch requires session_factory when a session is bound"
+            )
+        thread_context = context.fork(session=None) if context.session is not None else context
+        return await asyncio.to_thread(
+            sync_dispatch,
+            request,
+            context=thread_context,
+            providers=providers,
+            event_sink=event_sink,
+        )
+
+    async def _aexecute_many(
+        self,
+        request: DelegationRequest,
+        *,
+        context: ToolExecutionContext,
+        providers: dict[str, Any],
+        event_sink: Any = None,
+    ) -> DelegationBatchResult:
+        native_execute = getattr(self.executor, "aexecute_many", None)
+        if callable(native_execute):
+            return await native_execute(
+                request,
+                context=context,
+                providers=providers,
+                event_sink=event_sink,
+            )
+        sync_execute = getattr(self.executor, "execute_many", None)
+        if not callable(sync_execute):
+            raise RuntimeError("delegation executor has no executable entry point")
+        if context.session is not None and context.session_factory is None:
+            raise RuntimeError(
+                "async delegation execution requires session_factory when a session is bound"
+            )
+        thread_context = context.fork(session=None) if context.session is not None else context
+        return await asyncio.to_thread(
+            sync_execute,
+            request,
+            context=thread_context,
+            providers=providers,
+            event_sink=event_sink,
         )
 
     def _is_registered(self, agent_id: str) -> bool:

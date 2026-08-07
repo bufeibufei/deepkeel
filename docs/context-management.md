@@ -39,6 +39,11 @@ turns and copied into runtime diagnostics. Resume paths preserve
 diagnostics only. Prompts and raw sensitive records are not added to public
 telemetry by the coordinator.
 
+Async Hosts may provide `AsyncMemoryRecallPolicy` and `AsyncMemoryPort`; the
+coordinator prefers their native `adecide()` and `asearch()` methods. Existing
+synchronous policies and ports remain supported through explicit thread
+offload, so they do not block the Host event loop.
+
 The coordinator supports `legacy`, `shadow` and `enforced` rollout modes.
 `legacy` and `shadow` preserve eager prefetch behavior while Hosts compare
 traces; `enforced` follows the policy decision. Core deliberately does not

@@ -107,6 +107,9 @@ Artifact、引用、诊断、检查点、事件和稳定的 `ui_state`。
 - `AsyncRuntimeEventJournal`
 - `AsyncRunLeaseStore`
 - `AsyncTraceStore`
+- `AsyncMemoryPort` 与 `AsyncMemoryRecallPolicy`
+- `AsyncToolExecutionStore`
+- `AsyncDelegationExecutor` 与 `AsyncDelegationDispatcher`
 
 Adapter SDK 提供的 `Async*Adapter` 使用线程卸载，只适合明确线程安全的同步
 实现。生产数据库驱动应实现原生异步协议，不应把线程绑定的 ORM Session 交给

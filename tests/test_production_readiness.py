@@ -8,7 +8,9 @@ from deepkeel.adapter_sdk import (
     ProductionConfigurationError,
     RuntimePorts,
 )
+from deepkeel.extension_sdk import AsyncToolExecutionStoreAdapter
 from deepkeel.state_store import InMemoryRuntimeStateStore
+from deepkeel.tools import InMemoryToolExecutionStore
 
 
 class DurableHostPort:
@@ -98,5 +100,46 @@ def test_production_readiness_rejects_in_memory_port_hidden_by_async_bridge() ->
     assert any(
         issue.code == "PROCESS_LOCAL_PRODUCTION_PORT"
         and issue.port == "runtime_state_store"
+        for issue in report.errors
+    )
+
+
+def test_production_accepts_native_async_tool_execution_store() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(
+            tool_execution_store=None,
+            async_tool_execution_store=DurableHostPort(),
+        )
+    ).production_readiness()
+
+    assert report.ready is True
+    assert not any(issue.port == "tool_execution_store" for issue in report.warnings)
+
+
+def test_production_rejects_ambiguous_tool_execution_stores() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(async_tool_execution_store=DurableHostPort())
+    ).production_readiness()
+
+    assert any(
+        issue.code == "AMBIGUOUS_PRODUCTION_PORT"
+        and issue.port == "tool_execution_store"
+        for issue in report.errors
+    )
+
+
+def test_production_rejects_in_memory_tool_store_hidden_by_async_bridge() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(
+            tool_execution_store=None,
+            async_tool_execution_store=AsyncToolExecutionStoreAdapter(
+                InMemoryToolExecutionStore()
+            ),
+        )
+    ).production_readiness()
+
+    assert any(
+        issue.code == "PROCESS_LOCAL_PRODUCTION_PORT"
+        and issue.port == "tool_execution_store"
         for issue in report.errors
     )

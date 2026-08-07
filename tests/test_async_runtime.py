@@ -21,7 +21,11 @@ from deepkeel.runtime_sdk import InMemoryRunControl
 from deepkeel.runtime_sdk import RuntimeRequest
 from deepkeel.runtime_persistence import acleanup_run
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
-from deepkeel.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.tools import (
+    InMemoryToolExecutionStore,
+    ToolExecutionContext,
+    ToolExecutor,
+)
 
 
 class StreamingProvider:
@@ -548,6 +552,59 @@ def test_async_tool_executor_preserves_parallel_result_order() -> None:
     names, elapsed = asyncio.run(scenario())
     assert names == ["async.first", "async.second"]
     assert elapsed < 0.09
+
+
+def test_native_async_tool_execution_store_owns_claim_replay_and_settlement() -> None:
+    class NativeAsyncExecutionStore:
+        def __init__(self) -> None:
+            self.store = InMemoryToolExecutionStore()
+            self.operations: list[tuple[str, asyncio.AbstractEventLoop]] = []
+
+        async def claim(self, **kwargs):
+            self.operations.append(("claim", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            return self.store.claim(**kwargs)
+
+        async def replay(self, claim):
+            self.operations.append(("replay", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            return self.store.replay(claim)
+
+        async def settle(self, claim, result):
+            self.operations.append(("settle", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            self.store.settle(claim, result)
+
+    async def scenario():
+        registry = ToolRegistry(
+            [ToolSpec(name="async.idempotent", read_only=True, parallel_safe=True)]
+        )
+        store = NativeAsyncExecutionStore()
+        executor = ToolExecutor(registry, async_execution_store=store)
+        calls = 0
+
+        async def handler(call, _context):
+            nonlocal calls
+            calls += 1
+            return ToolResult(call=call, status="succeeded", summary="done")
+
+        executor.register("async.idempotent", handler)
+        call = ToolCall(
+            id="async-idempotent-call",
+            name="async.idempotent",
+            idempotency_key="stable-key",
+        )
+        context = ToolExecutionContext(run_id="async-store-run", user_id="user-1")
+        first = await executor.aexecute(call, context)
+        replay = await executor.aexecute(call, context)
+        return store, calls, first, replay, asyncio.get_running_loop()
+
+    store, calls, first, replay, loop = asyncio.run(scenario())
+
+    assert calls == 1
+    assert first.status == replay.status == "succeeded"
+    assert [name for name, _ in store.operations] == ["claim", "settle", "claim", "replay"]
+    assert all(operation_loop is loop for _, operation_loop in store.operations)
 
 
 def test_native_async_model_provider_runs_in_host_loop() -> None:

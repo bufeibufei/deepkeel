@@ -41,6 +41,9 @@ class ProductionRuntimePorts(Protocol):
     def tool_execution_store(self) -> Any: ...
 
     @property
+    def async_tool_execution_store(self) -> Any: ...
+
+    @property
     def budget_ledger(self) -> Any: ...
 
     @property
@@ -150,11 +153,6 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
             ports.model_invocation_store,
             "configure durable model invocation idempotency",
         ),
-        (
-            "tool_execution_store",
-            ports.tool_execution_store,
-            "configure durable tool execution idempotency",
-        ),
         ("budget_ledger", ports.budget_ledger, "configure a shared budget ledger"),
         (
             "model_health_store",
@@ -169,6 +167,13 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
         ("telemetry", ports.telemetry, "configure durable telemetry or trace export"),
     ):
         _require_explicit(issues, value, port=port, message=message)
+    _require_one(
+        issues,
+        ports.tool_execution_store,
+        ports.async_tool_execution_store,
+        port="tool_execution_store",
+        message="configure durable tool execution idempotency",
+    )
     _reject_known_local_ports(issues, ports)
     _warn_blocking_async_ports(issues, ports)
     if ports.tool_view_mode != "enforced":
@@ -232,7 +237,9 @@ def _reject_known_local_ports(
         "event_journal": ports.async_event_journal or ports.event_journal,
         "run_lease_store": ports.async_run_lease_store or ports.run_lease_store,
         "model_invocation_store": ports.model_invocation_store,
-        "tool_execution_store": ports.tool_execution_store,
+        "tool_execution_store": (
+            ports.async_tool_execution_store or ports.tool_execution_store
+        ),
         "budget_ledger": ports.budget_ledger,
         "model_health_store": ports.model_health_store,
         "run_control": ports.run_control,
@@ -272,12 +279,20 @@ def _warn_blocking_async_ports(
         ),
         ("event_journal", ports.event_journal, ports.async_event_journal),
         ("run_lease_store", ports.run_lease_store, ports.async_run_lease_store),
+        (
+            "tool_execution_store",
+            ports.tool_execution_store,
+            ports.async_tool_execution_store,
+        ),
     ):
         if synchronous is not None and asynchronous is None:
             issues.append(
                 ProductionReadinessIssue(
                     code="BLOCKING_ASYNC_PATH",
-                    message="arun() will call this synchronous adapter on the Host loop",
+                    message=(
+                        "arun() requires a thread bridge for this synchronous adapter; "
+                        "prefer a native async port for sustained concurrency"
+                    ),
                     severity="warning",
                     port=port,
                 )

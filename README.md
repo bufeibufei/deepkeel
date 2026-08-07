@@ -180,6 +180,12 @@ Thread-safe synchronous persistence adapters can be exposed to async Host
 control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
 Production async database drivers should implement the corresponding
 `Async*Store` protocol directly instead of using thread offload.
+The same rule applies to selective Memory recall, tool idempotency, and
+SubAgent delegation through `AsyncMemoryPort`, `AsyncMemoryRecallPolicy`,
+`AsyncToolExecutionStore`, and the async orchestration contracts.
+When a synchronous SubAgent bridge needs database access, provide a
+`session_factory`; DeepKeel will not move an already-bound Session across
+threads.
 
 Production composition is executable rather than advisory. Inspect missing or
 process-local Host ports with `production_readiness()`, and use

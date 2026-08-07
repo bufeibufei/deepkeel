@@ -10,6 +10,7 @@ from deepkeel.composition import (
     RuntimeExecutionPorts,
     RuntimePorts,
 )
+from deepkeel.async_ports import AsyncToolExecutionStoreAdapter
 
 from deepkeel.contrib.postgres.checkpoint_store import PostgresDurableCheckpointStore
 from deepkeel.contrib.postgres.database import PostgresDatabase
@@ -90,7 +91,9 @@ class PostgresRuntimeBundle:
                 event_journal=self.event_journal,
                 run_lease_store=self.run_lease_store,
                 model_invocation_store=self.model_invocation_store,
-                tool_execution_store=self.tool_execution_store,
+                async_tool_execution_store=AsyncToolExecutionStoreAdapter(
+                    self.tool_execution_store
+                ),
                 run_lease_owner_id=str(run_lease_owner_id or "").strip(),
                 run_lease_ttl_seconds=float(run_lease_ttl_seconds),
             ),

@@ -124,15 +124,20 @@ from the same atomic mutation transaction used for status and checkpoint data.
 
 Network-backed adapters should expose native asynchronous implementations.
 `AsyncRuntimeStateStore`, `AsyncDurableCheckpointStore`,
-`AsyncRuntimeEventJournal`, `AsyncRunLeaseStore`, and `AsyncTraceStore` define the portable
-contracts. The supplied `Async*Adapter` bridges use `asyncio.to_thread` and are
-only suitable for thread-safe synchronous adapters; ORM sessions must not be
-offloaded unless their driver explicitly permits cross-thread use.
+`AsyncRuntimeEventJournal`, `AsyncRunLeaseStore`, `AsyncTraceStore`, and
+`AsyncToolExecutionStore` define the portable infrastructure contracts. Memory
+recall and bounded delegation likewise expose native async policy, storage,
+executor, and dispatcher boundaries. The supplied `Async*Adapter` bridges use
+`asyncio.to_thread` and are only suitable for thread-safe synchronous adapters;
+ORM sessions must not be offloaded unless their driver explicitly permits
+cross-thread use. The synchronous SubAgent bridge rejects a bound Session
+unless the Host supplies a `session_factory`, so each worker owns its Session.
 
-Native async state, event, checkpoint, and lease ports are consumed directly by
-the canonical `arun()` path. Configure either the synchronous or asynchronous
-form of one port, never both. `astream()` adds a bounded same-loop backlog to
-its bounded queue and coalesces consecutive answer deltas without losing text.
+Native async state, event, checkpoint, lease, Memory, tool-idempotency, and
+delegation ports are consumed directly by the canonical `arun()` path.
+Configure either the synchronous or asynchronous form of one port, never both.
+`astream()` adds a bounded same-loop backlog to its bounded queue and coalesces
+consecutive answer deltas without losing text.
 
 ## Evaluation
 

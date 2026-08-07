@@ -38,3 +38,9 @@ During the final v4 release-candidate cycle, `HarnessRuntimeBuilder` moved from
 it for ordinary runtime construction. The former module keeps a transitional
 attribute for source compatibility, but new code must import the canonical
 Runtime SDK symbol.
+
+The final release-candidate cycle also adds additive async counterparts for
+Memory recall, tool-execution idempotency, and experimental bounded delegation.
+Existing synchronous contracts remain source compatible; async Hosts should
+prefer the native protocols and use the supplied bridges only for thread-safe
+legacy adapters.

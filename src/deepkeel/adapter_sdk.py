@@ -125,6 +125,7 @@ from deepkeel.migrations import (
     default_state_migrations,
 )
 from deepkeel.memory_recall import (
+    AsyncMemoryRecallPolicy,
     DefaultMemoryRecallCoordinator,
     MemoryRecallCoordinator,
     MemoryRecallDecision,
@@ -206,6 +207,7 @@ ADAPTER_SDK_API = (
     "AsyncDurableCheckpointStore",
     "AsyncDurableCheckpointStoreAdapter",
     "AsyncModelProviderAdapter",
+    "AsyncMemoryRecallPolicy",
     "AsyncRunLeaseGuard",
     "AsyncRunLeaseStore",
     "AsyncRunLeaseStoreAdapter",

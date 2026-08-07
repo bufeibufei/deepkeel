@@ -8,9 +8,12 @@ from deepkeel.tool_execution import (
 )
 from deepkeel.tool_executor import ToolExecutor
 from deepkeel.tool_executor_contracts import ToolHandler, ToolPreflight
+from deepkeel.async_ports import AsyncToolExecutionStore, AsyncToolExecutionStoreAdapter
 
 
 __all__ = [
+    "AsyncToolExecutionStore",
+    "AsyncToolExecutionStoreAdapter",
     "InMemoryToolExecutionStore",
     "ToolExecutionClaim",
     "ToolExecutionContext",

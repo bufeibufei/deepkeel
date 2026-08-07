@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from deepkeel.orchestration_sdk import (
@@ -315,6 +316,35 @@ class InlineExecutor:
         )
 
 
+class AsyncInlineExecutor:
+    registry = Registry()
+
+    def __init__(self) -> None:
+        self.async_calls = 0
+
+    def execute_many(self, request, **_kwargs) -> DelegationBatchResult:
+        raise AssertionError("the synchronous delegation path must not be used")
+
+    async def aexecute_many(self, request, **_kwargs) -> DelegationBatchResult:
+        self.async_calls += 1
+        task = request.tasks[0]
+        return DelegationBatchResult(
+            delegation_id=request.delegation_id,
+            root_run_id=request.root_run_id,
+            parent_run_id=request.parent_run_id,
+            status="completed",
+            results=[
+                SubAgentResult(
+                    task_id=task.id,
+                    agent_id=task.agent_id,
+                    child_run_id="child-async",
+                    status="completed",
+                    conclusion="Checked asynchronously.",
+                )
+            ],
+        )
+
+
 def _delegation_call(agent_id: str = "review.facts") -> ToolCall:
     return ToolCall(
         id="delegate-1",
@@ -350,6 +380,36 @@ def test_delegation_tool_handles_success_invalid_request_and_missing_provider() 
     assert invalid.data["fallback"] == "continue_with_parent_agent"
     assert unavailable.status == "failed"
     assert unavailable.retryable is True
+
+
+def test_delegation_tool_prefers_native_async_executor() -> None:
+    executor = AsyncInlineExecutor()
+
+    result = asyncio.run(
+        DelegationToolHandler(executor).aexecute(
+            _delegation_call(),
+            _context(model_providers={"fast": object()}),
+        )
+    )
+
+    assert result.status == "succeeded"
+    assert result.data["results"][0]["conclusion"] == "Checked asynchronously."
+    assert executor.async_calls == 1
+
+
+def test_sync_delegation_bridge_rejects_thread_bound_session_without_factory() -> None:
+    context = _context(model_providers={"fast": object()})
+    context.session = object()
+
+    result = asyncio.run(
+        DelegationToolHandler(InlineExecutor()).aexecute(
+            _delegation_call(),
+            context,
+        )
+    )
+
+    assert result.status == "failed"
+    assert "requires session_factory" in result.error
 
 
 class Dispatcher:

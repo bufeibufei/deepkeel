@@ -10,6 +10,10 @@
 - Package PostgreSQL worker adapters under `deepkeel.contrib.postgres`, covering
   canonical state, checkpoints, events, leases, model/tool idempotency, budget,
   model health, cancellation, and scoped traces behind one composition bundle.
+- Add native async contracts for Memory recall policy/storage, tool execution
+  idempotency, and bounded SubAgent delegation. Synchronous implementations
+  remain compatible through explicit thread bridges instead of blocking the
+  Host event loop.
 
 ## 4.0.0rc2
 
