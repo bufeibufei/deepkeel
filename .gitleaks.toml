@@ -1,0 +1,7 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Architecture wording in the changelog is not an API credential"
+regexTarget = "match"
+regexes = ['''keys,\s+parent/child''']
