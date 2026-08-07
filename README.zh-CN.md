@@ -213,6 +213,11 @@ runtime = builder.build_production()
 
 详细部署清单见 [生产就绪文档](docs/production-readiness.md)。
 
+随包提供的 PostgreSQL 适配器使用带校验和、事务级 advisory lock 的前向迁移。
+部署前可通过 `database.migration_status()` 和
+`database.migration_registry().plan()` 检查版本；迁移历史或物理列发生漂移、以及
+自动降级请求都会 fail-closed。
+
 ## 可观测性与评测
 
 Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生命周期、预算和恢复

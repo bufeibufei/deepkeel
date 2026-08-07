@@ -36,6 +36,8 @@ from deepkeel.contrib.postgres import (
     PostgresRuntimeBundle,
     PostgresRuntimeEventJournal,
     PostgresRuntimeStateStore,
+    PostgresSchemaDriftError,
+    PostgresSchemaError,
     PostgresToolExecutionStore,
     PostgresTraceStore,
 )
@@ -271,4 +273,114 @@ def test_postgres_state_transaction_rolls_back_injected_crash(
     )
     assert snapshot.version == 0
     assert snapshot.sequence == 0
+
+
+@pytest.mark.postgres
+def test_postgres_schema_registry_is_current_and_idempotent(
+    postgres_database: PostgresDatabase,
+) -> None:
+    first = postgres_database.migration_status()
+    postgres_database.initialize()
+    second = postgres_database.migration_status()
+
+    assert first.up_to_date is True
+    assert first.current_version == first.target_version == 2
+    assert [record.version for record in first.applied] == [1, 2]
+    assert first.pending == ()
+    assert second == first
+    assert postgres_database.migration_registry().plan() == ()
+
+
+@pytest.mark.postgres
+def test_postgres_schema_registry_upgrades_pre_cursor_trace_schema(
+    postgres_database: PostgresDatabase,
+) -> None:
+    postgres_database.drop()
+    schema = postgres_database.schema
+    with postgres_database.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"CREATE SCHEMA {schema}")
+            cursor.execute(
+                f"""
+                CREATE TABLE {schema}.runtime_traces (
+                    telemetry_id TEXT PRIMARY KEY,
+                    run_id TEXT NOT NULL DEFAULT '',
+                    thread_id TEXT NOT NULL DEFAULT '',
+                    turn_id TEXT NOT NULL DEFAULT '',
+                    tenant_id TEXT NOT NULL DEFAULT '',
+                    user_id TEXT NOT NULL DEFAULT '',
+                    namespace TEXT NOT NULL DEFAULT 'default',
+                    trace_id TEXT NOT NULL DEFAULT '',
+                    component TEXT NOT NULL DEFAULT '',
+                    event_name TEXT NOT NULL DEFAULT '',
+                    occurred_at TIMESTAMPTZ NOT NULL,
+                    record JSONB NOT NULL
+                )
+                """
+            )
+
+    postgres_database.initialize()
+
+    with postgres_database.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT column_name
+                FROM information_schema.columns
+                WHERE table_schema = %s AND table_name = 'runtime_traces'
+                """,
+                (schema,),
+            )
+            columns = {str(row["column_name"]) for row in cursor.fetchall()}
+    assert "sequence" in columns
+    assert postgres_database.migration_status().up_to_date is True
+
+
+@pytest.mark.postgres
+def test_postgres_schema_registry_rejects_checksum_and_physical_drift(
+    postgres_database: PostgresDatabase,
+) -> None:
+    schema = postgres_database.schema
+    with postgres_database.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {schema}.schema_migrations SET checksum = 'tampered' WHERE version = 1"
+            )
+    with pytest.raises(PostgresSchemaDriftError, match="migration drift"):
+        postgres_database.migration_status()
+
+    postgres_database.reset()
+    with postgres_database.connect() as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"ALTER TABLE {schema}.runtime_traces DROP COLUMN sequence")
+    with pytest.raises(PostgresSchemaDriftError, match="missing required columns"):
+        postgres_database.migration_status()
+
+
+@pytest.mark.postgres
+def test_postgres_schema_registry_serializes_concurrent_migrators(
+    postgres_database: PostgresDatabase,
+) -> None:
+    postgres_database.drop()
+
+    def initialize(_index: int) -> None:
+        PostgresDatabase(
+            postgres_database.dsn,
+            schema=postgres_database.schema,
+        ).initialize()
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(initialize, range(8)))
+
+    status = postgres_database.migration_status()
+    assert status.up_to_date is True
+    assert [record.version for record in status.applied] == [1, 2]
+
+
+@pytest.mark.postgres
+def test_postgres_schema_registry_never_downgrades_automatically(
+    postgres_database: PostgresDatabase,
+) -> None:
+    with pytest.raises(PostgresSchemaError, match="downgrade"):
+        postgres_database.migrate(target_version=1)
 

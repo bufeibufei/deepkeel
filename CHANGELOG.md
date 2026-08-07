@@ -14,6 +14,10 @@
   idempotency, and bounded SubAgent delegation. Synchronous implementations
   remain compatible through explicit thread bridges instead of blocking the
   Host event loop.
+- Replace ad-hoc PostgreSQL table initialization with a forward-only,
+  checksummed Schema Registry. Migrations use an advisory lock, detect history
+  and physical-column drift, repair the supported pre-cursor trace schema, and
+  reject automatic downgrades.
 
 ## 4.0.0rc2
 

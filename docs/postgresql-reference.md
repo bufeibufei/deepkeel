@@ -25,6 +25,8 @@ The packaged integration implements and verifies:
   worker processes;
 - scoped `TraceStore` persistence, deterministic queries, and bounded
   retention cleanup.
+- a checksummed Schema Registry with advisory-lock serialization, migration
+  planning/status, drift detection, and forward-only upgrades.
 
 The LangGraph saver and capability-package catalog remain Host-owned because
 their lifecycle and deployment topology vary independently from worker state.
@@ -50,6 +52,30 @@ runtime = HarnessRuntimeBuilder(profile="production").with_ports(ports).build()
 
 `PostgresRuntimeBundle` never creates or owns the LangGraph saver. The Host
 must initialize and close that dependency according to its process lifecycle.
+`create(initialize=True)` upgrades the DeepKeel adapter schema before exposing
+ports. It does not inspect or modify product-owned tables.
+
+## Schema lifecycle
+
+`PostgresDatabase.initialize()` remains the compatibility entry point and now
+delegates to the packaged `PostgresSchemaRegistry`. Operators can inspect or
+apply the same registry explicitly:
+
+```python
+from deepkeel.contrib.postgres import PostgresDatabase
+
+database = PostgresDatabase(dsn, schema="deepkeel")
+status = database.migration_status()
+pending = database.migration_registry().plan()
+upgraded = database.migrate()
+```
+
+Every applied version records its immutable name and checksum in
+`schema_migrations`. A changed checksum, unknown future version, history gap,
+missing runtime table, or missing required column fails closed as schema drift.
+Concurrent workers serialize bootstrap and upgrade with a transaction-scoped
+PostgreSQL advisory lock. Only forward migration is supported; rollback is an
+operator-owned restore or a new compensating migration.
 
 ## Run the contracts
 
@@ -65,8 +91,9 @@ uv run pytest -q -m postgres tests/test_postgres_reference.py
 
 The tests instantiate independent adapter objects to represent different
 workers. They prove one-winner lease and optimistic-state races, cross-worker
-checkpoint/event recovery, scope isolation, and rollback after an injected
-crash between state update and transaction commit.
+checkpoint/event recovery, scope isolation, rollback after an injected crash,
+legacy-schema upgrade, drift rejection, migration idempotency, and concurrent
+migrator serialization.
 
 Run the repeatable recovery baseline separately:
 
