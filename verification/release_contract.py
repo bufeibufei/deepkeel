@@ -31,11 +31,30 @@ def verify_release_version(repo_root: Path, tag: str) -> str:
     return package_version
 
 
+def verify_release_workflow(repo_root: Path) -> None:
+    workflow_path = repo_root / ".github" / "workflows" / "release.yml"
+    workflow = workflow_path.read_text(encoding="utf-8")
+    required_fragments = (
+        'gh release view "$RELEASE_TAG"',
+        'gh release upload "$RELEASE_TAG" dist/*',
+        "--clobber",
+        'gh release create "$RELEASE_TAG" dist/*',
+    )
+    missing = [fragment for fragment in required_fragments if fragment not in workflow]
+    if missing:
+        raise ValueError(
+            "release workflow must create or idempotently update a GitHub release; "
+            f"missing: {', '.join(missing)}"
+        )
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Verify the Core release version contract.")
     parser.add_argument("--tag", required=True)
     args = parser.parse_args()
-    version = verify_release_version(Path(__file__).resolve().parents[1], args.tag)
+    repo_root = Path(__file__).resolve().parents[1]
+    version = verify_release_version(repo_root, args.tag)
+    verify_release_workflow(repo_root)
     print(f"release contract verified for {release_tag_for_version(version)}")
 
 
