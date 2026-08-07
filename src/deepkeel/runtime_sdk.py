@@ -31,6 +31,7 @@ from deepkeel.control import (
     NoopRunControl,
     RunControl,
 )
+from deepkeel.composition import HarnessRuntimeBuilder, RuntimeProfile, RuntimeProfileName
 from deepkeel.evaluation import (
     EvalCase,
     EvalCaseResult,
@@ -129,6 +130,7 @@ RUNTIME_SDK_API = (
     "DEEPKEEL_VERSION",
     "PACKAGE_VERSION",
     "HarnessRuntime",
+    "HarnessRuntimeBuilder",
     "InMemoryRunControl",
     "InMemoryRunRecoveryExecutor",
     "InMemoryDurableCheckpointStore",
@@ -161,6 +163,8 @@ RUNTIME_SDK_API = (
     "RuntimeEventEnvelope",
     "RuntimeReference",
     "RuntimeRequest",
+    "RuntimeProfile",
+    "RuntimeProfileName",
     "RuntimeResult",
     "RuntimeResultStatus",
     "RUNTIME_CONTRACT_VERSION",

@@ -171,12 +171,12 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
         _require_explicit(issues, value, port=port, message=message)
     _reject_known_local_ports(issues, ports)
     _warn_blocking_async_ports(issues, ports)
-    if ports.tool_view_mode == "legacy":
+    if ports.tool_view_mode != "enforced":
         issues.append(
             ProductionReadinessIssue(
-                code="LEGACY_TOOL_DISCLOSURE",
-                message="legacy tool disclosure bypasses progressive catalog reduction",
-                severity="warning",
+                code="TOOL_DISCLOSURE_NOT_ENFORCED",
+                message="production requires enforced progressive tool disclosure",
+                severity="error",
                 port="tool_view_mode",
             )
         )

@@ -32,3 +32,9 @@ The v4 distribution rename keeps the persisted `harness-core-v3` contract.
 Capability generations that accepted the final v3 package line remain
 loadable through an explicit compatibility bridge; newly authored packages
 should declare a v4 package range.
+
+During the final v4 release-candidate cycle, `HarnessRuntimeBuilder` moved from
+`deepkeel.adapter_sdk` to `deepkeel.runtime_sdk` because application authors need
+it for ordinary runtime construction. The former module keeps a transitional
+attribute for source compatibility, but new code must import the canonical
+Runtime SDK symbol.

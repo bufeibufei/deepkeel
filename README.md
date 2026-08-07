@@ -61,7 +61,7 @@ non-domain example is available in
 There is no implicit registration or legacy Pack adapter in the v3 contract.
 
 ```python
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder
 from deepkeel.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
@@ -186,7 +186,7 @@ process-local Host ports with `production_readiness()`, and use
 `build_production()` to fail closed before a worker starts:
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```

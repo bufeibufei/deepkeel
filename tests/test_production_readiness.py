@@ -30,6 +30,7 @@ def _production_ports(**overrides) -> RuntimePorts:
         "model_health_store": durable,
         "run_control": durable,
         "telemetry": durable,
+        "tool_view_mode": "enforced",
     }
     values.update(overrides)
     return RuntimePorts(**values)
@@ -54,13 +55,34 @@ def test_default_builder_fails_closed_for_production() -> None:
 
 
 def test_production_builder_accepts_explicit_external_ports() -> None:
-    builder = HarnessRuntimeBuilder().with_ports(_production_ports())
+    builder = HarnessRuntimeBuilder(profile="production").with_ports(_production_ports())
 
     report = builder.production_readiness()
     runtime = builder.build_production()
 
     assert report.ready is True
     assert runtime.runtime_state_store is not None
+    assert builder.profile.name == "production"
+    assert runtime.tool_view_mode == "enforced"
+
+
+def test_production_profile_cannot_bypass_readiness_with_plain_build() -> None:
+    builder = HarnessRuntimeBuilder(profile="production")
+
+    with pytest.raises(ProductionConfigurationError):
+        builder.build()
+
+
+def test_production_rejects_non_enforced_tool_disclosure() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(tool_view_mode="shadow")
+    ).production_readiness()
+
+    assert any(
+        issue.code == "TOOL_DISCLOSURE_NOT_ENFORCED"
+        and issue.port == "tool_view_mode"
+        for issue in report.errors
+    )
 
 
 def test_production_readiness_rejects_in_memory_port_hidden_by_async_bridge() -> None:

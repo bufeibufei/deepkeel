@@ -56,8 +56,7 @@ SDK，不应直接访问 Host 的 ORM、路由对象或私有运行状态。
 ## 快速开始
 
 ```python
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
-from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder, RuntimeRequest
 
 runtime = HarnessRuntimeBuilder().build()
 result = runtime.run(
@@ -200,7 +199,7 @@ SubAgent 编排是有界的，受并发、深度、预算和父运行取消控�
 `build()` 适合本地开发和测试。生产 Worker 应使用可执行门禁：
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```

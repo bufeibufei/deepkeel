@@ -255,7 +255,6 @@ ADAPTER_SDK_API = (
     "GovernanceBundle",
     "GovernanceScope",
     "GraphCheckpointer",
-    "HarnessRuntimeBuilder",
     "INPUT_TOKENS",
     "InMemoryBudgetLedger",
     "InMemoryContextSummaryCache",

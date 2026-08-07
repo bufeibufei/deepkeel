@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
-from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder, RuntimeRequest
 
 
 class LocalProvider:

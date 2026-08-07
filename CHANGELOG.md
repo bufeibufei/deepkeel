@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add explicit development, testing, and production runtime profiles. Production
+  composition now fails closed unless progressive tool disclosure is enforced.
+- Promote `HarnessRuntimeBuilder` to the stable Runtime SDK. The Adapter SDK
+  keeps a transitional import attribute, but it is no longer its canonical API
+  owner.
+
 ## 4.0.0rc2
 
 - Make the six versioned SDK modules the unique public symbol owners, publish

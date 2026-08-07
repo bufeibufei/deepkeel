@@ -16,6 +16,7 @@ import deepkeel.runtime_sdk as runtime_sdk
 
 from deepkeel.runtime_sdk import (
     Artifact,
+    HarnessRuntimeBuilder,
     InMemoryRuntimeStateStore,
     PendingAction,
     RuntimeRequest,
@@ -42,7 +43,6 @@ from deepkeel.adapter_sdk import (
     ContextSegment,
     ContextWindowPolicy,
     DeterministicContextWindowManager,
-    HarnessRuntimeBuilder,
     InMemoryBudgetLedger,
     InMemoryContextSummaryCache,
     InMemoryTelemetry,

@@ -8,7 +8,7 @@ infrastructure, identity, deployment, and operator-facing APIs.
 Use the executable builder gate before starting a production worker:
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```
@@ -17,6 +17,10 @@ runtime = builder.build_production()
 ambiguous, or known to be process-local. Warnings identify synchronous adapters
 that can block `arun()`. The gate cannot prove that an arbitrary custom adapter
 is durable, so the conformance suites below remain mandatory.
+
+Production composition also requires `tool_view_mode="enforced"`. Development
+may retain legacy disclosure while migrating, but a production worker cannot
+silently expose the complete allowed catalog to the model.
 
 Do not use the `InMemory*` implementations in a multi-worker deployment. Install
 durable implementations for:
