@@ -1,8 +1,5 @@
 from __future__ import annotations
 import asyncio
-from concurrent.futures import TimeoutError as FutureTimeoutError
-import hashlib
-import json
 import time
 from collections.abc import AsyncIterator
 from threading import Event as ThreadEvent, Lock
@@ -18,6 +15,12 @@ from deepkeel.budget import (
     TOOL_CONCURRENCY,
     BudgetLedger,
     InMemoryBudgetLedger,
+)
+from deepkeel.async_ports import (
+    AsyncDurableCheckpointStore,
+    AsyncRunLeaseStore,
+    AsyncRuntimeEventJournal,
+    AsyncRuntimeStateStore,
 )
 from deepkeel.contracts import (
     Artifact,
@@ -56,12 +59,16 @@ from deepkeel.model import (
 )
 from deepkeel.model_health import InMemoryModelHealthStore, ModelHealthStore
 from deepkeel.model_routing import AdaptiveStepModelRouter, ModelRouter
-from deepkeel.leases import ExecutionFence, RunLeaseGuard, RunLeaseStore
+from deepkeel.leases import (
+    AsyncRunLeaseGuard,
+    ExecutionFence,
+    RunLeaseGuard,
+    RunLeaseStore,
+)
 from deepkeel.migrations import StateMigrationRegistry, default_state_migrations
 from deepkeel.persistence import (
     CheckpointCompatibilityError,
     DurableCheckpointStore,
-    durable_state_from_result,
 )
 from deepkeel.capabilities import CapabilityCatalog, CapabilityContribution
 from deepkeel.capability_manifest import RuntimeGeneration
@@ -82,11 +89,19 @@ from deepkeel.runtime_events import RuntimeEventEmitter
 from deepkeel.runtime_graph_execution import execute_graph_turn
 from deepkeel.runtime_lifecycle import run_start_lifecycle_hooks
 from deepkeel.runtime_settlement import project_and_settle_runtime_result
+from deepkeel.runtime_persistence import (
+    acleanup_run as cleanup_runtime_async,
+    aload_authoritative_checkpoint as load_authoritative_checkpoint_async,
+    event_latest_sequence,
+    host_owns_terminal_settlement,
+    persist_runtime_snapshot,
+    record_checkpoint_cleanup_event,
+)
+from deepkeel.runtime_streaming import BoundedRuntimeStreamBridge
 from deepkeel.skills import SkillPolicy
 from deepkeel.skill_activation import EntryToolSkillActivator
 from deepkeel.scope import RuntimeScope, require_legacy_compatible_scope
 from deepkeel.state_store import (
-    RuntimeStateMutation,
     RuntimeStateStore,
     ScopedRuntimeStateStore,
 )
@@ -123,22 +138,6 @@ def _default_system_prompt_factory(skill_activation: dict[str, Any]) -> str:
     return harness_system_prompt(
         skill_instructions=str(skill_activation.get("prompt_instructions") or "").strip()
     )
-
-
-def _runtime_state_mutation_id(
-    run_id: str,
-    status: str,
-    durable_state: dict[str, Any],
-) -> str:
-    encoded = json.dumps(
-        durable_state,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
-    return f"{run_id}:{status}:{digest}"
 
 
 def _optional_int(value: Any) -> int | None:
@@ -217,6 +216,7 @@ class HarnessRuntime:
         *,
         checkpointer: GraphCheckpointer | None = None,
         checkpoint_store: DurableCheckpointStore | None = None,
+        async_checkpoint_store: AsyncDurableCheckpointStore | None = None,
         system_prompt_factory: SystemPromptFactory | None = None,
         session_factory: SessionFactory | None = None,
         max_steps: int = 12,
@@ -233,9 +233,12 @@ class HarnessRuntime:
         context_builder: ContextBuilder | None = None,
         context_window_manager: ContextWindowManager | None = None,
         runtime_state_store: RuntimeStateStore | None = None,
+        async_runtime_state_store: AsyncRuntimeStateStore | None = None,
         event_journal: RuntimeEventJournal | None = None,
+        async_event_journal: AsyncRuntimeEventJournal | None = None,
         reference_projector: ReferenceProjector | None = None,
         run_lease_store: RunLeaseStore | None = None,
+        async_run_lease_store: AsyncRunLeaseStore | None = None,
         run_lease_owner_id: str = "",
         run_lease_ttl_seconds: float = 60.0,
         state_migrations: StateMigrationRegistry | None = None,
@@ -253,6 +256,7 @@ class HarnessRuntime:
         self.tool_executor = tool_executor
         self.checkpointer = checkpointer or LangGraphCheckpointerAdapter()
         self.checkpoint_store = checkpoint_store
+        self.async_checkpoint_store = async_checkpoint_store
         self.system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
         self.session_factory = session_factory
         self.max_steps = max(2, int(max_steps))
@@ -271,9 +275,12 @@ class HarnessRuntime:
             context_window_manager or DeterministicContextWindowManager()
         )
         self.runtime_state_store = runtime_state_store
+        self.async_runtime_state_store = async_runtime_state_store
         self.event_journal = event_journal
+        self.async_event_journal = async_event_journal
         self.reference_projector = reference_projector or DefaultReferenceProjector()
         self.run_lease_store = run_lease_store
+        self.async_run_lease_store = async_run_lease_store
         self.run_lease_owner_id = str(run_lease_owner_id or f"runtime-{uuid4().hex}")
         self.run_lease_ttl_seconds = float(run_lease_ttl_seconds)
         self.state_migrations = state_migrations or default_state_migrations()
@@ -297,6 +304,24 @@ class HarnessRuntime:
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
         self.tool_executor.hook_runner = self.hook_runner
+        self._validate_exclusive_io_ports()
+
+    def _validate_exclusive_io_ports(self) -> None:
+        pairs = (
+            ("checkpoint_store", self.checkpoint_store, self.async_checkpoint_store),
+            (
+                "runtime_state_store",
+                self.runtime_state_store,
+                self.async_runtime_state_store,
+            ),
+            ("event_journal", self.event_journal, self.async_event_journal),
+            ("run_lease_store", self.run_lease_store, self.async_run_lease_store),
+        )
+        for name, synchronous, asynchronous in pairs:
+            if synchronous is not None and asynchronous is not None:
+                raise ValueError(
+                    f"configure either {name} or async_{name}, not both"
+                )
 
     @property
     def graph_compile_count(self) -> int:
@@ -338,6 +363,10 @@ class HarnessRuntime:
         limit: int = 100,
     ) -> tuple[RuntimeStreamEvent, ...]:
         if self.event_journal is None:
+            if self.async_event_journal is not None:
+                raise RuntimeError(
+                    "async event journal is configured; use areplay_events()"
+                )
             return ()
         return tuple(
             RuntimeStreamEvent.model_validate(event)
@@ -347,6 +376,29 @@ class HarnessRuntime:
                 limit=limit,
             )
         )
+
+    async def areplay_events(
+        self,
+        run_id: str,
+        *,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> tuple[RuntimeStreamEvent, ...]:
+        if self.async_event_journal is not None:
+            events = await self.async_event_journal.read_after(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        elif self.event_journal is not None:
+            events = self.event_journal.read_after(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        else:
+            return ()
+        return tuple(RuntimeStreamEvent.model_validate(event) for event in events)
 
     @staticmethod
     def supports_native_tools(provider: Any) -> bool:
@@ -364,6 +416,16 @@ class HarnessRuntime:
         event_sink: EventSink | None = None,
     ) -> RuntimeResult:
         prepared = self._ensure_request_identity(request)
+        if self.async_run_lease_store is not None:
+            return asyncio.run(
+                self.arun(
+                    prepared,
+                    provider=provider,
+                    providers=providers,
+                    session=session,
+                    event_sink=event_sink,
+                )
+            )
         if self.run_lease_store is None:
             return self._run_claimed(
                 prepared,
@@ -406,6 +468,28 @@ class HarnessRuntime:
     ) -> RuntimeResult:
         """Run the canonical async state machine in the host event loop."""
         prepared = self._ensure_request_identity(request)
+        if self.async_run_lease_store is not None:
+            async with AsyncRunLeaseGuard(
+                self.async_run_lease_store,
+                run_id=prepared.run_id,
+                owner_id=self.run_lease_owner_id,
+                ttl_seconds=self.run_lease_ttl_seconds,
+            ) as async_lease_guard:
+                def guarded_async_sink(event: dict[str, Any]) -> None:
+                    async_lease_guard.raise_if_lost()
+                    if event_sink is not None:
+                        event_sink(event)
+
+                result = await self._arun_claimed(
+                    prepared,
+                    provider=provider,
+                    providers=providers,
+                    session=session,
+                    event_sink=guarded_async_sink,
+                    execution_fence=async_lease_guard,
+                )
+                async_lease_guard.raise_if_lost()
+                return result
         if self.run_lease_store is None:
             return await self._arun_claimed(
                 prepared,
@@ -419,9 +503,9 @@ class HarnessRuntime:
             run_id=prepared.run_id,
             owner_id=self.run_lease_owner_id,
             ttl_seconds=self.run_lease_ttl_seconds,
-        ) as lease_guard:
+        ) as sync_lease_guard:
             def guarded_sink(event: dict[str, Any]) -> None:
-                lease_guard.raise_if_lost()
+                sync_lease_guard.raise_if_lost()
                 if event_sink is not None:
                     event_sink(event)
 
@@ -431,9 +515,9 @@ class HarnessRuntime:
                 providers=providers,
                 session=session,
                 event_sink=guarded_sink,
-                execution_fence=lease_guard,
+                execution_fence=sync_lease_guard,
             )
-            lease_guard.raise_if_lost()
+            sync_lease_guard.raise_if_lost()
             return result
 
     async def astream(
@@ -447,38 +531,18 @@ class HarnessRuntime:
         """Stream runtime events with cooperative cancellation for async hosts."""
         prepared = self._ensure_request_identity(request)
         loop = asyncio.get_running_loop()
-        queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue(
-            maxsize=self.async_stream_buffer_size
-        )
         closed = ThreadEvent()
-        pending_puts: set[asyncio.Task[None]] = set()
+        bridge = BoundedRuntimeStreamBridge(
+            loop=loop,
+            maxsize=self.async_stream_buffer_size,
+            closed=closed,
+        )
 
         def sink(event: dict[str, Any]) -> None:
             if closed.is_set():
                 self.run_control.raise_if_cancelled(prepared.run_id, force=True)
                 return
-            try:
-                producer_loop = asyncio.get_running_loop()
-            except RuntimeError:
-                producer_loop = None
-            if producer_loop is loop:
-                try:
-                    queue.put_nowait(("event", event))
-                except asyncio.QueueFull:
-                    pending = loop.create_task(queue.put(("event", event)))
-                    pending_puts.add(pending)
-                    pending.add_done_callback(pending_puts.discard)
-                return
-            future = asyncio.run_coroutine_threadsafe(queue.put(("event", event)), loop)
-            while True:
-                try:
-                    future.result(timeout=0.1)
-                    return
-                except FutureTimeoutError:
-                    if closed.is_set():
-                        future.cancel()
-                        self.run_control.raise_if_cancelled(prepared.run_id, force=True)
-                        return
+            bridge.offer_event(event)
 
         async def execute() -> None:
             try:
@@ -490,16 +554,16 @@ class HarnessRuntime:
                     event_sink=sink,
                 )
                 if not closed.is_set():
-                    await queue.put(("result", result))
+                    await bridge.put_terminal("result", result)
             except BaseException as exc:
                 if not closed.is_set():
-                    await queue.put(("error", exc))
+                    await bridge.put_terminal("error", exc)
 
         task = asyncio.create_task(execute())
         completed = False
         try:
             while True:
-                kind, value = await queue.get()
+                kind, value = await bridge.get()
                 if kind == "event":
                     yield RuntimeStreamEvent.model_validate(value)
                     continue
@@ -520,8 +584,7 @@ class HarnessRuntime:
                 return
         finally:
             closed.set()
-            for pending in tuple(pending_puts):
-                pending.cancel()
+            await bridge.close()
             if not completed and not task.done():
                 cancel = getattr(self.run_control, "cancel", None)
                 if callable(cancel):
@@ -645,7 +708,7 @@ class HarnessRuntime:
             bundle = prepared_context.context_bundle
             context_window_diagnostics = dict(prepared_context.diagnostics)
         except Exception as exc:
-            return self._context_setup_failure(
+            return await self._context_setup_failure(
                 question,
                 exc,
                 short_context=short,
@@ -656,6 +719,7 @@ class HarnessRuntime:
                 session=session,
                 event_sink=event_sink,
                 execution_fence=execution_fence,
+                scope=runtime_scope,
             )
         run_id = str(
             request.run_id
@@ -666,7 +730,7 @@ class HarnessRuntime:
         )
         if short.get("resume"):
             durable_state, checkpoint_authority, checkpoint_load_errors = (
-                self._load_authoritative_checkpoint(
+                await self._aload_authoritative_checkpoint(
                     run_id,
                     session=session,
                     user_id=str(user_id or "local-device"),
@@ -681,7 +745,7 @@ class HarnessRuntime:
                 durable_state,
             )
         except CheckpointCompatibilityError as exc:
-            return self._context_setup_failure(
+            return await self._context_setup_failure(
                 question,
                 exc,
                 short_context=short,
@@ -692,6 +756,7 @@ class HarnessRuntime:
                 session=session,
                 event_sink=event_sink,
                 execution_fence=execution_fence,
+                scope=runtime_scope,
             )
         max_elapsed_seconds = _max_elapsed_seconds(resolved_model_policy)
         deadline_monotonic = (
@@ -722,14 +787,13 @@ class HarnessRuntime:
             or short.get("turn_id")
             or f"turn-{uuid4()}"
         )
-        event_sequence = (
-            self.event_journal.latest_sequence(run_id)
-            if self.event_journal is not None
-            else max(
+        event_sequence = await self._event_latest_sequence(
+            run_id,
+            fallback=max(
                 0,
                 _optional_int(bundle.get("event_sequence")) or 0,
                 _optional_int(short.get("event_sequence")) or 0,
-            )
+            ),
         )
         run_version = max(
             0,
@@ -747,6 +811,7 @@ class HarnessRuntime:
             run_control=self.run_control,
             telemetry=self.telemetry,
             event_journal=self.event_journal,
+            async_event_journal=self.async_event_journal,
             event_sink=event_sink,
             execution_fence=execution_fence,
         )
@@ -773,7 +838,7 @@ class HarnessRuntime:
         if lifecycle_start.context_patch:
             bundle.update(lifecycle_start.context_patch)
         if lifecycle_start.stopped_reason:
-            return self._context_setup_failure(
+            return await self._context_setup_failure(
                 question,
                 RuntimeError(lifecycle_start.stopped_reason),
                 short_context=short,
@@ -784,6 +849,7 @@ class HarnessRuntime:
                 session=session,
                 event_sink=event_sink,
                 execution_fence=execution_fence,
+                scope=runtime_scope,
             )
         if lifecycle_start.context_patch:
             bundle["_model_context_profile"] = model_context_profile.as_dict()
@@ -1003,6 +1069,26 @@ class HarnessRuntime:
         self.run_control.release(run_id)
         return cleanup
 
+    async def _acleanup_run(
+        self,
+        result: RuntimeResult | None,
+        *,
+        run_id: str,
+        session: Any = None,
+        user_id: str = "",
+        scope: RuntimeScope | None = None,
+        graph_thread_ids: list[str] | None = None,
+    ) -> dict[str, str]:
+        return await cleanup_runtime_async(
+            self,
+            result,
+            run_id=run_id,
+            session=session,
+            user_id=user_id,
+            scope=scope,
+            graph_thread_ids=graph_thread_ids,
+        )
+
     def _load_durable_checkpoint(self, run_id: str, *, session: Any, user_id: str) -> dict[str, Any]:
         if self.checkpoint_store is None:
             return {}
@@ -1068,6 +1154,50 @@ class HarnessRuntime:
                 errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
         return {}, "session_projection", errors
 
+    async def _aload_authoritative_checkpoint(
+        self,
+        run_id: str,
+        *,
+        session: Any,
+        user_id: str,
+        scope: RuntimeScope,
+    ) -> tuple[dict[str, Any], str, list[str]]:
+        return await load_authoritative_checkpoint_async(
+            self,
+            run_id,
+            session=session,
+            user_id=user_id,
+            scope=scope,
+        )
+
+    async def _event_latest_sequence(self, run_id: str, *, fallback: int = 0) -> int:
+        return await event_latest_sequence(self, run_id, fallback=fallback)
+
+    def _host_owns_terminal_settlement(self) -> bool:
+        return host_owns_terminal_settlement(self)
+
+    async def _record_checkpoint_cleanup_event(
+        self,
+        result: RuntimeResult,
+        *,
+        run_id: str,
+        thread_id: str,
+        turn_id: str,
+        scope: RuntimeScope,
+        event_sink: EventSink | None,
+        fallback_sequence: int = 0,
+    ) -> None:
+        await record_checkpoint_cleanup_event(
+            self,
+            result,
+            run_id=run_id,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            scope=scope,
+            event_sink=event_sink,
+            fallback_sequence=fallback_sequence,
+        )
+
     def _has_graph_checkpoint(self, thread_id: str) -> bool:
         exists = getattr(self.checkpointer, "exists", None)
         if callable(exists):
@@ -1090,7 +1220,7 @@ class HarnessRuntime:
         except Exception:
             return False
 
-    def _context_setup_failure(
+    async def _context_setup_failure(
         self,
         question: str,
         exc: Exception,
@@ -1103,6 +1233,7 @@ class HarnessRuntime:
         session: Any,
         event_sink: EventSink | None,
         execution_fence: ExecutionFence | None,
+        scope: RuntimeScope,
     ) -> RuntimeResult:
         run_id = str(
             context_bundle.get("agent_session_id")
@@ -1123,14 +1254,13 @@ class HarnessRuntime:
         )
         failure = classify_runtime_failure(exc)
         resolved_skill = SkillPolicy.from_snapshot(skill_activation).runtime_snapshot()
-        sequence = (
-            self.event_journal.latest_sequence(run_id)
-            if self.event_journal is not None
-            else max(
+        sequence = await self._event_latest_sequence(
+            run_id,
+            fallback=max(
                 0,
                 _optional_int(context_bundle.get("event_sequence")) or 0,
                 _optional_int(short_context.get("event_sequence")) or 0,
-            )
+            ),
         ) + 1
         event = envelope_runtime_event(
             {
@@ -1155,9 +1285,17 @@ class HarnessRuntime:
                 _optional_int(context_bundle.get("run_version")) or 0,
                 _optional_int(short_context.get("run_version")) or 0,
             ),
+            scope=scope,
         )
         envelope = RuntimeStreamEvent.model_validate(event)
-        if self.event_journal is not None:
+        if self.async_event_journal is not None:
+            try:
+                await self.async_event_journal.append(envelope)
+            except Exception as journal_exc:
+                raise AgentEventPersistenceError(
+                    f"runtime event journal append failed: {journal_exc}"
+                ) from journal_exc
+        elif self.event_journal is not None:
             try:
                 self.event_journal.append(envelope)
             except Exception as journal_exc:
@@ -1228,7 +1366,7 @@ class HarnessRuntime:
             )
         except Exception:
             pass
-        self._persist_runtime_snapshot(
+        await self._persist_runtime_snapshot(
             result,
             run_id=run_id,
             thread_id=thread_id,
@@ -1236,7 +1374,34 @@ class HarnessRuntime:
             user_id=str(user_id or "local-device"),
             context_bundle=context_bundle,
             execution_fence=execution_fence,
+            scope=scope,
         )
+        if result.status.value in {"completed", "failed", "canceled"}:
+            if self._host_owns_terminal_settlement():
+                recovery = as_dict(result.diagnostics.get("recovery"))
+                recovery["checkpoint_cleanup"] = {
+                    "status": "deferred",
+                    "reason": "host_settlement_required",
+                }
+                result.diagnostics["recovery"] = recovery
+            else:
+                await self._acleanup_run(
+                    result,
+                    run_id=run_id,
+                    session=session,
+                    user_id=str(user_id or "local-device"),
+                    scope=scope,
+                    graph_thread_ids=[run_id],
+                )
+            await self._record_checkpoint_cleanup_event(
+                result,
+                run_id=run_id,
+                thread_id=thread_id,
+                turn_id=turn_id,
+                scope=scope,
+                event_sink=event_sink,
+                fallback_sequence=sequence,
+            )
         return result
 
     def _capability_manifest(self) -> dict[str, Any]:
@@ -1269,7 +1434,7 @@ class HarnessRuntime:
             result["generation"] = self.runtime_generation.model_dump(mode="json")
         return result
 
-    def _persist_runtime_snapshot(
+    async def _persist_runtime_snapshot(
         self,
         result: RuntimeResult,
         *,
@@ -1281,128 +1446,14 @@ class HarnessRuntime:
         execution_fence: ExecutionFence | None = None,
         scope: RuntimeScope | None = None,
     ) -> None:
-        status = result.status.value
-        if status not in {
-            "waiting_user_action",
-            "waiting_user_input",
-            "task_running",
-            "completed",
-            "failed",
-            "canceled",
-        }:
-            return
-        diagnostics = result.diagnostics
-        recovery = as_dict(diagnostics.get("recovery"))
-        durable_state = durable_state_from_result(
+        await persist_runtime_snapshot(
+            self,
             result,
             run_id=run_id,
             thread_id=thread_id,
+            session=session,
+            user_id=user_id,
+            context_bundle=context_bundle,
+            execution_fence=execution_fence,
+            scope=scope,
         )
-        if self.runtime_state_store is not None:
-            if execution_fence is not None:
-                execution_fence.raise_if_lost()
-            resume_token = str(result.checkpoint.get("resume_token") or "")
-            terminal = status in {"completed", "failed", "canceled"}
-            if terminal and getattr(
-                self.runtime_state_store,
-                "terminal_settlement_owner",
-                "runtime",
-            ) == "host":
-                recovery["atomic_checkpoint"] = "host_settlement_required"
-                diagnostics["recovery"] = recovery
-                return
-            event_type = "run.settled" if terminal else "runtime.checkpoint.committed"
-            mutation_payload = {
-                "status": status,
-                "stop_reason": result.stop_reason,
-                "resume_token": resume_token,
-                "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
-            }
-            mutation_id = _runtime_state_mutation_id(
-                run_id,
-                status,
-                durable_state,
-            )
-            try:
-                mutation = RuntimeStateMutation(
-                        mutation_id=mutation_id,
-                        run_id=run_id,
-                        event_type=event_type,
-                        target_status=status,
-                        event_payload=mutation_payload,
-                        event_visibility="public" if terminal else "internal",
-                        checkpoint_type="terminal" if terminal else "runtime",
-                        checkpoint_state=durable_state,
-                        resume_token=resume_token,
-                        error_code=(
-                            str(result.error["code"] if result.error is not None else "RUN_FAILED")
-                            if status == "failed"
-                            else None
-                        ),
-                        error_message=(
-                            str(result.error["message"] if result.error is not None else "")
-                            if status == "failed"
-                            else None
-                        ),
-                        delete_checkpoint_types=(
-                            ("runtime", "suspended", "resume", "settling")
-                            if terminal
-                            else ()
-                        ),
-                        expected_version=_optional_int(
-                            context_bundle.get("runtime_state_version")
-                        ),
-                        expected_sequence=_optional_int(
-                            context_bundle.get("runtime_state_sequence")
-                        ),
-                        fence_token=(
-                            execution_fence.token if execution_fence is not None else ""
-                        ),
-                        fence_generation=(
-                            execution_fence.generation if execution_fence is not None else 0
-                        ),
-                )
-                commit_scoped = getattr(self.runtime_state_store, "commit_scoped", None)
-                if scope is not None and callable(commit_scoped):
-                    receipt = commit_scoped(
-                        mutation,
-                        session=session,
-                        scope=scope,
-                    )
-                else:
-                    legacy_user_id = require_legacy_compatible_scope(
-                        scope or RuntimeScope(user_id=user_id),
-                        adapter_name=type(self.runtime_state_store).__name__,
-                    )
-                    receipt = self.runtime_state_store.commit(
-                        mutation,
-                        session=session,
-                        user_id=legacy_user_id,
-                    )
-            except Exception as exc:
-                recovery["atomic_checkpoint"] = "failed"
-                recovery["checkpoint_error"] = str(exc)
-                diagnostics["recovery"] = recovery
-                raise RuntimeError("atomic runtime checkpoint commit failed") from exc
-            recovery["atomic_checkpoint"] = "settled" if terminal else "persisted"
-            recovery["state_receipt"] = receipt.as_dict()
-            diagnostics["recovery"] = recovery
-            return
-        if self.checkpoint_store is None:
-            return
-        try:
-            legacy_user_id = require_legacy_compatible_scope(
-                scope or RuntimeScope(user_id=user_id),
-                adapter_name=type(self.checkpoint_store).__name__,
-            )
-            self.checkpoint_store.save(
-                run_id,
-                durable_state,
-                session=session,
-                user_id=legacy_user_id,
-            )
-            recovery["durable_checkpoint"] = "persisted"
-        except Exception as exc:
-            recovery["durable_checkpoint"] = "failed"
-            recovery["checkpoint_error"] = str(exc)
-        diagnostics["recovery"] = recovery

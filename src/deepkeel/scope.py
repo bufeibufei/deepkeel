@@ -45,6 +45,26 @@ def resolve_runtime_scope(
     namespace: str = "",
 ) -> RuntimeScope:
     if scope is not None:
+        provided = {
+            "tenant_id": str(tenant_id) if tenant_id else "",
+            "user_id": str(user_id) if user_id else "",
+            "namespace": str(namespace) if namespace else "",
+        }
+        expected = {
+            "tenant_id": scope.tenant_id,
+            "user_id": scope.user_id,
+            "namespace": scope.namespace,
+        }
+        conflicts = [
+            field
+            for field, value in provided.items()
+            if value and value != expected[field]
+        ]
+        if conflicts:
+            raise ValueError(
+                "runtime scope conflicts with scalar identity fields: "
+                + ", ".join(conflicts)
+            )
         return scope
     return RuntimeScope(
         tenant_id=str(tenant_id or ""),

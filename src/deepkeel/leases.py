@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
-from typing import Callable, Protocol
+from typing import Any, Callable, Protocol
 from uuid import uuid4
 
 
@@ -221,6 +222,86 @@ class RunLeaseGuard:
             except BaseException as exc:
                 with self._lock:
                     self._lost = exc
+                return
+
+
+class AsyncRunLeaseGuard:
+    """Async lease guard that never blocks the Host event loop."""
+
+    def __init__(
+        self,
+        store: Any,
+        *,
+        run_id: str,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> None:
+        self.store = store
+        self.run_id = run_id
+        self.owner_id = owner_id
+        self.ttl_seconds = _validated_ttl(ttl_seconds)
+        self.lease: RunLease | None = None
+        self._stop = asyncio.Event()
+        self._task: asyncio.Task[None] | None = None
+        self._lost: BaseException | None = None
+
+    async def __aenter__(self) -> "AsyncRunLeaseGuard":
+        self.lease = await self.store.claim(
+            self.run_id,
+            owner_id=self.owner_id,
+            ttl_seconds=self.ttl_seconds,
+        )
+        self._task = asyncio.create_task(
+            self._heartbeat(),
+            name=f"run-lease-{self.run_id[:16]}",
+        )
+        return self
+
+    async def __aexit__(self, exc_type: object, exc: object, traceback: object) -> None:
+        del exc_type, exc, traceback
+        self._stop.set()
+        if self._task is not None:
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
+        lease = self.lease
+        if lease is not None:
+            try:
+                await self.store.release(lease)
+            except RunLeaseLost:
+                pass
+
+    def raise_if_lost(self) -> None:
+        if self._lost is not None:
+            raise RunLeaseLost(f"run lease was lost for {self.run_id}") from self._lost
+
+    @property
+    def token(self) -> str:
+        return self.lease.token if self.lease is not None else ""
+
+    @property
+    def generation(self) -> int:
+        return self.lease.generation if self.lease is not None else 0
+
+    async def _heartbeat(self) -> None:
+        interval = max(0.1, self.ttl_seconds / 3)
+        while not self._stop.is_set():
+            try:
+                await asyncio.wait_for(self._stop.wait(), timeout=interval)
+                return
+            except TimeoutError:
+                pass
+            try:
+                lease = self.lease
+                if lease is None:
+                    return
+                self.lease = await self.store.renew(
+                    lease,
+                    ttl_seconds=self.ttl_seconds,
+                )
+            except BaseException as exc:
+                self._lost = exc
                 return
 
 

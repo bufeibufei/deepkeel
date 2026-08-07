@@ -127,7 +127,13 @@ def test_runtime_journals_events_before_publishing_and_replays_from_cursor():
     assert [event.sequence for event in persisted] == sorted(
         event.sequence for event in persisted
     )
-    assert all(event.event_id in {item["event_id"] for item in published} for event in persisted)
+    published_ids = {item["event_id"] for item in published}
+    for event in persisted:
+        if event.event_type == "runtime.checkpoint.cleanup.recorded":
+            assert event.visibility == "internal"
+            assert event.event_id not in published_ids
+            continue
+        assert event.event_id in published_ids
 
     cursor = persisted[0].sequence
     assert all(

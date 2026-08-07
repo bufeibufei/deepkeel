@@ -43,6 +43,7 @@ async def project_and_settle_runtime_result(
     execution_fence: Any,
     emit_hook_audits: Callable[..., None],
 ) -> RuntimeResult:
+    await emitter.flush()
     result = project_harness_result(
         state,
         question=question,
@@ -155,7 +156,9 @@ async def project_and_settle_runtime_result(
             "error_count": emitter.telemetry_error_count,
             "last_error": emitter.telemetry_last_error,
         }
-    runtime._persist_runtime_snapshot(
+    await emitter.flush()
+    terminal = result.status.value in {"completed", "failed", "canceled"}
+    await runtime._persist_runtime_snapshot(
         result,
         run_id=run_id,
         thread_id=conversation_thread_id,
@@ -165,13 +168,30 @@ async def project_and_settle_runtime_result(
         execution_fence=execution_fence,
         scope=runtime_scope,
     )
-    if result.status.value in {"completed", "failed", "canceled"}:
-        runtime.cleanup_run(
+    if terminal:
+        if runtime._host_owns_terminal_settlement():
+            recovery = as_dict(diagnostics.get("recovery"))
+            recovery["checkpoint_cleanup"] = {
+                "status": "deferred",
+                "reason": "host_settlement_required",
+            }
+            diagnostics["recovery"] = recovery
+        else:
+            await runtime._acleanup_run(
+                result,
+                run_id=run_id,
+                session=session,
+                user_id=user_id,
+                scope=runtime_scope,
+                graph_thread_ids=[active_graph_thread_id],
+            )
+        await runtime._record_checkpoint_cleanup_event(
             result,
             run_id=run_id,
-            session=session,
-            user_id=user_id,
+            thread_id=conversation_thread_id,
+            turn_id=turn_id,
             scope=runtime_scope,
-            graph_thread_ids=[active_graph_thread_id],
+            event_sink=emitter.event_sink,
+            fallback_sequence=emitter.sequence,
         )
     return result

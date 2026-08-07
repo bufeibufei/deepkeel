@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal, NotRequired, TypedDict
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from deepkeel.contracts import (
     Artifact,
@@ -91,10 +91,33 @@ class RuntimeRequest(BaseModel):
     skill_activation: dict[str, Any] = Field(default_factory=dict)
     model_policy: dict[str, Any] = Field(default_factory=dict)
 
+    @model_validator(mode="after")
+    def validate_scope_identity(self) -> "RuntimeRequest":
+        if self.scope is None:
+            return self
+        explicit = self.model_fields_set
+        comparisons = {
+            "tenant_id": (str(self.tenant_id or ""), self.scope.tenant_id),
+            "user_id": (str(self.user_id or "local-device"), self.scope.user_id),
+            "namespace": (str(self.namespace or "default"), self.scope.namespace),
+        }
+        conflicts = [
+            field
+            for field, (scalar, scoped) in comparisons.items()
+            if field in explicit and scalar != str(scoped)
+        ]
+        if conflicts:
+            raise ValueError(
+                "runtime scope conflicts with explicit scalar identity fields: "
+                + ", ".join(conflicts)
+            )
+        return self
+
     @property
     def runtime_scope(self) -> RuntimeScope:
+        if self.scope is not None:
+            return self.scope
         return resolve_runtime_scope(
-            self.scope,
             tenant_id=self.tenant_id,
             user_id=self.user_id,
             namespace=self.namespace,

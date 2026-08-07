@@ -1,5 +1,7 @@
 # DeepKeel
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 **A durable, observable, capability-driven harness runtime for production-grade
 AI agents.**
 
@@ -177,6 +179,16 @@ control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
 Production async database drivers should implement the corresponding
 `Async*Store` protocol directly instead of using thread offload.
 
+Production composition is executable rather than advisory. Inspect missing or
+process-local Host ports with `production_readiness()`, and use
+`build_production()` to fail closed before a worker starts:
+
+```python
+builder = HarnessRuntimeBuilder().with_ports(production_ports)
+report = builder.production_readiness()
+runtime = builder.build_production()
+```
+
 Reference extraction is also a Port. The default projector discovers generic
 records and web sources without knowing tool names or business vocabulary.
 Products may inject `RuntimePorts(reference_projector=...)` to map those records
@@ -320,6 +332,11 @@ the Port and records the resulting receipt in recovery diagnostics. The same
 mutation supports public terminal events, final-message correlation, failure
 metadata and atomic removal of obsolete resumable checkpoints.
 
+Core commits the terminal snapshot before deleting compatibility checkpoints.
+The cleanup outcome is then journaled as a replay-only internal diagnostic; it
+is deliberately excluded from the live sink so the public terminal event stays
+the final streamed event.
+
 Distributed Hosts may additionally provide a `RunLeaseStore`. Each turn claims
 exclusive ownership with a fencing token, renews it in the background and
 releases it when the turn settles or suspends. Expired leases can be taken over,
@@ -330,11 +347,12 @@ tools can forward the same token to downstream storage. Persisted state upgrades
 are explicit through `StateMigrationRegistry`; Core ships its own historical
 v1-to-v2 migration chain and Hosts may register additional domain migrations.
 
-`astream()` uses a bounded queue so a slow Host applies backpressure instead of
-allowing unbounded event growth. Closing a stream requests cooperative run
-cancellation and waits for a configurable acknowledgement timeout. Providers
-and tools still use the canonical synchronous state machine, preserving one
-execution implementation across sync and async Hosts.
+`astream()` uses a bounded queue and a bounded same-loop backlog so a slow Host
+cannot create an unbounded set of pending tasks. Consecutive answer deltas may
+be coalesced without losing text. Closing a stream requests cooperative run
+cancellation and waits for a configurable acknowledgement timeout. Sync and
+async Hosts both use the same canonical async state machine; `run()` is the
+synchronous boundary adapter.
 
 The runtime also projects a stable `ui_state` contract. Completed, failed and
 canceled runs release the composer; explicit user-input interruptions remain

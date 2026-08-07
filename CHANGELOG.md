@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Wire native async runtime state, event journal, checkpoint, and run-lease
+  ports into the canonical async execution path.
+- Bound same-loop streaming backpressure without spawning an unbounded set of
+  pending queue tasks, while preserving all answer text.
+- Add an executable production-readiness report and fail-closed
+  `build_production()` composition gate.
+- Persist terminal checkpoint-cleanup diagnostics as replayable runtime events
+  without deleting recovery state before terminal settlement, and reject
+  conflicting duplicate runtime identities.
+- Split deterministic concurrency correctness from the scheduled Linux p95
+  performance baseline.
+- Add a full Simplified Chinese README and an automated bilingual release
+  contract.
+
 ## 4.0.0rc1
 
 - Rename the project, distribution, and Python namespace to DeepKeel.

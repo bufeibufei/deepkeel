@@ -5,6 +5,7 @@ from collections.abc import Callable
 from typing import Any, Iterable, Protocol, TypeVar
 
 from deepkeel.event_journal import RuntimeEventJournal
+from deepkeel.leases import RunLease, RunLeaseStore
 from deepkeel.persistence import DurableCheckpointStore
 from deepkeel.runtime_api import RuntimeEventEnvelope
 from deepkeel.scope import RuntimeScope
@@ -92,6 +93,22 @@ class AsyncRuntimeEventJournal(Protocol):
 
 class AsyncTraceStore(Protocol):
     async def query(self, query: TraceQuery) -> TracePage: ...
+
+
+class AsyncRunLeaseStore(Protocol):
+    async def claim(
+        self,
+        run_id: str,
+        *,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease: ...
+
+    async def renew(self, lease: RunLease, *, ttl_seconds: float) -> RunLease: ...
+
+    async def release(self, lease: RunLease) -> None: ...
+
+    async def inspect(self, run_id: str) -> RunLease | None: ...
 
 
 async def run_sync_adapter(
@@ -201,3 +218,37 @@ class AsyncTraceStoreAdapter:
 
     async def query(self, query: TraceQuery) -> TracePage:
         return await run_sync_adapter(self.store.query, query)
+
+
+class AsyncRunLeaseStoreAdapter:
+    """Opt-in bridge for a thread-safe synchronous lease adapter."""
+
+    def __init__(self, store: RunLeaseStore) -> None:
+        self.store = store
+
+    async def claim(
+        self,
+        run_id: str,
+        *,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease:
+        return await run_sync_adapter(
+            self.store.claim,
+            run_id,
+            owner_id=owner_id,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def renew(self, lease: RunLease, *, ttl_seconds: float) -> RunLease:
+        return await run_sync_adapter(
+            self.store.renew,
+            lease,
+            ttl_seconds=ttl_seconds,
+        )
+
+    async def release(self, lease: RunLease) -> None:
+        await run_sync_adapter(self.store.release, lease)
+
+    async def inspect(self, run_id: str) -> RunLease | None:
+        return await run_sync_adapter(self.store.inspect, run_id)

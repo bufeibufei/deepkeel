@@ -8,4 +8,3 @@ def test_shared_runtime_supports_concurrent_independent_turns() -> None:
     assert report.failed == 0
     assert report.success_rate == 1.0
     assert report.throughput_per_second > 0
-    assert report.latency_p95_ms < 2_000

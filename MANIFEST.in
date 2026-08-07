@@ -3,6 +3,7 @@ include CODE_OF_CONDUCT.md
 include CONTRIBUTING.md
 include LICENSE
 include NOTICE
+include README.zh-CN.md
 include SECURITY.md
 include SUPPORT.md
 include tests/public_api_v4.sha256

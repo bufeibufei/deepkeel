@@ -34,6 +34,8 @@ jobs:
         run: uv run ruff check src tests verification
       - name: Verify public type contracts
         run: uv run mypy src/deepkeel
+      - name: Verify synchronized READMEs
+        run: uv run python verification/readme_contract.py
       - name: Run tests with coverage
         run: >-
           uv run pytest -q

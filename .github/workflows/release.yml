@@ -39,6 +39,7 @@ jobs:
         run: |
           uv run ruff check src tests verification
           uv run mypy src/deepkeel
+          uv run python verification/readme_contract.py
           uv run pytest -q --cov=deepkeel --cov-fail-under=80
           uv build --clear
           uv run python verification/verify_distributions.py dist

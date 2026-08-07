@@ -3,6 +3,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields, replace
 from typing import Mapping, Self, TypedDict, Unpack
 
+from deepkeel.async_ports import (
+    AsyncDurableCheckpointStore,
+    AsyncRunLeaseStore,
+    AsyncRuntimeEventJournal,
+    AsyncRuntimeStateStore,
+)
 from deepkeel.budget import BudgetLedger
 from deepkeel.capabilities import (
     CapabilityCatalog,
@@ -32,6 +38,7 @@ from deepkeel.migrations import StateMigrationRegistry
 from deepkeel.persistence import DurableCheckpointStore
 from deepkeel.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from deepkeel.policy import PolicyEngine
+from deepkeel.production import ProductionReadinessReport, assess_production_readiness
 from deepkeel.references import ReferenceProjector
 from deepkeel.runtime import HarnessRuntime, SystemPromptFactory
 from deepkeel.state_store import RuntimeStateStore
@@ -46,6 +53,7 @@ from deepkeel.turn_context import ToolViewMode
 class RuntimePortChanges(TypedDict, total=False):
     checkpointer: GraphCheckpointer | None
     checkpoint_store: DurableCheckpointStore | None
+    async_checkpoint_store: AsyncDurableCheckpointStore | None
     system_prompt_factory: SystemPromptFactory | None
     session_factory: SessionFactory | None
     model_router: ModelRouter | None
@@ -62,9 +70,12 @@ class RuntimePortChanges(TypedDict, total=False):
     context_builder: ContextBuilder | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
+    async_runtime_state_store: AsyncRuntimeStateStore | None
     event_journal: RuntimeEventJournal | None
+    async_event_journal: AsyncRuntimeEventJournal | None
     reference_projector: ReferenceProjector | None
     run_lease_store: RunLeaseStore | None
+    async_run_lease_store: AsyncRunLeaseStore | None
     run_lease_owner_id: str
     run_lease_ttl_seconds: float
     state_migrations: StateMigrationRegistry | None
@@ -82,6 +93,7 @@ class RuntimePortChanges(TypedDict, total=False):
 class GovernedRuntimePortChanges(TypedDict, total=False):
     checkpointer: GraphCheckpointer | None
     checkpoint_store: DurableCheckpointStore | None
+    async_checkpoint_store: AsyncDurableCheckpointStore | None
     system_prompt_factory: SystemPromptFactory | None
     session_factory: SessionFactory | None
     model_router: ModelRouter | None
@@ -95,9 +107,12 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     context_builder: ContextBuilder | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
+    async_runtime_state_store: AsyncRuntimeStateStore | None
     event_journal: RuntimeEventJournal | None
+    async_event_journal: AsyncRuntimeEventJournal | None
     reference_projector: ReferenceProjector | None
     run_lease_store: RunLeaseStore | None
+    async_run_lease_store: AsyncRunLeaseStore | None
     run_lease_owner_id: str
     run_lease_ttl_seconds: float
     state_migrations: StateMigrationRegistry | None
@@ -118,6 +133,7 @@ class RuntimePorts:
 
     checkpointer: GraphCheckpointer | None = None
     checkpoint_store: DurableCheckpointStore | None = None
+    async_checkpoint_store: AsyncDurableCheckpointStore | None = None
     system_prompt_factory: SystemPromptFactory | None = None
     session_factory: SessionFactory | None = None
     model_router: ModelRouter | None = None
@@ -134,9 +150,12 @@ class RuntimePorts:
     context_builder: ContextBuilder | None = None
     context_window_manager: ContextWindowManager | None = None
     runtime_state_store: RuntimeStateStore | None = None
+    async_runtime_state_store: AsyncRuntimeStateStore | None = None
     event_journal: RuntimeEventJournal | None = None
+    async_event_journal: AsyncRuntimeEventJournal | None = None
     reference_projector: ReferenceProjector | None = None
     run_lease_store: RunLeaseStore | None = None
+    async_run_lease_store: AsyncRunLeaseStore | None = None
     run_lease_owner_id: str = ""
     run_lease_ttl_seconds: float = 60.0
     state_migrations: StateMigrationRegistry | None = None
@@ -258,6 +277,17 @@ class HarnessRuntimeBuilder:
         self._strict_capability_conformance = bool(enabled)
         return self
 
+    def production_readiness(self) -> ProductionReadinessReport:
+        """Return an executable readiness report without freezing the builder."""
+
+        return assess_production_readiness(self._ports)
+
+    def build_production(self) -> HarnessRuntime:
+        """Build only when required multi-worker Host ports are explicit."""
+
+        self.production_readiness().require_ready()
+        return self.build()
+
     def build(self) -> HarnessRuntime:
         self._ensure_mutable()
         executor = self._executor or ToolExecutor(
@@ -300,6 +330,7 @@ class HarnessRuntimeBuilder:
             executor,
             checkpointer=self._ports.checkpointer,
             checkpoint_store=self._ports.checkpoint_store,
+            async_checkpoint_store=self._ports.async_checkpoint_store,
             system_prompt_factory=self._ports.system_prompt_factory,
             session_factory=self._ports.session_factory,
             max_steps=self._max_steps,
@@ -316,9 +347,12 @@ class HarnessRuntimeBuilder:
             context_builder=self._ports.context_builder,
             context_window_manager=self._ports.context_window_manager,
             runtime_state_store=self._ports.runtime_state_store,
+            async_runtime_state_store=self._ports.async_runtime_state_store,
             event_journal=self._ports.event_journal,
+            async_event_journal=self._ports.async_event_journal,
             reference_projector=self._ports.reference_projector,
             run_lease_store=self._ports.run_lease_store,
+            async_run_lease_store=self._ports.async_run_lease_store,
             run_lease_owner_id=self._ports.run_lease_owner_id,
             run_lease_ttl_seconds=self._ports.run_lease_ttl_seconds,
             state_migrations=self._ports.state_migrations,

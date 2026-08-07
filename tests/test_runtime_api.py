@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from deepkeel.runtime_sdk import HarnessRuntime, RuntimeRequest, RuntimeResultStatus
 from deepkeel.contracts import Artifact, FinalAnswer, Observation, RunContext
 from deepkeel.runtime_api import RuntimeResult, RuntimeStreamEvent
+from deepkeel.scope import RuntimeScope, resolve_runtime_scope
 
 
 def _runtime_result(
@@ -111,6 +112,40 @@ def test_runtime_result_is_a_direct_typed_contract():
 def test_runtime_request_rejects_unknown_host_fields():
     with pytest.raises(ValidationError):
         RuntimeRequest(question="hello", product_database_id="db-1")
+
+
+def test_runtime_request_rejects_conflicting_scope_and_scalar_identity():
+    with pytest.raises(ValidationError, match="scope conflicts"):
+        RuntimeRequest(
+            question="hello",
+            user_id="scalar-user",
+            scope=RuntimeScope(user_id="scoped-user"),
+        )
+
+
+def test_runtime_request_accepts_matching_scope_and_scalar_identity():
+    scope = RuntimeScope(
+        tenant_id="tenant-a",
+        user_id="user-a",
+        namespace="support",
+    )
+    request = RuntimeRequest(
+        question="hello",
+        tenant_id="tenant-a",
+        user_id="user-a",
+        namespace="support",
+        scope=scope,
+    )
+
+    assert request.runtime_scope == scope
+
+
+def test_scope_resolution_rejects_duplicate_conflicting_identity():
+    with pytest.raises(ValueError, match="scope conflicts"):
+        resolve_runtime_scope(
+            RuntimeScope(tenant_id="tenant-a", user_id="user-a"),
+            tenant_id="tenant-b",
+        )
 
 
 def test_waiting_result_marks_the_answer_as_interrupted():

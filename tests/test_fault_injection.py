@@ -1,12 +1,21 @@
 from __future__ import annotations
 
+import pytest
+
+from deepkeel.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
 from deepkeel.extension_sdk import (
     ToolExecutionContext,
     ToolExecutor,
     ToolRegistry,
     ToolSpec,
 )
-from deepkeel.runtime_sdk import ToolCall, ToolResult
+from deepkeel.runtime_sdk import (
+    InMemoryDurableCheckpointStore,
+    InMemoryRuntimeStateStore,
+    RuntimeRequest,
+    ToolCall,
+    ToolResult,
+)
 from deepkeel.tools import InMemoryToolExecutionStore
 
 
@@ -116,3 +125,81 @@ def test_side_effect_success_without_durable_settlement_fails_closed() -> None:
     assert result.retryable is False
     assert result.metadata["settlement_failed"] is True
     assert result.metadata["reexecution_safe"] is False
+
+
+def test_terminal_commit_failure_preserves_the_recovery_checkpoint() -> None:
+    def fail_before_commit(stage: str) -> None:
+        if stage == "before_commit":
+            raise ConnectionError("terminal state database unavailable")
+
+    class Provider:
+        model = "settlement-fault-model"
+        model_role = "fast"
+
+        def complete_chat(self, _messages, **_kwargs):
+            return {
+                "message": {"role": "assistant", "content": "completed"},
+                "finish_reason": "stop",
+                "model": self.model,
+            }
+
+    run_id = "terminal-commit-failure"
+    checkpoint_store = InMemoryDurableCheckpointStore()
+    checkpoint_store.save(run_id, {"sentinel": "recoverable"})
+    state_store = InMemoryRuntimeStateStore(fail_before_commit)
+    runtime = HarnessRuntimeBuilder().with_ports(
+        RuntimePorts(
+            checkpoint_store=checkpoint_store,
+            runtime_state_store=state_store,
+        )
+    ).build()
+
+    with pytest.raises(RuntimeError, match="atomic runtime checkpoint commit failed"):
+        runtime.run(
+            RuntimeRequest(question="hello", run_id=run_id),
+            provider=Provider(),
+        )
+
+    assert checkpoint_store.load(run_id) == {"sentinel": "recoverable"}
+    assert state_store.load_snapshot(run_id).settled is False
+
+
+def test_host_owned_terminal_settlement_defers_core_checkpoint_cleanup() -> None:
+    class HostOwnedStateStore(InMemoryRuntimeStateStore):
+        terminal_settlement_owner = "host"
+
+    class Provider:
+        model = "host-settlement-model"
+        model_role = "fast"
+
+        def complete_chat(self, _messages, **_kwargs):
+            return {
+                "message": {"role": "assistant", "content": "completed"},
+                "finish_reason": "stop",
+                "model": self.model,
+            }
+
+    run_id = "host-owned-settlement"
+    checkpoint_store = InMemoryDurableCheckpointStore()
+    checkpoint_store.save(run_id, {"sentinel": "host-must-clean"})
+    runtime = HarnessRuntimeBuilder().with_ports(
+        RuntimePorts(
+            checkpoint_store=checkpoint_store,
+            runtime_state_store=HostOwnedStateStore(),
+        )
+    ).build()
+
+    result = runtime.run(
+        RuntimeRequest(question="hello", run_id=run_id),
+        provider=Provider(),
+    )
+
+    assert result.status.value == "completed"
+    assert result.diagnostics["recovery"]["atomic_checkpoint"] == (
+        "host_settlement_required"
+    )
+    assert result.diagnostics["recovery"]["checkpoint_cleanup"] == {
+        "status": "deferred",
+        "reason": "host_settlement_required",
+    }
+    assert checkpoint_store.load(run_id) == {"sentinel": "host-must-clean"}

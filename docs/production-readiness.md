@@ -5,11 +5,25 @@ infrastructure, identity, deployment, and operator-facing APIs.
 
 ## Required Host adapters
 
+Use the executable builder gate before starting a production worker:
+
+```python
+builder = HarnessRuntimeBuilder().with_ports(production_ports)
+report = builder.production_readiness()
+runtime = builder.build_production()
+```
+
+`build_production()` fails closed when worker-critical ports are absent,
+ambiguous, or known to be process-local. Warnings identify synchronous adapters
+that can block `arun()`. The gate cannot prove that an arbitrary custom adapter
+is durable, so the conformance suites below remain mandatory.
+
 Do not use the `InMemory*` implementations in a multi-worker deployment. Install
 durable implementations for:
 
 - `RuntimeStateStore`
-- `DurableCheckpointStore`
+- `DurableCheckpointStore` when a Host needs the legacy portable-checkpoint
+  compatibility fallback in addition to canonical `RuntimeStateStore` state
 - `RuntimeEventJournal`
 - `ModelInvocationStore`
 - `ToolExecutionStore`
@@ -19,6 +33,11 @@ durable implementations for:
 - `ContextSummaryCache`
 - `CancellableRunControl`
 - `CapabilityPackageStore` when packages can be changed at runtime
+
+The worker gate directly checks the checkpointer, canonical state, event
+journal, lease, model/tool idempotency, budget, model health, run control, and
+telemetry ports. Trace, summary-cache, and package-catalog stores live in Host
+control-plane composition and must be verified separately.
 
 Run every applicable verifier in `deepkeel.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
@@ -80,6 +99,10 @@ Run recovery should follow this order:
 4. Replay settled model and tool invocations instead of executing them again.
 5. Commit one terminal settlement and release control resources.
 
+Core commits terminal state before deleting compatibility checkpoints. Cleanup
+outcomes are appended as replay-only internal events and are not delivered to
+the live event sink, preserving the public terminal-event boundary.
+
 Use `RunOperations.inspect()` to expose recovery classification and trace
 evidence to an operator. Bulk scheduling and repair policy belong to the Host.
 
@@ -91,10 +114,15 @@ from the same atomic mutation transaction used for status and checkpoint data.
 
 Network-backed adapters should expose native asynchronous implementations.
 `AsyncRuntimeStateStore`, `AsyncDurableCheckpointStore`,
-`AsyncRuntimeEventJournal`, and `AsyncTraceStore` define the portable
+`AsyncRuntimeEventJournal`, `AsyncRunLeaseStore`, and `AsyncTraceStore` define the portable
 contracts. The supplied `Async*Adapter` bridges use `asyncio.to_thread` and are
 only suitable for thread-safe synchronous adapters; ORM sessions must not be
 offloaded unless their driver explicitly permits cross-thread use.
+
+Native async state, event, checkpoint, and lease ports are consumed directly by
+the canonical `arun()` path. Configure either the synchronous or asynchronous
+form of one port, never both. `astream()` adds a bounded same-loop backlog to
+its bounded queue and coalesces consecutive answer deltas without losing text.
 
 ## Evaluation
 

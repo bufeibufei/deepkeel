@@ -2,11 +2,20 @@ from __future__ import annotations
 
 import asyncio
 import time
+from threading import Event as ThreadEvent
+
+import pytest
 
 from deepkeel.adapter_sdk import HarnessRuntimeBuilder, RuntimePorts
 from deepkeel.contracts import AgentMessage, RunContext, ToolCall, ToolResult
+from deepkeel.event_journal import InMemoryRuntimeEventJournal
 from deepkeel.graph import HarnessGraph
+from deepkeel.leases import InMemoryRunLeaseStore
 from deepkeel.model import ModelInvocation, ModelProviderInfo, ModelTurn
+from deepkeel.persistence import InMemoryDurableCheckpointStore
+from deepkeel.scope import RuntimeScope
+from deepkeel.state_store import InMemoryRuntimeStateStore
+from deepkeel.runtime_streaming import BoundedRuntimeStreamBridge
 from deepkeel.runtime_sdk import InMemoryRunControl
 from deepkeel.runtime_sdk import RuntimeRequest
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
@@ -29,6 +38,100 @@ class StreamingProvider:
             }
 
 
+class NativeAsyncStateStore:
+    terminal_settlement_owner = "runtime"
+
+    def __init__(self) -> None:
+        self.store = InMemoryRuntimeStateStore()
+        self.loops: list[asyncio.AbstractEventLoop] = []
+
+    async def commit_scoped(self, mutation, *, scope, session=None):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.commit_scoped(mutation, scope=scope, session=session)
+
+    async def load_snapshot_scoped(self, run_id, *, scope, session=None):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.load_snapshot_scoped(run_id, scope=scope, session=session)
+
+    async def list_snapshots_scoped(
+        self,
+        *,
+        scope,
+        session=None,
+        statuses=(),
+        limit=100,
+    ):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.list_snapshots_scoped(
+            scope=scope,
+            session=session,
+            statuses=statuses,
+            limit=limit,
+        )
+
+
+class NativeAsyncCheckpointStore:
+    def __init__(self) -> None:
+        self.store = InMemoryDurableCheckpointStore()
+        self.operations: list[tuple[str, asyncio.AbstractEventLoop]] = []
+
+    async def load(self, run_id, **kwargs):
+        self.operations.append(("load", asyncio.get_running_loop()))
+        return self.store.load(run_id, **kwargs)
+
+    async def save(self, run_id, state, **kwargs):
+        self.operations.append(("save", asyncio.get_running_loop()))
+        self.store.save(run_id, state, **kwargs)
+
+    async def delete(self, run_id, **kwargs):
+        self.operations.append(("delete", asyncio.get_running_loop()))
+        self.store.delete(run_id, **kwargs)
+
+
+class NativeAsyncEventJournal:
+    def __init__(self) -> None:
+        self.journal = InMemoryRuntimeEventJournal()
+        self.loops: list[asyncio.AbstractEventLoop] = []
+
+    async def append(self, event):
+        self.loops.append(asyncio.get_running_loop())
+        return self.journal.append(event)
+
+    async def latest_sequence(self, run_id):
+        self.loops.append(asyncio.get_running_loop())
+        return self.journal.latest_sequence(run_id)
+
+    async def read_after(self, run_id, *, after_sequence=0, limit=100):
+        self.loops.append(asyncio.get_running_loop())
+        return self.journal.read_after(
+            run_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+
+
+class NativeAsyncLeaseStore:
+    def __init__(self) -> None:
+        self.store = InMemoryRunLeaseStore()
+        self.loops: list[asyncio.AbstractEventLoop] = []
+
+    async def claim(self, run_id, *, owner_id, ttl_seconds):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.claim(run_id, owner_id=owner_id, ttl_seconds=ttl_seconds)
+
+    async def renew(self, lease, *, ttl_seconds):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.renew(lease, ttl_seconds=ttl_seconds)
+
+    async def release(self, lease):
+        self.loops.append(asyncio.get_running_loop())
+        self.store.release(lease)
+
+    async def inspect(self, run_id):
+        self.loops.append(asyncio.get_running_loop())
+        return self.store.inspect(run_id)
+
+
 def test_arun_uses_the_same_canonical_runtime_contract() -> None:
     async def scenario():
         runtime = HarnessRuntimeBuilder().build()
@@ -41,6 +144,148 @@ def test_arun_uses_the_same_canonical_runtime_contract() -> None:
     assert result.run_id == "async-run"
     assert result.final_answer.markdown == "async answer"
     assert result.answer_delta_streamed is True
+
+
+def test_arun_uses_native_async_persistence_and_lease_ports_on_host_loop() -> None:
+    async def scenario():
+        host_loop = asyncio.get_running_loop()
+        state_store = NativeAsyncStateStore()
+        checkpoint_store = NativeAsyncCheckpointStore()
+        event_journal = NativeAsyncEventJournal()
+        lease_store = NativeAsyncLeaseStore()
+        runtime = (
+            HarnessRuntimeBuilder()
+            .with_ports(
+                RuntimePorts(
+                    async_runtime_state_store=state_store,
+                    async_checkpoint_store=checkpoint_store,
+                    async_event_journal=event_journal,
+                    async_run_lease_store=lease_store,
+                    run_lease_owner_id="async-worker",
+                )
+            )
+            .build()
+        )
+        scope = RuntimeScope(user_id="async-user")
+        result = await runtime.arun(
+            RuntimeRequest(
+                question="hello",
+                run_id="native-async-ports",
+                scope=scope,
+            ),
+            provider=StreamingProvider(),
+        )
+        replay = await runtime.areplay_events(result.run_id)
+        snapshot = await state_store.load_snapshot_scoped(
+            result.run_id,
+            scope=scope,
+        )
+        lease = await lease_store.inspect(result.run_id)
+        used_loops = [
+            *state_store.loops,
+            *(loop for _, loop in checkpoint_store.operations),
+            *event_journal.loops,
+            *lease_store.loops,
+        ]
+        return result, replay, snapshot, lease, used_loops, host_loop, checkpoint_store
+
+    result, replay, snapshot, lease, used_loops, host_loop, checkpoint_store = asyncio.run(
+        scenario()
+    )
+
+    assert result.status.value == "completed"
+    assert replay
+    assert snapshot.status == "completed"
+    assert result.diagnostics["recovery"][
+        "checkpoint_cleanup"
+    ]["durable"] == "deleted"
+    assert any(
+        event.event_type == "runtime.checkpoint.cleanup.recorded" for event in replay
+    )
+    assert lease is None
+    assert used_loops and all(loop is host_loop for loop in used_loops)
+    assert [operation for operation, _ in checkpoint_store.operations] == ["delete"]
+
+
+def test_arun_consults_async_checkpoint_fallback_for_resume_without_state_store() -> None:
+    async def scenario():
+        checkpoint_store = NativeAsyncCheckpointStore()
+        runtime = HarnessRuntimeBuilder().with_ports(
+            RuntimePorts(async_checkpoint_store=checkpoint_store)
+        ).build()
+        result = await runtime.arun(
+            RuntimeRequest(
+                question="hello",
+                run_id="async-checkpoint-fallback",
+                short_context={"resume": True},
+            ),
+            provider=StreamingProvider(),
+        )
+        return result, checkpoint_store
+
+    result, checkpoint_store = asyncio.run(scenario())
+
+    assert result.status.value == "failed"
+    assert [operation for operation, _ in checkpoint_store.operations] == [
+        "load",
+        "save",
+        "delete",
+    ]
+
+
+def test_runtime_rejects_sync_and_async_versions_of_the_same_port() -> None:
+    journal = InMemoryRuntimeEventJournal()
+
+    with pytest.raises(ValueError, match="either event_journal or async_event_journal"):
+        (
+            HarnessRuntimeBuilder()
+            .with_ports(
+                RuntimePorts(
+                    event_journal=journal,
+                    async_event_journal=NativeAsyncEventJournal(),
+                )
+            )
+            .build()
+        )
+
+
+def test_async_journal_persists_durable_events_before_publishing_them() -> None:
+    class OrderedJournal(NativeAsyncEventJournal):
+        def __init__(self) -> None:
+            super().__init__()
+            self.order: list[tuple[str, str]] = []
+
+        async def append(self, event):
+            await asyncio.sleep(0)
+            self.order.append(("append", event.event_id))
+            return await super().append(event)
+
+    async def scenario():
+        journal = OrderedJournal()
+
+        def publish(event):
+            journal.order.append(("publish", str(event.get("event_id") or "")))
+
+        runtime = HarnessRuntimeBuilder().with_ports(
+            RuntimePorts(async_event_journal=journal)
+        ).build()
+        result = await runtime.arun(
+            RuntimeRequest(question="hello", run_id="ordered-async-journal"),
+            provider=StreamingProvider(),
+            event_sink=publish,
+        )
+        persisted = await runtime.areplay_events(result.run_id)
+        return journal.order, persisted
+
+    order, persisted = asyncio.run(scenario())
+
+    for event in persisted:
+        if event.event_type == "runtime.checkpoint.cleanup.recorded":
+            assert ("publish", event.event_id) not in order
+            continue
+        assert order.index(("append", event.event_id)) < order.index(
+            ("publish", event.event_id)
+        )
 
 
 def test_async_graph_falls_back_to_sync_for_sync_only_checkpointer() -> None:
@@ -161,6 +406,37 @@ def test_astream_applies_backpressure_and_cooperatively_cancels_on_disconnect() 
     cancel_calls, produced_before_close = asyncio.run(scenario())
     assert cancel_calls == 1
     assert produced_before_close < 40
+
+
+def test_same_loop_stream_backpressure_is_bounded_and_preserves_delta_text() -> None:
+    async def scenario():
+        bridge = BoundedRuntimeStreamBridge(
+            loop=asyncio.get_running_loop(),
+            maxsize=1,
+            closed=ThreadEvent(),
+        )
+        for index in range(100):
+            bridge.offer_event(
+                {
+                    "event_type": "answer.delta",
+                    "ephemeral": True,
+                    "payload": {"delta": str(index)},
+                }
+            )
+        buffered = bridge.buffered_items
+        first = await bridge.get()
+        second = await bridge.get()
+        await bridge.close()
+        return buffered, first, second
+
+    buffered, first, second = asyncio.run(scenario())
+    events = [first[1], second[1]]
+
+    assert buffered == 2
+    assert "".join(str(event["payload"]["delta"]) for event in events) == "".join(
+        str(index) for index in range(100)
+    )
+    assert second[1]["payload"]["merged_count"] == 99
 
 
 def test_async_tool_handler_runs_in_host_loop_and_propagates_cancellation() -> None:

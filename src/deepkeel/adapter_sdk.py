@@ -40,6 +40,8 @@ from deepkeel.event_journal import (
 from deepkeel.async_ports import (
     AsyncDurableCheckpointStore,
     AsyncDurableCheckpointStoreAdapter,
+    AsyncRunLeaseStore,
+    AsyncRunLeaseStoreAdapter,
     AsyncRuntimeEventJournal,
     AsyncRuntimeEventJournalAdapter,
     AsyncRuntimeStateStore,
@@ -94,6 +96,7 @@ from deepkeel.governance import (
     SecretRequest,
 )
 from deepkeel.leases import (
+    AsyncRunLeaseGuard,
     ExecutionFence,
     InMemoryRunLeaseStore,
     RunLease,
@@ -101,6 +104,12 @@ from deepkeel.leases import (
     RunLeaseGuard,
     RunLeaseLost,
     RunLeaseStore,
+)
+from deepkeel.production import (
+    ProductionConfigurationError,
+    ProductionReadinessIssue,
+    ProductionReadinessReport,
+    assess_production_readiness,
 )
 from deepkeel.migrations import (
     StateMigration,
@@ -180,6 +189,9 @@ ADAPTER_SDK_API = (
     "AsyncDurableCheckpointStore",
     "AsyncDurableCheckpointStoreAdapter",
     "AsyncModelProviderAdapter",
+    "AsyncRunLeaseGuard",
+    "AsyncRunLeaseStore",
+    "AsyncRunLeaseStoreAdapter",
     "AsyncRuntimeEventJournal",
     "AsyncRuntimeEventJournalAdapter",
     "AsyncRuntimeStateStore",
@@ -269,6 +281,9 @@ ADAPTER_SDK_API = (
     "OUTPUT_TOKENS",
     "PolicyEngine",
     "PolicyRule",
+    "ProductionConfigurationError",
+    "ProductionReadinessIssue",
+    "ProductionReadinessReport",
     "RuleBasedPolicyEngine",
     "RunLease",
     "RunLeaseConflict",
@@ -297,6 +312,7 @@ ADAPTER_SDK_API = (
     "TokenEstimator",
     "UsageReport",
     "WorkingContextCompactor",
+    "assess_production_readiness",
     "classify_model_failure",
     "context_fingerprint",
     "default_state_migrations",

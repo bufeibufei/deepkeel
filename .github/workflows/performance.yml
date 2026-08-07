@@ -1,0 +1,40 @@
+name: DeepKeel Performance Baseline
+
+on:
+  schedule:
+    - cron: "17 4 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepkeel-performance-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  concurrency-baseline:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install locked dependencies
+        run: uv sync --frozen --extra test
+      - name: Measure shared-runtime concurrency
+        shell: bash
+        run: |
+          set -o pipefail
+          uv run python verification/concurrency_benchmark.py \
+            --requests 300 \
+            --workers 32 \
+            --min-success-rate 1 \
+            --max-p95-ms 2000 | tee performance-report.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: deepkeel-performance-report
+          path: performance-report.json
+          if-no-files-found: warn
