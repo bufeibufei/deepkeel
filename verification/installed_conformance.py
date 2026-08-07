@@ -575,7 +575,7 @@ def verify_installation_isolation() -> None:
     package_path = Path(deepkeel.__file__).resolve()
     assert "packages/deepkeel/src" not in package_path.as_posix()
     assert importlib.util.find_spec("app") is None
-    assert deepkeel.DEEPKEEL_VERSION == "4.0.0rc1"
+    assert deepkeel.DEEPKEEL_VERSION == "4.0.0rc2"
     assert deepkeel.DEEPKEEL_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(deepkeel.__all__) == (
         "DEEPKEEL_CONTRACT_VERSION",

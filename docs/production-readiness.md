@@ -43,6 +43,13 @@ Run every applicable verifier in `deepkeel.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
 isolate identical run identifiers belonging to different user scopes.
 
+The executable reference in `verification/postgres_reference` demonstrates
+transaction boundaries and database constraints for canonical state, the
+runtime event journal, run leases with fencing generations, and portable
+durable checkpoints. It is intentionally not packaged as a Core dependency.
+See [PostgreSQL reference adapters](postgresql-reference.md) for the contract
+test and multi-worker recovery baseline.
+
 Use `RuntimeScope` as the canonical tenant, namespace, and user boundary.
 Legacy adapters may continue to receive `user_id` for the default scope, but
 Core fails closed when a tenant or non-default namespace is used with an
@@ -167,3 +174,13 @@ This benchmark isolates Core overhead with a deterministic local provider. It
 is not a substitute for a Host load test using the production model gateway,
 database pool, event journal and tool adapters. Record both results so model
 latency is not mistaken for runtime contention.
+
+When PostgreSQL is available, run the database-backed baseline as a second,
+independent gate:
+
+```powershell
+$env:DEEPKEEL_TEST_POSTGRES_DSN = "postgresql://..."
+uv sync --extra test --extra postgres
+uv run pytest -q -m postgres tests/test_postgres_reference.py
+uv run python -m verification.postgres_multiworker --requests 64 --workers 12
+```

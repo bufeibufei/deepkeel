@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+## 4.0.0rc2
+
+- Make the six versioned SDK modules the unique public symbol owners, publish
+  machine-readable stability levels, and reject cross-layer duplicate exports.
+- Group runtime infrastructure into persistence, governance, observability,
+  and execution Port bundles without breaking the flat `RuntimePorts` API.
+- Split the runtime, model gateway, tool executor, Graph model node, SubAgent
+  executor, and context window internals behind compatibility facades.
+- Add structural ratchets for file and method size plus an acyclic internal
+  import-graph gate.
+- Harden event-journal fail-closed behavior and checkpoint authority fallback
+  through targeted fault injection.
+- Add executable, product-neutral PostgreSQL reference adapters for canonical
+  state, events, run leases, and durable checkpoints, including multi-worker
+  contention, crash rollback, recovery, and CI baselines.
+- Add a host-injected selective memory-recall coordinator with skip, prefetch,
+  and agent-decide policies, bounded caching, failure isolation, and traceable
+  recall decisions.
+
 - Wire native async runtime state, event journal, checkpoint, and run-lease
   ports into the canonical async execution path.
 - Bound same-loop streaming backpressure without spawning an unbounded set of

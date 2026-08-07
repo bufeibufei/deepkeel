@@ -12,7 +12,7 @@ It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.1"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
 python examples/quickstart/main.py
 ```
 
@@ -35,7 +35,9 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
+- [PostgreSQL reference adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
+- [Release process](docs/releasing.md)
 
 The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
 The [inventory package](examples/inventory_pack) demonstrates product-neutral
@@ -188,6 +190,11 @@ builder = HarnessRuntimeBuilder().with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```
+
+Infrastructure can be assembled through persistence, governance,
+observability, and execution Port bundles while the original flat
+`RuntimePorts` fields remain compatible. This keeps product database and model
+choices out of Capability Packs without forcing one monolithic Host adapter.
 
 Reference extraction is also a Port. The default projector discovers generic
 records and web sources without knowing tool names or business vocabulary.
@@ -408,11 +415,10 @@ remote_search = McpServerSpec(
 ```
 
 The Capability Pack contract remains `harness-core-v3`; the DeepKeel release
-candidate is `4.0.0rc1` and the public SDK surface is `4.0.0`. Consumers import from
-`deepkeel.runtime_sdk`,
-`deepkeel.extension_sdk`, or `deepkeel.adapter_sdk`; optional bounded
-orchestration and MCP adapters live in `deepkeel.orchestration_sdk` and
-`deepkeel.mcp_sdk`. The versioned public
+candidate is `4.0.0rc2` and the public SDK surface is `4.0.0`. Consumers import
+only from `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`,
+`deepkeel.adapter_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, or
+`deepkeel.orchestration_sdk`. The versioned public
 symbol manifest is available from `deepkeel.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
 suite stores a frozen API fingerprint, so contract changes require an explicit

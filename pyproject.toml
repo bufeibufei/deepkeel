@@ -1,6 +1,6 @@
 [project]
 name = "deepkeel"
-version = "4.0.0rc1"
+version = "4.0.0rc2"
 description = "Durable, observable, capability-driven harness runtime for production-grade AI agents."
 readme = "README.md"
 requires-python = ">=3.12"
@@ -34,6 +34,9 @@ Documentation = "https://github.com/bufeibufei/deepkeel/tree/main/docs"
 Changelog = "https://github.com/bufeibufei/deepkeel/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
+postgres = [
+  "psycopg[binary]>=3.2.0,<4.0.0",
+]
 test = [
   "mypy>=1.15.0,<2.0.0",
   "pytest>=8.3.0",
@@ -57,6 +60,9 @@ deepkeel = ["py.typed"]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 addopts = "-p no:cacheprovider"
+markers = [
+  "postgres: requires DEEPKEEL_TEST_POSTGRES_DSN and the postgres extra",
+]
 
 [tool.ruff]
 target-version = "py312"

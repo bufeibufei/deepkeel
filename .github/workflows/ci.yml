@@ -46,3 +46,39 @@ jobs:
         run: uv build --clear
       - name: Verify clean wheel and sdist installation
         run: uv run python verification/verify_distributions.py dist
+
+  postgres-reference:
+    name: PostgreSQL multi-worker contracts
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: deepkeel
+          POSTGRES_PASSWORD: deepkeel
+          POSTGRES_DB: deepkeel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deepkeel -d deepkeel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEEPKEEL_TEST_POSTGRES_DSN: postgresql://deepkeel:deepkeel@127.0.0.1:5432/deepkeel_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - name: Install PostgreSQL verification dependencies
+        run: uv sync --frozen --extra test --extra postgres
+      - name: Verify PostgreSQL adapter contracts and recovery
+        run: uv run pytest -q -m postgres tests/test_postgres_reference.py
+      - name: Verify PostgreSQL multi-worker baseline
+        run: >-
+          uv run python -m verification.postgres_multiworker
+          --requests 48
+          --workers 8
+          --max-p95-ms 2000

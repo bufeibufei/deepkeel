@@ -9,10 +9,10 @@ DeepKeel 负责模型与工具的单循环执行、类型化运行契约、中�
 SubAgent 编排。它不负责产品 API、业务数据库模型、领域提示词、宿主工具
 或前端页面。
 
-当前发布候选版本为 `4.0.0rc1`，安装命令如下：
+当前发布候选版本为 `4.0.0rc2`，安装命令如下：
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.1"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
 python examples/quickstart/main.py
 ```
 
@@ -29,7 +29,9 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 - [模型 Provider](docs/model-provider.md)
 - [可观测性](docs/observability.md)
 - [生产就绪](docs/production-readiness.md)
+- [PostgreSQL 参考适配](docs/postgresql-reference.md)
 - [API 稳定性](docs/api-stability.md)
+- [发布流程](docs/releasing.md)
 
 可运行的 [quickstart](examples/quickstart) 展示最小模型 Provider；
 [inventory_pack](examples/inventory_pack) 展示不依赖具体业务的工具和 Artifact；
@@ -46,6 +48,10 @@ DeepKeel 将系统分为三个稳定层次：
 Host 通过 `RuntimePorts` 注入基础设施，通过
 `HarnessRuntimeBuilder` 安装能力包并构建 Runtime。Capability Pack 只依赖公开
 SDK，不应直接访问 Host 的 ORM、路由对象或私有运行状态。
+
+`RuntimePorts` 可按持久化、治理、可观测、执行四组 bundle 进行组合，同时保留
+原有扁平字段接口。这样宿主可以分领域装配基础设施，又不会让 Capability Pack
+或业务代码依赖具体数据库和模型 Provider。
 
 ## 快速开始
 
