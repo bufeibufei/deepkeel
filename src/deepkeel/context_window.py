@@ -25,128 +25,40 @@ from deepkeel.context_planning import (
     ContextPlanningPolicy,
 )
 from deepkeel.context_validation import validate_context_items
+from deepkeel.context_window_contracts import (
+    ContextLayer,
+    ContextSegment,
+    ContextSummaryCache,
+    ContextSummaryRecord,
+    ContextWindowManager,
+    ContextWindowPolicy,
+    ContextWindowResult,
+    InMemoryContextSummaryCache,
+)
+from deepkeel.context_window_support import (
+    _active_subject_id,
+    _checkpoint_from_runtime_context,
+    _context_authority,
+    _context_decisions,
+    _context_item,
+    _context_layer,
+    _context_representation,
+    _context_retention,
+    _context_scope,
+    _context_tier,
+    _context_visibility,
+    _default_context_authority,
+    _default_context_layer,
+    _default_context_representation,
+    _default_context_scope,
+    _default_context_tier,
+    _safe_int,
+    _segment_tier,
+    _tier_order,
+    context_fingerprint,
+)
 from deepkeel.token_estimation import ConservativeTokenEstimator, TokenEstimator
 from deepkeel.type_narrowing import as_dict
-
-
-@dataclass(frozen=True, slots=True)
-class ContextWindowPolicy:
-    max_input_tokens: int = 24_000
-    reserved_output_tokens: int = 4_000
-    history_limit: int = 0
-    max_message_tokens: int = 0
-    minimum_recent_history_tokens: int = 2_048
-    working_memory_ratio: float = 0.45
-    tool_loop_reserve_tokens: int = 0
-    minimum_safety_margin_tokens: int = 0
-    safety_margin_ratio: float = 0.0
-    minimum_section_tokens: int = 64
-    priority_sections: tuple[str, ...] = (
-        "current_time",
-        "subject",
-        "facts",
-        "memories",
-    )
-    required_sections: tuple[str, ...] = ("current_time", "subject")
-    protected_sections: tuple[str, ...] = (
-        "current_goal",
-        "skill_activation",
-        "pending_action",
-        "business_object",
-        "confirmed_facts",
-        "pending_tools",
-        "artifact_refs",
-        "policy_constraints",
-        "budget_constraints",
-    )
-    policy_id: str = "tiered-context-window-v3"
-
-
-ContextLayer = Literal[
-    "runtime_constitution",
-    "turn_context",
-    "working_memory",
-    "retrieved_context",
-]
-@dataclass(frozen=True, slots=True)
-class ContextSegment:
-    """A product-neutral prompt section with explicit retention metadata."""
-
-    key: str
-    value: Any
-    priority: int = 0
-    required: bool = False
-    source: str = ""
-    summary: Any = None
-    summary_version: str = ""
-    cache_key: str = ""
-    source_fingerprint: str = ""
-    max_tokens: int = 0
-    layer: ContextLayer = "turn_context"
-    retention: ContextRetention = "normal"
-    tier: ContextTier | None = None
-    scope: ContextScope = "run"
-    visibility: ContextVisibility = "model"
-    representation: ContextRepresentation = "raw"
-    authority: ContextAuthority = "canonical"
-    subject_id: str = ""
-    source_ref: str = ""
-
-
-@dataclass(frozen=True, slots=True)
-class ContextWindowResult:
-    context_bundle: dict[str, Any]
-    diagnostics: dict[str, Any] = field(default_factory=dict)
-
-
-class ContextWindowManager(Protocol):
-    def prepare(
-        self,
-        question: str,
-        short_context: dict[str, Any],
-        context_bundle: dict[str, Any],
-    ) -> ContextWindowResult: ...
-
-
-@dataclass(frozen=True, slots=True)
-class ContextSummaryRecord:
-    cache_key: str
-    source_fingerprint: str
-    summary: Any
-    summary_version: str = ""
-
-
-class ContextSummaryCache(Protocol):
-    def get(self, cache_key: str, source_fingerprint: str) -> ContextSummaryRecord | None: ...
-
-    def put(self, record: ContextSummaryRecord) -> None: ...
-
-    def invalidate(self, cache_key: str) -> None: ...
-
-
-class InMemoryContextSummaryCache:
-    """Thread-safe reference cache that rejects stale source fingerprints."""
-
-    def __init__(self) -> None:
-        self._records: dict[str, ContextSummaryRecord] = {}
-        self._lock = Lock()
-
-    def get(self, cache_key: str, source_fingerprint: str) -> ContextSummaryRecord | None:
-        with self._lock:
-            record = self._records.get(str(cache_key or ""))
-            if record is None or record.source_fingerprint != source_fingerprint:
-                return None
-            return copy.deepcopy(record)
-
-    def put(self, record: ContextSummaryRecord) -> None:
-        if not record.cache_key or not record.source_fingerprint:
-            return
-        with self._lock:
-            self._records[record.cache_key] = copy.deepcopy(record)
-
-    def invalidate(self, cache_key: str) -> None:
-        with self._lock:
-            self._records.pop(str(cache_key or ""), None)
 
 
 class DeterministicContextWindowManager:
@@ -172,8 +84,7 @@ class DeterministicContextWindowManager:
         policy = self.policy
         bundle = dict(context_bundle)
         profile = ModelContextProfile.from_mapping(
-            bundle.pop("_model_context_profile", None)
-            or bundle.get("model_context_profile")
+            bundle.pop("_model_context_profile", None) or bundle.get("model_context_profile")
         )
         configured_input_limit = _safe_int(
             bundle.pop("_configured_input_limit", None),
@@ -190,9 +101,7 @@ class DeterministicContextWindowManager:
             )
         ).plan(
             profile,
-            configured_input_limit=(
-                configured_input_limit if configured_input_limit > 0 else None
-            ),
+            configured_input_limit=(configured_input_limit if configured_input_limit > 0 else None),
         )
         runtime_context = copy.deepcopy(as_dict(bundle.get("runtime_context")))
         if short_context.get("current_time") not in (None, "", [], {}):
@@ -236,9 +145,7 @@ class DeterministicContextWindowManager:
         history_tokens = self.estimator.estimate(history) if history else 0
         context_budget = max(
             0,
-            int(budget_plan.available_input_tokens)
-            - question_tokens
-            - history_tokens,
+            int(budget_plan.available_input_tokens) - question_tokens - history_tokens,
         )
         segments = self._context_segments(runtime_context, explicit_segments)
         context_items = [_context_item(segment) for segment in segments]
@@ -264,8 +171,7 @@ class DeterministicContextWindowManager:
         model_segments = [
             segment
             for segment in segments
-            if segment.visibility in {"model", "both"}
-            and segment.key not in mismatched_keys
+            if segment.visibility in {"model", "both"} and segment.key not in mismatched_keys
         ]
         bounded_context, context_diagnostics = self._bounded_context(
             model_segments,
@@ -277,8 +183,7 @@ class DeterministicContextWindowManager:
             bundle["runtime_only_context"] = runtime_only_context
         if mismatched_segments:
             bundle["quarantined_context"] = {
-                segment.key: copy.deepcopy(segment.value)
-                for segment in mismatched_segments
+                segment.key: copy.deepcopy(segment.value) for segment in mismatched_segments
             }
         bundle["recent_messages"] = history
         original_tokens = (
@@ -413,14 +318,18 @@ class DeterministicContextWindowManager:
             subject_id=subject_id,
             previous_checkpoint=previous_checkpoint,
         )
-        return compacted.retained_messages, compacted.checkpoint, {
-            "history_original_count": len(valid),
-            "history_retained_count": len(compacted.retained_messages),
-            "history_dropped_count": max(0, len(valid) - len(compacted.retained_messages)),
-            "history_truncated_count": truncated_messages,
-            "history_token_budget": int(token_budget),
-            "history_compaction": compacted.diagnostics,
-        }
+        return (
+            compacted.retained_messages,
+            compacted.checkpoint,
+            {
+                "history_original_count": len(valid),
+                "history_retained_count": len(compacted.retained_messages),
+                "history_dropped_count": max(0, len(valid) - len(compacted.retained_messages)),
+                "history_truncated_count": truncated_messages,
+                "history_token_budget": int(token_budget),
+                "history_compaction": compacted.diagnostics,
+            },
+        )
 
     def _bounded_context(
         self,
@@ -437,8 +346,7 @@ class DeterministicContextWindowManager:
                             ContextSummaryRecord(
                                 cache_key=segment.cache_key,
                                 source_fingerprint=(
-                                    segment.source_fingerprint
-                                    or context_fingerprint(segment.value)
+                                    segment.source_fingerprint or context_fingerprint(segment.value)
                                 ),
                                 summary=segment.summary,
                                 summary_version=segment.summary_version,
@@ -465,10 +373,7 @@ class DeterministicContextWindowManager:
         ordered_segments = sorted(
             enumerate(segments),
             key=lambda item: (
-                not (
-                    item[1].required
-                    or item[1].retention in {"pinned", "protected"}
-                ),
+                not (item[1].required or item[1].retention in {"pinned", "protected"}),
                 _tier_order(_segment_tier(item[1])),
                 -int(item[1].priority),
                 item[0],
@@ -488,22 +393,22 @@ class DeterministicContextWindowManager:
             value = segment.value
             value_tokens = self.estimator.estimate(value)
             sections_left = len(ordered_segments) - index
-            fair_share = remaining if sections_left <= 1 else max(
-                int(self.policy.minimum_section_tokens),
-                remaining // sections_left,
+            fair_share = (
+                remaining
+                if sections_left <= 1
+                else max(
+                    int(self.policy.minimum_section_tokens),
+                    remaining // sections_left,
+                )
             )
             required_left = sum(
                 1
                 for _, candidate in ordered_segments[index:]
                 if candidate.required or candidate.retention in {"pinned", "protected"}
             )
-            segment_required = (
-                segment.required or segment.retention in {"pinned", "protected"}
-            )
+            segment_required = segment.required or segment.retention in {"pinned", "protected"}
             allocation_cap = (
-                max(1, remaining // max(1, required_left))
-                if segment_required
-                else fair_share
+                max(1, remaining // max(1, required_left)) if segment_required else fair_share
             )
             allowance = min(
                 remaining,
@@ -512,8 +417,7 @@ class DeterministicContextWindowManager:
                 allocation_cap,
             )
             if allowance <= 0 or (
-                not segment_required
-                and allowance < int(self.policy.minimum_section_tokens)
+                not segment_required and allowance < int(self.policy.minimum_section_tokens)
             ):
                 if segment.retention in {"pinned", "protected"}:
                     fallback = (
@@ -599,8 +503,7 @@ class DeterministicContextWindowManager:
             "required_sections_retained": retained_required,
             "protected_sections_retained": retained_protected,
             "protected_over_budget": (
-                self.estimator.estimate(bounded) > budget
-                and bool(retained_protected)
+                self.estimator.estimate(bounded) > budget and bool(retained_protected)
             ),
             "summary_cache_hits": summary_cache_hits,
             "summary_cache_misses": summary_cache_misses,
@@ -621,16 +524,11 @@ class DeterministicContextWindowManager:
                 value=value,
                 priority=priority.get(key, 0),
                 required=(
-                    key in self.policy.required_sections
-                    or key in self.policy.protected_sections
+                    key in self.policy.required_sections or key in self.policy.protected_sections
                 ),
                 source="runtime_context",
                 layer=_default_context_layer(key),
-                retention=(
-                    "protected"
-                    if key in self.policy.protected_sections
-                    else "normal"
-                ),
+                retention=("protected" if key in self.policy.protected_sections else "normal"),
                 tier=_default_context_tier(key),
                 scope=_default_context_scope(key),
                 visibility="model",
@@ -680,9 +578,7 @@ class DeterministicContextWindowManager:
                             inherited.retention
                             if inherited is not None
                             else (
-                                "protected"
-                                if key in self.policy.protected_sections
-                                else "normal"
+                                "protected" if key in self.policy.protected_sections else "normal"
                             ),
                         ),
                         tier=_context_tier(
@@ -693,7 +589,9 @@ class DeterministicContextWindowManager:
                         ),
                         scope=_context_scope(
                             raw.get("scope"),
-                            inherited.scope if inherited is not None else _default_context_scope(key),
+                            inherited.scope
+                            if inherited is not None
+                            else _default_context_scope(key),
                         ),
                         visibility=_context_visibility(
                             raw.get("visibility"),
@@ -768,8 +666,7 @@ class DeterministicContextWindowManager:
         history_tokens: int,
     ) -> dict[str, dict[str, Any]]:
         tiers: dict[str, dict[str, Any]] = {
-            tier: {"tokens": 0, "sections": [], "sources": []}
-            for tier in ("L1", "L2", "L3")
+            tier: {"tokens": 0, "sections": [], "sources": []} for tier in ("L1", "L2", "L3")
         }
         for segment in segments:
             if segment.key not in bounded_context:
@@ -840,251 +737,3 @@ class DeterministicContextWindowManager:
             else:
                 high = middle - 1
         return value[:low].rstrip() + "..." if low else ""
-
-
-def _safe_int(value: Any, default: int = 0) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return int(default)
-
-
-def _default_context_layer(key: str) -> ContextLayer:
-    if key in {"runtime_constitution", "policy_constraints", "budget_constraints"}:
-        return "runtime_constitution"
-    if key in {
-        "recent_messages",
-        "observations",
-        "tool_summaries",
-        "working_memory",
-    }:
-        return "working_memory"
-    if key in {
-        "memories",
-        "retrieved_context",
-        "references",
-        "artifact_refs",
-        "search_results",
-    }:
-        return "retrieved_context"
-    return "turn_context"
-
-
-def _context_layer(value: Any, default: ContextLayer) -> ContextLayer:
-    normalized = str(value or "").strip()
-    if normalized in {
-        "runtime_constitution",
-        "turn_context",
-        "working_memory",
-        "retrieved_context",
-    }:
-        return normalized  # type: ignore[return-value]
-    return default
-
-
-def _context_retention(value: Any, default: ContextRetention) -> ContextRetention:
-    normalized = str(value or "").strip()
-    if normalized in {"pinned", "protected", "normal", "ephemeral"}:
-        return normalized  # type: ignore[return-value]
-    return default
-
-
-def _default_context_tier(key: str) -> ContextTier:
-    if key in {
-        "runtime_constitution",
-        "current_time",
-        "subject",
-        "profile",
-        "chart_facts",
-        "consultation_policy",
-        "artifact_reuse",
-        "skill_activation",
-        "pending_action",
-        "policy_constraints",
-        "budget_constraints",
-    }:
-        return "L1"
-    if key in {
-        "conversation_summary",
-        "working_context_checkpoint",
-        "recent_messages",
-        "observations",
-        "resume_observations",
-        "tool_summaries",
-        "working_memory",
-        "latest_bazi_reading",
-        "active_matters",
-    }:
-        return "L2"
-    return "L3"
-
-
-def _default_context_scope(key: str) -> ContextScope:
-    if key in {"memories", "available_profiles"}:
-        return "user"
-    if key in {"runtime_constitution", "policy_constraints"}:
-        return "tenant"
-    if key in {"conversation_summary", "recent_messages", "working_context_checkpoint"}:
-        return "thread"
-    return "run"
-
-
-def _default_context_representation(key: str) -> ContextRepresentation:
-    if key in {"conversation_summary", "working_context_checkpoint", "tool_summaries"}:
-        return "digest"
-    if key in {"artifact_refs", "references"}:
-        return "pointer"
-    return "raw"
-
-
-def _default_context_authority(key: str) -> ContextAuthority:
-    if key in {
-        "conversation_summary",
-        "working_context_checkpoint",
-        "context_selection",
-        "context_budget",
-        "tool_summaries",
-    }:
-        return "derived"
-    return "canonical"
-
-
-def _context_tier(value: Any, default: ContextTier) -> ContextTier:
-    normalized = str(value or "").strip().upper()
-    return normalized if normalized in {"L1", "L2", "L3"} else default  # type: ignore[return-value]
-
-
-def _context_scope(value: Any, default: ContextScope) -> ContextScope:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in {"step", "run", "thread", "user", "tenant"} else default  # type: ignore[return-value]
-
-
-def _context_visibility(value: Any, default: ContextVisibility) -> ContextVisibility:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in {"runtime", "model", "both"} else default  # type: ignore[return-value]
-
-
-def _context_representation(
-    value: Any,
-    default: ContextRepresentation,
-) -> ContextRepresentation:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in {"raw", "digest", "pointer"} else default  # type: ignore[return-value]
-
-
-def _context_authority(value: Any, default: ContextAuthority) -> ContextAuthority:
-    normalized = str(value or "").strip().lower()
-    return normalized if normalized in {"canonical", "derived"} else default  # type: ignore[return-value]
-
-
-def _segment_tier(segment: ContextSegment) -> ContextTier:
-    if segment.tier is not None:
-        return segment.tier
-    mapping: dict[ContextLayer, ContextTier] = {
-        "runtime_constitution": "L1",
-        "turn_context": "L1" if segment.required else "L2",
-        "working_memory": "L2",
-        "retrieved_context": "L3",
-    }
-    return mapping[segment.layer]
-
-
-def _tier_order(tier: ContextTier) -> int:
-    return {"L1": 0, "L2": 1, "L3": 2}[tier]
-
-
-def _context_item(segment: ContextSegment) -> ContextItem:
-    return ContextItem(
-        key=segment.key,
-        value=segment.value,
-        tier=_segment_tier(segment),
-        scope=segment.scope,
-        visibility=segment.visibility,
-        retention=segment.retention,
-        representation=segment.representation,
-        authority=segment.authority,
-        subject_id=segment.subject_id,
-        source_ref=segment.source_ref,
-        source=segment.source,
-        priority=segment.priority,
-        required=segment.required,
-        max_tokens=segment.max_tokens,
-        summary=segment.summary,
-        summary_version=segment.summary_version,
-        cache_key=segment.cache_key,
-        source_fingerprint=segment.source_fingerprint,
-    )
-
-
-def _active_subject_id(bundle: dict[str, Any], runtime_context: dict[str, Any]) -> str:
-    subject_context = as_dict(bundle.get("subject_context"))
-    if subject_context.get("subject_id"):
-        return str(subject_context["subject_id"])
-    snapshot = as_dict(bundle.get("context_snapshot"))
-    snapshot_subject = as_dict(snapshot.get("subject"))
-    if snapshot_subject.get("subject_id"):
-        return str(snapshot_subject["subject_id"])
-    subject = as_dict(runtime_context.get("subject"))
-    if subject.get("subject_id"):
-        return str(subject["subject_id"])
-    profile = as_dict(runtime_context.get("profile"))
-    return str(profile.get("subject_id") or "")
-
-
-def _context_decisions(
-    segments: list[ContextSegment],
-    bounded_context: dict[str, Any],
-    diagnostics: dict[str, Any],
-) -> list[ContextDecision]:
-    dropped = set(diagnostics.get("dropped_sections") or [])
-    summarized = set(diagnostics.get("summarized_sections") or [])
-    truncated = set(diagnostics.get("truncated_sections") or [])
-    decisions: list[ContextDecision] = []
-    estimator = ConservativeTokenEstimator()
-    for segment in segments:
-        if segment.key in dropped or segment.key not in bounded_context:
-            action = "dropped"
-            reason = "lower-priority context exceeded the model input budget"
-            tokens = 0
-        elif segment.key in summarized:
-            action = "summarized"
-            reason = "host-provided digest replaced the raw value"
-            tokens = estimator.estimate(bounded_context[segment.key])
-        elif segment.key in truncated:
-            action = "truncated"
-            reason = "value was deterministically bounded to the allocated tier budget"
-            tokens = estimator.estimate(bounded_context[segment.key])
-        else:
-            action = "retained"
-            reason = "item fit its tier budget"
-            tokens = estimator.estimate(bounded_context[segment.key])
-        decisions.append(
-            ContextDecision(
-                key=segment.key,
-                tier=_segment_tier(segment),
-                action=action,  # type: ignore[arg-type]
-                reason=reason,
-                tokens=tokens,
-                source_ref=segment.source_ref,
-            )
-        )
-    return decisions
-
-
-def context_fingerprint(value: Any) -> str:
-    encoded = json.dumps(
-        value,
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-        default=str,
-    )
-    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
-
-
-def _checkpoint_from_runtime_context(runtime_context: dict[str, Any]) -> ContextCheckpoint | None:
-    for key in ("conversation_summary", "working_context_checkpoint"):
-        checkpoint = ContextCheckpoint.from_mapping(runtime_context.get(key))
-        if checkpoint is not None:
-            return checkpoint
-    return None

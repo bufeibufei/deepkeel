@@ -211,8 +211,8 @@ def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> N
 @pytest.mark.parametrize(
     ("path", "class_name", "method_name", "maximum_lines"),
     [
-        ("src/deepkeel/model.py", "RoutedModelGateway", "arun_turn", 400),
-        ("src/deepkeel/graph_nodes.py", "GraphNodes", "amodel_node", 620),
+        ("src/deepkeel/model_gateway.py", "RoutedModelGateway", "arun_turn", 400),
+        ("src/deepkeel/graph_model_node.py", "GraphModelNodeMixin", "amodel_node", 620),
     ],
 )
 def test_central_execution_methods_stay_within_ratcheted_size_budget(
@@ -234,6 +234,78 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
     assert target.end_lineno - target.lineno + 1 <= maximum_lines
 
 
+@pytest.mark.parametrize(
+    ("path", "maximum_lines"),
+    [
+        ("src/deepkeel/runtime.py", 900),
+        ("src/deepkeel/model.py", 250),
+        ("src/deepkeel/tools.py", 80),
+        ("src/deepkeel/graph_nodes.py", 300),
+        ("src/deepkeel/subagents/executor.py", 1_000),
+        ("src/deepkeel/context_window.py", 800),
+        ("src/deepkeel/runtime_turn_execution.py", 750),
+        ("src/deepkeel/model_gateway.py", 750),
+        ("src/deepkeel/tool_executor.py", 750),
+        ("src/deepkeel/graph_model_node.py", 750),
+        ("src/deepkeel/subagents/bounded_execution.py", 750),
+    ],
+)
+def test_execution_modules_stay_within_ratcheted_size_budget(
+    path: str,
+    maximum_lines: int,
+) -> None:
+    assert len(Path(path).read_text(encoding="utf-8").splitlines()) <= maximum_lines
+
+
+def test_internal_module_dependency_graph_is_acyclic() -> None:
+    root = Path("src/deepkeel")
+    modules = {
+        ".".join(path.relative_to("src").with_suffix("").parts): path
+        for path in root.rglob("*.py")
+    }
+    graph: dict[str, set[str]] = {module: set() for module in modules}
+    for module, path in modules.items():
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            imported: list[str] = []
+            if isinstance(node, ast.Import):
+                imported = [alias.name for alias in node.names]
+            elif isinstance(node, ast.ImportFrom) and node.module:
+                imported = (
+                    [node.module]
+                    if not node.level
+                    else [
+                        ".".join(
+                            module.split(".")[:-node.level] + [node.module]
+                        )
+                    ]
+                )
+            for imported_module in imported:
+                candidate = imported_module
+                while candidate and candidate not in modules:
+                    candidate = candidate.rpartition(".")[0]
+                if candidate in modules and candidate != module:
+                    graph[module].add(candidate)
+
+    visiting: set[str] = set()
+    visited: set[str] = set()
+
+    def visit(module: str, path: tuple[str, ...]) -> None:
+        if module in visiting:
+            cycle_start = path.index(module)
+            pytest.fail("internal dependency cycle: " + " -> ".join(path[cycle_start:]))
+        if module in visited:
+            return
+        visiting.add(module)
+        for dependency in sorted(graph[module]):
+            visit(dependency, (*path, dependency))
+        visiting.remove(module)
+        visited.add(module)
+
+    for module in sorted(graph):
+        visit(module, (module,))
+
+
 def test_subagent_quota_reserves_calls_atomically() -> None:
     quota = _DelegationQuota(max_model_calls=1, max_tool_calls=2)
 
@@ -247,9 +319,7 @@ def test_subagent_quota_reserves_calls_atomically() -> None:
 
 
 def test_subagent_output_validation_normalizes_structured_output() -> None:
-    assert _json_object('```json\n{"conclusion":"ready"}\n```') == {
-        "conclusion": "ready"
-    }
+    assert _json_object('```json\n{"conclusion":"ready"}\n```') == {"conclusion": "ready"}
     assert _confidence("0.75") == 0.75
     with pytest.raises(RuntimeError, match="missing required field"):
         _validate_input({}, {"required": ["record_id"]})
