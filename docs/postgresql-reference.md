@@ -77,6 +77,23 @@ Concurrent workers serialize bootstrap and upgrade with a transaction-scoped
 PostgreSQL advisory lock. Only forward migration is supported; rollback is an
 operator-owned restore or a new compensating migration.
 
+Use the packaged CLI in deployment automation. It reads the DSN from an
+environment variable and never accepts credentials as a command argument:
+
+```powershell
+$env:DEEPKEEL_POSTGRES_DSN = "postgresql://..."
+deepkeel postgres status
+deepkeel postgres plan
+deepkeel postgres upgrade --yes
+```
+
+`status` exits non-zero when the schema is behind. `plan` is read-only.
+`upgrade` requires explicit confirmation and may target an intermediate version
+with `--target-version`; success then means that requested version was reached,
+while `up_to_date` still reports whether the schema is at the package latest.
+Run `deepkeel doctor` before migration to inspect the runtime and installed
+optional integrations.
+
 ## Run the contracts
 
 Install the optional adapter dependency and point the test at a disposable

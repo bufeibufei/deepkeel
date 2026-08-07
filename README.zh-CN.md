@@ -35,7 +35,9 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 
 可运行的 [quickstart](examples/quickstart) 展示最小模型 Provider；
 [inventory_pack](examples/inventory_pack) 展示不依赖具体业务的工具和 Artifact；
-[durable_approval](examples/durable_approval) 展示中断、人工确认与恢复。
+[durable_approval](examples/durable_approval) 展示中断、人工确认与恢复；
+[production_worker](examples/production_worker) 展示生产 Profile、PostgreSQL
+端口、迁移与可选 OpenTelemetry 导出的完整装配。
 
 ## 架构边界
 

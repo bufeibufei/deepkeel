@@ -53,6 +53,12 @@ leases with fencing generations, and portable durable checkpoints. See
 [PostgreSQL adapters](postgresql-reference.md) for the contract test and
 multi-worker recovery baseline.
 
+Run `deepkeel doctor` and `deepkeel postgres status` as deployment preflight.
+Apply pending schema versions in a dedicated migration job with
+`deepkeel postgres upgrade --yes` before workers receive traffic. The runnable
+[`production_worker`](../examples/production_worker) example shows the complete
+public-SDK composition, including an optional OpenTelemetry projection.
+
 Use `RuntimeScope` as the canonical tenant, namespace, and user boundary.
 Legacy adapters may continue to receive `user_id` for the default scope, but
 Core fails closed when a tenant or non-default namespace is used with an

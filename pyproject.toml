@@ -33,12 +33,19 @@ Issues = "https://github.com/bufeibufei/deepkeel/issues"
 Documentation = "https://github.com/bufeibufei/deepkeel/tree/main/docs"
 Changelog = "https://github.com/bufeibufei/deepkeel/blob/main/CHANGELOG.md"
 
+[project.scripts]
+deepkeel = "deepkeel.cli:main"
+
 [project.optional-dependencies]
 postgres = [
   "psycopg[binary,pool]>=3.2.0,<4.0.0",
 ]
+otel = [
+  "opentelemetry-api>=1.30.0,<2.0.0",
+]
 test = [
   "mypy>=1.15.0,<2.0.0",
+  "opentelemetry-sdk>=1.30.0,<2.0.0",
   "pytest>=8.3.0",
   "pytest-cov>=6.0.0,<8.0.0",
   "ruff>=0.11.0,<1.0.0",

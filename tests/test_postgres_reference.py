@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 from typing import Iterator
 from uuid import uuid4
 
 import pytest
 
+from deepkeel.cli import main as cli_main
 from deepkeel.adapter_sdk import (
     RunLeaseConflict,
     verify_budget_ledger_contract,
@@ -41,6 +43,7 @@ from deepkeel.contrib.postgres import (
     PostgresToolExecutionStore,
     PostgresTraceStore,
 )
+from examples.production_worker import build_production_worker
 
 
 @pytest.fixture
@@ -143,6 +146,59 @@ def test_postgres_bundle_satisfies_production_worker_gate(
         .production_readiness()
     )
     assert report.ready, report.as_dict()
+
+
+@pytest.mark.postgres
+def test_public_production_worker_example_builds_against_postgres(
+    postgres_database: PostgresDatabase,
+) -> None:
+    worker = build_production_worker(
+        object(),
+        dsn=postgres_database.dsn,
+        schema=postgres_database.schema,
+        worker_id="example-worker",
+    )
+
+    assert worker.schema_status.up_to_date is True
+    assert worker.runtime.runtime_state_store is worker.postgres.runtime_state_store
+    assert worker.postgres.database.schema == postgres_database.schema
+
+
+@pytest.mark.postgres
+def test_postgres_cli_supports_explicit_staged_upgrade(
+    postgres_database: PostgresDatabase,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    schema = f"deepkeel_cli_{uuid4().hex[:12]}"
+    variable = "DEEPKEEL_CLI_TEST_DSN"
+    monkeypatch.setenv(variable, postgres_database.dsn)
+    database = PostgresDatabase(postgres_database.dsn, schema=schema)
+    try:
+        assert (
+            cli_main(
+                [
+                    "postgres",
+                    "upgrade",
+                    "--schema",
+                    schema,
+                    "--dsn-env",
+                    variable,
+                    "--target-version",
+                    "1",
+                    "--yes",
+                ]
+            )
+            == 0
+        )
+        output = json.loads(capsys.readouterr().out)
+        assert output["ok"] is True
+        assert output["current_version"] == 1
+        assert output["requested_target_version"] == 1
+        assert output["up_to_date"] is False
+        assert [item["version"] for item in output["requested_migrations"]] == [1]
+    finally:
+        database.drop()
 
 
 @pytest.mark.postgres

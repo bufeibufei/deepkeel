@@ -42,7 +42,9 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
 The [inventory package](examples/inventory_pack) demonstrates product-neutral
 tools and artifacts. The [durable approval example](examples/durable_approval)
-demonstrates suspension and resume.
+demonstrates suspension and resume. The
+[production worker](examples/production_worker) composes the production profile,
+packaged PostgreSQL ports, migrations and optional OpenTelemetry export.
 
 Production deployments should follow
 [`docs/production-readiness.md`](docs/production-readiness.md), replace every

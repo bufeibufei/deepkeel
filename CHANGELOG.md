@@ -18,6 +18,9 @@
   checksummed Schema Registry. Migrations use an advisory lock, detect history
   and physical-column drift, repair the supported pre-cursor trace schema, and
   reject automatic downgrades.
+- Add a privacy-safe OpenTelemetry projection, machine-readable `deepkeel`
+  diagnostics and PostgreSQL migration CLI, plus a public-SDK-only production
+  worker composition example.
 
 ## 4.0.0rc2
 

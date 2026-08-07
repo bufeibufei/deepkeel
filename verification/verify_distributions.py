@@ -73,6 +73,12 @@ def _python_in(environment: Path) -> Path:
     return environment / "bin" / "python"
 
 
+def _console_script_in(environment: Path, name: str) -> Path:
+    if os.name == "nt":
+        return environment / "Scripts" / f"{name}.exe"
+    return environment / "bin" / name
+
+
 def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
     with tempfile.TemporaryDirectory(prefix=f"deepkeel-{artifact.suffix[1:]}-") as raw:
         root = Path(raw)
@@ -81,6 +87,9 @@ def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
         run_directory.mkdir()
         venv.EnvBuilder(with_pip=True, clear=True).create(environment)
         python = _python_in(environment)
+        clean_environment = {
+            key: value for key, value in os.environ.items() if key != "PYTHONPATH"
+        }
         subprocess.run(
             [
                 str(python),
@@ -93,6 +102,7 @@ def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
             ],
             check=True,
             cwd=run_directory,
+            env=clean_environment,
         )
         copied_verifier = run_directory / verifier.name
         copied_verifier.write_bytes(verifier.read_bytes())
@@ -100,7 +110,13 @@ def _run_installed_conformance(artifact: Path, verifier: Path) -> None:
             [str(python), copied_verifier.name],
             check=True,
             cwd=run_directory,
-            env={key: value for key, value in os.environ.items() if key != "PYTHONPATH"},
+            env=clean_environment,
+        )
+        subprocess.run(
+            [str(_console_script_in(environment, "deepkeel")), "doctor"],
+            check=True,
+            cwd=run_directory,
+            env=clean_environment,
         )
 
 
