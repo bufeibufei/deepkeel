@@ -7,12 +7,21 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Mapping
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.version import InvalidVersion, Version
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from deepkeel.version import (
     DEEPKEEL_CONTRACT_VERSION,
     DEEPKEEL_VERSION,
 )
+
+
+_LEGACY_PACKAGE_VERSION_BRIDGES = {
+    # The distribution/import rename is a v4 SDK break, while durable capability
+    # generations continue to use the unchanged harness-core-v3 contract.
+    DEEPKEEL_CONTRACT_VERSION: ("3.35.1",),
+}
 
 
 class CapabilityBudgetSpec(BaseModel):
@@ -93,7 +102,7 @@ class CapabilityManifest(BaseModel):
                 f"unsupported core contract {self.core_contract!r}; "
                 f"expected {DEEPKEEL_CONTRACT_VERSION!r}"
             )
-        if not version_satisfies(DEEPKEEL_VERSION, self.core_version):
+        if not core_version_satisfies(self.core_contract, self.core_version):
             raise ValueError(
                 f"core {DEEPKEEL_VERSION} does not satisfy {self.core_version!r}"
             )
@@ -362,36 +371,28 @@ def version_satisfies(version: str, constraint: str) -> bool:
     normalized = str(constraint or "*").strip()
     if normalized in {"", "*"}:
         return True
-    actual = _version_tuple(version)
-    for clause in (item.strip() for item in normalized.split(",") if item.strip()):
-        operator = "=="
-        expected_text = clause
-        for candidate in (">=", "<=", "==", ">", "<"):
-            if clause.startswith(candidate):
-                operator = candidate
-                expected_text = clause[len(candidate) :].strip()
-                break
-        expected = _version_tuple(expected_text)
-        matches = {
-            ">=": actual >= expected,
-            "<=": actual <= expected,
-            "==": actual == expected,
-            ">": actual > expected,
-            "<": actual < expected,
-        }[operator]
-        if not matches:
-            return False
-    return True
+    clauses = tuple(item.strip() for item in normalized.split(",") if item.strip())
+    specifier = ",".join(
+        clause
+        if clause.startswith(("~=", "==", "!=", "<=", ">=", "<", ">", "==="))
+        else f"=={clause}"
+        for clause in clauses
+    )
+    try:
+        return Version(str(version).strip()) in SpecifierSet(specifier)
+    except (InvalidSpecifier, InvalidVersion):
+        return False
 
 
-def _version_tuple(value: str) -> tuple[int, int, int]:
-    numbers: list[int] = []
-    for part in str(value or "0").split(".")[:3]:
-        digits = "".join(char for char in part if char.isdigit())
-        numbers.append(int(digits or 0))
-    while len(numbers) < 3:
-        numbers.append(0)
-    return tuple(numbers)  # type: ignore[return-value]
+def core_version_satisfies(contract: str, constraint: str) -> bool:
+    """Accept the current package or an explicit same-contract upgrade bridge."""
+
+    if version_satisfies(DEEPKEEL_VERSION, constraint):
+        return True
+    return any(
+        version_satisfies(version, constraint)
+        for version in _LEGACY_PACKAGE_VERSION_BRIDGES.get(contract, ())
+    )
 
 
 __all__ = [
@@ -401,5 +402,6 @@ __all__ = [
     "RuntimeGenerationManager",
     "load_capability_manifest",
     "validate_manifest_set",
+    "core_version_satisfies",
     "version_satisfies",
 ]

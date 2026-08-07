@@ -9,6 +9,8 @@
 - Publish a frozen DeepKeel v4 SDK surface and product-neutral quickstarts.
 - Preserve the existing `harness-core-v3` Capability Pack protocol so branding
   does not force a persisted contract migration.
+- Add an explicit same-contract bridge for persisted v3 capability generations
+  and replace ad-hoc version parsing with PEP 440 semantics.
 
 Versions through 3.35.1 were published as the pre-DeepKeel engineering lineage.
 

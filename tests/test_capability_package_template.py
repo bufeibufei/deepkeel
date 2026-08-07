@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import pytest
+
 from deepkeel.extension_sdk import (
     CapabilityBudgetSpec,
     CapabilityContribution,
@@ -18,6 +20,7 @@ from deepkeel.runtime_sdk import (
     EvalExpectation,
     RuntimeRequest,
 )
+from deepkeel.capability_manifest import version_satisfies
 from deepkeel.composition import HarnessRuntimeBuilder
 from deepkeel.model import ModelTurn
 
@@ -38,6 +41,32 @@ MANIFEST = CapabilityManifest(
     resume_compatible_versions=("1.1.0",),
     metadata={"domain": "inventory"},
 )
+
+
+def test_manifest_accepts_last_v3_range_for_the_stable_runtime_contract() -> None:
+    manifest = CapabilityManifest(
+        id="example.legacy-generation",
+        version="1.0.0",
+        core_version=">=3.16.0,<4.0.0",
+        entrypoint="tests.test_capability_package_template:InventoryPack",
+    )
+
+    assert manifest.core_version == ">=3.16.0,<4.0.0"
+
+
+def test_manifest_rejects_an_unbridged_core_range() -> None:
+    with pytest.raises(ValueError, match="does not satisfy"):
+        CapabilityManifest(
+            id="example.unsupported-generation",
+            version="1.0.0",
+            core_version=">=2.0.0,<3.0.0",
+            entrypoint="tests.test_capability_package_template:InventoryPack",
+        )
+
+
+def test_version_ranges_follow_pep440_prerelease_semantics() -> None:
+    assert version_satisfies("4.0.0rc1", ">=4.0.0rc1,<5.0.0") is True
+    assert version_satisfies("4.0.0rc1", ">=4.0.0,<5.0.0") is False
 
 
 @dataclass
