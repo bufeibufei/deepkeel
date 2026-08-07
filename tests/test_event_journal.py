@@ -7,7 +7,11 @@ from deepkeel.event_journal import (
     EventJournalConflict,
     InMemoryRuntimeEventJournal,
 )
-from deepkeel.events import envelope_runtime_event, normalize_runtime_event
+from deepkeel.events import (
+    AgentEventPersistenceError,
+    envelope_runtime_event,
+    normalize_runtime_event,
+)
 from deepkeel.runtime_api import RuntimeEventEnvelope
 from deepkeel.runtime_sdk import RuntimeRequest
 
@@ -140,3 +144,30 @@ def test_runtime_journals_events_before_publishing_and_replays_from_cursor():
         event.sequence > cursor
         for event in runtime.replay_events("run-runtime", after_sequence=cursor)
     )
+
+
+def test_runtime_fails_closed_before_publishing_when_journal_append_fails() -> None:
+    class FailingJournal:
+        def append(self, _event):
+            raise ConnectionError("journal unavailable")
+
+        def latest_sequence(self, _run_id):
+            return 0
+
+        def read_after(self, _run_id, *, after_sequence=0, limit=100):
+            del after_sequence, limit
+            return ()
+
+    published: list[dict[str, object]] = []
+    runtime = HarnessRuntimeBuilder().with_ports(
+        RuntimePorts(event_journal=FailingJournal())
+    ).build()
+
+    with pytest.raises(AgentEventPersistenceError, match="journal append failed"):
+        runtime.run(
+            RuntimeRequest(question="hello", run_id="journal-failure"),
+            provider=ScriptedProvider(),
+            event_sink=published.append,
+        )
+
+    assert published == []
