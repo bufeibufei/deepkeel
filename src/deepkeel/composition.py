@@ -35,6 +35,7 @@ from deepkeel.model import ModelInvocationRecorder, ModelInvocationStore
 from deepkeel.model_health import ModelHealthStore
 from deepkeel.leases import RunLeaseStore
 from deepkeel.migrations import StateMigrationRegistry
+from deepkeel.memory_recall import MemoryRecallCoordinator
 from deepkeel.persistence import DurableCheckpointStore
 from deepkeel.ports import ContextBuilder, GraphCheckpointer, SessionFactory
 from deepkeel.policy import PolicyEngine
@@ -68,6 +69,7 @@ class RuntimePortChanges(TypedDict, total=False):
     secret_provider: SecretProvider | None
     telemetry: TelemetryPort | None
     context_builder: ContextBuilder | None
+    memory_recall_coordinator: MemoryRecallCoordinator | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
     async_runtime_state_store: AsyncRuntimeStateStore | None
@@ -105,6 +107,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     tool_preflight: ToolPreflight | None
     telemetry: TelemetryPort | None
     context_builder: ContextBuilder | None
+    memory_recall_coordinator: MemoryRecallCoordinator | None
     context_window_manager: ContextWindowManager | None
     runtime_state_store: RuntimeStateStore | None
     async_runtime_state_store: AsyncRuntimeStateStore | None
@@ -175,6 +178,7 @@ class RuntimeExecutionPorts:
     system_prompt_factory: SystemPromptFactory | None = None
     session_factory: SessionFactory | None = None
     context_builder: ContextBuilder | None = None
+    memory_recall_coordinator: MemoryRecallCoordinator | None = None
     context_window_manager: ContextWindowManager | None = None
     state_migrations: StateMigrationRegistry | None = None
     async_stream_buffer_size: int = 128
@@ -209,6 +213,7 @@ class RuntimePorts:
     secret_provider: SecretProvider | None = None
     telemetry: TelemetryPort | None = None
     context_builder: ContextBuilder | None = None
+    memory_recall_coordinator: MemoryRecallCoordinator | None = None
     context_window_manager: ContextWindowManager | None = None
     runtime_state_store: RuntimeStateStore | None = None
     async_runtime_state_store: AsyncRuntimeStateStore | None = None
@@ -434,6 +439,7 @@ class HarnessRuntimeBuilder:
             capability_catalog=self._capability_catalog,
             telemetry=self._ports.telemetry,
             context_builder=self._ports.context_builder,
+            memory_recall_coordinator=self._ports.memory_recall_coordinator,
             context_window_manager=self._ports.context_window_manager,
             runtime_state_store=self._ports.runtime_state_store,
             async_runtime_state_store=self._ports.async_runtime_state_store,

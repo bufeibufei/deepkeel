@@ -124,6 +124,16 @@ from deepkeel.migrations import (
     StateMigrationRegistry,
     default_state_migrations,
 )
+from deepkeel.memory_recall import (
+    DefaultMemoryRecallCoordinator,
+    MemoryRecallCoordinator,
+    MemoryRecallDecision,
+    MemoryRecallEnforcement,
+    MemoryRecallMode,
+    MemoryRecallPolicy,
+    MemoryRecallProjector,
+    MemoryRecallRequest,
+)
 from deepkeel.langgraph_adapter import LangGraphCheckpointerAdapter
 from deepkeel.model import (
     AsyncModelProviderAdapter,
@@ -261,6 +271,14 @@ ADAPTER_SDK_API = (
     "MODEL_CALLS",
     "MODEL_RETRIES",
     "MappingSecretProvider",
+    "DefaultMemoryRecallCoordinator",
+    "MemoryRecallCoordinator",
+    "MemoryRecallDecision",
+    "MemoryRecallEnforcement",
+    "MemoryRecallMode",
+    "MemoryRecallPolicy",
+    "MemoryRecallProjector",
+    "MemoryRecallRequest",
     "ModelFailureInfo",
     "ModelCapabilities",
     "ModelCapabilityUnsatisfiedError",

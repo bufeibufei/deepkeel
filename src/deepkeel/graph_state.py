@@ -191,6 +191,11 @@ def _allowed_tool_names(
 ) -> set[str] | None:
     skill = as_dict(state.get("skill_activation"))
     skill_policy = SkillPolicy.from_snapshot(skill)
+    disabled = {
+        str(name)
+        for name in as_list(as_dict(state.get("metadata")).get("disabled_tool_names"))
+        if str(name).strip()
+    }
     allowed = as_list(skill.get("allowed_tools"))
     if skill_policy.active and skill_policy.tool_scope_mode == "allowlist":
         names = {str(name) for name in allowed if name}
@@ -198,6 +203,7 @@ def _allowed_tool_names(
             names.remove("agent.delegate")
         if names and _tool_discovery_available(state):
             names.add("runtime.discover_tools")
+        names.difference_update(disabled)
         return names
     default_tools = {
         spec.name
@@ -210,6 +216,7 @@ def _allowed_tool_names(
             default_tools.update(group)
     if not _tool_discovery_available(state):
         default_tools.discard("runtime.discover_tools")
+    default_tools.difference_update(disabled)
     return default_tools
 
 

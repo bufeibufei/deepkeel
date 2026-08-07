@@ -435,6 +435,12 @@ def _new_context(
         budget_state=budget_state,
         metadata={
             "context_source": str(context_bundle.get("source") or "runtime"),
+            "disabled_tool_names": [
+                str(name)
+                for name in as_list(context_bundle.get("disabled_tool_names"))
+                if str(name).strip()
+            ],
+            "memory_recall": as_dict(context_bundle.get("memory_recall")),
             "governance_scope": {
                 "tenant_id": str(context_bundle.get("tenant_id") or ""),
                 "user_id": user_id,

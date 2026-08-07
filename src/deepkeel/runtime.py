@@ -66,6 +66,7 @@ from deepkeel.leases import (
     RunLeaseStore,
 )
 from deepkeel.migrations import StateMigrationRegistry, default_state_migrations
+from deepkeel.memory_recall import MemoryRecallCoordinator
 from deepkeel.persistence import (
     CheckpointCompatibilityError,
     DurableCheckpointStore,
@@ -167,6 +168,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         capability_catalog: CapabilityCatalog | None = None,
         telemetry: TelemetryPort | None = None,
         context_builder: ContextBuilder | None = None,
+        memory_recall_coordinator: MemoryRecallCoordinator | None = None,
         context_window_manager: ContextWindowManager | None = None,
         runtime_state_store: RuntimeStateStore | None = None,
         async_runtime_state_store: AsyncRuntimeStateStore | None = None,
@@ -211,6 +213,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.capability_catalog = capability_catalog or CapabilityCatalog()
         self.telemetry = telemetry or NoopTelemetry()
         self.context_builder = context_builder
+        self.memory_recall_coordinator = memory_recall_coordinator
         self.context_window_manager = context_window_manager or DeterministicContextWindowManager()
         self.runtime_state_store = runtime_state_store
         self.async_runtime_state_store = async_runtime_state_store

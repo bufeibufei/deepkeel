@@ -68,7 +68,19 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         input_parts = list(request.input_parts)
         run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
-        bundle = context_bundle if isinstance(context_bundle, dict) else {}
+        bundle = dict(context_bundle) if isinstance(context_bundle, dict) else {}
+        # Policy inputs must come from the typed request, not from host-specific
+        # duplication inside context_bundle.
+        if request.run_id:
+            bundle.setdefault("run_id", request.run_id)
+        if request.thread_id:
+            bundle.setdefault("thread_id", request.thread_id)
+        if runtime_scope.tenant_id:
+            bundle.setdefault("tenant_id", runtime_scope.tenant_id)
+        if user_id:
+            bundle.setdefault("user_id", user_id)
+        if skill_activation:
+            bundle["skill_activation"] = dict(skill_activation)
         resolved_model_policy = _resolved_model_policy(
             model_policy,
             provider=provider,
@@ -85,6 +97,10 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         )
         context_window_diagnostics: dict[str, Any] = {}
         try:
+            if self.memory_recall_coordinator is not None:
+                bundle = await self.memory_recall_coordinator.prepare(question, short, bundle)
+                if not isinstance(bundle, dict):
+                    raise TypeError("memory recall coordinator must return a mapping")
             if self.context_builder is not None:
                 bundle = self.context_builder(question, short, bundle)
                 if not isinstance(bundle, dict):
@@ -209,6 +225,29 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             execution_fence=execution_fence,
         )
         emit = emitter
+
+        memory_recall = as_dict(bundle.get("memory_recall"))
+        if memory_recall:
+            emit(
+                {
+                    "event_type": "memory.recall.decided",
+                    "title": "Memory recall policy evaluated",
+                    "summary": str(memory_recall.get("reason") or memory_recall.get("status") or ""),
+                    "payload": dict(memory_recall),
+                    "visible": False,
+                }
+            )
+            status = str(memory_recall.get("status") or "")
+            if status in {"completed", "failed", "skipped"}:
+                emit(
+                    {
+                        "event_type": f"memory.recall.{status}",
+                        "title": f"Memory recall {status}",
+                        "summary": str(memory_recall.get("reason") or status),
+                        "payload": dict(memory_recall),
+                        "visible": False,
+                    }
+                )
 
         package_ids = tuple(
             contribution.package_id for contribution in self.capability_contributions
