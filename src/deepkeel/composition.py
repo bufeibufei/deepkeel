@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
-from typing import Mapping, Self, TypedDict, Unpack
+from typing import Any, Mapping, Self, TypedDict, Unpack, cast
 
 from deepkeel.async_ports import (
     AsyncDurableCheckpointStore,
@@ -128,6 +128,67 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimePersistencePorts:
+    """Durability and idempotency ports for a production runtime."""
+
+    checkpointer: GraphCheckpointer | None = None
+    checkpoint_store: DurableCheckpointStore | None = None
+    async_checkpoint_store: AsyncDurableCheckpointStore | None = None
+    runtime_state_store: RuntimeStateStore | None = None
+    async_runtime_state_store: AsyncRuntimeStateStore | None = None
+    event_journal: RuntimeEventJournal | None = None
+    async_event_journal: AsyncRuntimeEventJournal | None = None
+    run_lease_store: RunLeaseStore | None = None
+    async_run_lease_store: AsyncRunLeaseStore | None = None
+    model_invocation_store: ModelInvocationStore | None = None
+    tool_execution_store: ToolExecutionStore | None = None
+    run_lease_owner_id: str = ""
+    run_lease_ttl_seconds: float = 60.0
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeGovernancePorts:
+    """Policy, budget, health and control ports evaluated during execution."""
+
+    model_router: ModelRouter | None = None
+    model_health_store: ModelHealthStore | None = None
+    policy_engine: PolicyEngine | None = None
+    budget_ledger: BudgetLedger | None = None
+    run_control: RunControl | None = None
+    tool_preflight: ToolPreflight | None = None
+    secret_provider: SecretProvider | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeObservabilityPorts:
+    """Diagnostics, invocation recording and result projection ports."""
+
+    model_invocation_recorder: ModelInvocationRecorder | None = None
+    telemetry: TelemetryPort | None = None
+    reference_projector: ReferenceProjector | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeExecutionPorts:
+    """Execution-time customization that does not own durable state."""
+
+    system_prompt_factory: SystemPromptFactory | None = None
+    session_factory: SessionFactory | None = None
+    context_builder: ContextBuilder | None = None
+    context_window_manager: ContextWindowManager | None = None
+    state_migrations: StateMigrationRegistry | None = None
+    async_stream_buffer_size: int = 128
+    async_cancel_timeout_seconds: float = 5.0
+    reuse_compiled_graph: bool = True
+    graph_durability: GraphDurability = "exit"
+    tool_view_mode: ToolViewMode = "legacy"
+    hook_runner: HookRunner | None = None
+    tool_discovery_port: ToolDiscoveryPort | None = None
+    entry_tool_skill_activator: EntryToolSkillActivator | None = None
+    capability_services: Mapping[str, object] = field(default_factory=dict)
+
+
+@dataclass(frozen=True, slots=True)
 class RuntimePorts:
     """Infrastructure ports used to compose a product-neutral runtime."""
 
@@ -168,6 +229,34 @@ class RuntimePorts:
     tool_discovery_port: ToolDiscoveryPort | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
     capability_services: Mapping[str, object] = field(default_factory=dict)
+
+    @classmethod
+    def from_bundles(
+        cls,
+        *,
+        persistence: RuntimePersistencePorts | None = None,
+        governance: RuntimeGovernancePorts | None = None,
+        observability: RuntimeObservabilityPorts | None = None,
+        execution: RuntimeExecutionPorts | None = None,
+        **overrides: Unpack[RuntimePortChanges],
+    ) -> "RuntimePorts":
+        """Compose grouped ports while retaining explicit flat overrides."""
+
+        _validate_port_changes(overrides)
+        values: dict[str, object] = {}
+        for bundle in (persistence, governance, observability, execution):
+            if bundle is None:
+                continue
+            values.update(
+                {
+                    item.name: getattr(bundle, item.name)
+                    for item in fields(bundle)
+                }
+            )
+        values.update(overrides)
+        # Dataclass field discovery validates the keys above; the cast preserves
+        # precise field types at the public constructor boundary for static tools.
+        return cls(**cast(Any, values))
 
     @classmethod
     def governed(

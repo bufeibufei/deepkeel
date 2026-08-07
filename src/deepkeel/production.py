@@ -1,10 +1,59 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal, Protocol
 
-if TYPE_CHECKING:
-    from deepkeel.composition import RuntimePorts
+
+class ProductionRuntimePorts(Protocol):
+    """Minimal structural view required by the production-readiness gate."""
+
+    @property
+    def checkpointer(self) -> Any: ...
+
+    @property
+    def checkpoint_store(self) -> Any: ...
+
+    @property
+    def async_checkpoint_store(self) -> Any: ...
+
+    @property
+    def runtime_state_store(self) -> Any: ...
+
+    @property
+    def async_runtime_state_store(self) -> Any: ...
+
+    @property
+    def event_journal(self) -> Any: ...
+
+    @property
+    def async_event_journal(self) -> Any: ...
+
+    @property
+    def run_lease_store(self) -> Any: ...
+
+    @property
+    def async_run_lease_store(self) -> Any: ...
+
+    @property
+    def model_invocation_store(self) -> Any: ...
+
+    @property
+    def tool_execution_store(self) -> Any: ...
+
+    @property
+    def budget_ledger(self) -> Any: ...
+
+    @property
+    def model_health_store(self) -> Any: ...
+
+    @property
+    def run_control(self) -> Any: ...
+
+    @property
+    def telemetry(self) -> Any: ...
+
+    @property
+    def tool_view_mode(self) -> str: ...
 
 
 ReadinessSeverity = Literal["error", "warning"]
@@ -64,7 +113,7 @@ class ProductionConfigurationError(RuntimeError):
         super().__init__(f"DeepKeel production configuration is not ready: {summary}")
 
 
-def assess_production_readiness(ports: "RuntimePorts") -> ProductionReadinessReport:
+def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionReadinessReport:
     """Evaluate whether explicit Host ports are safe for multi-worker use."""
 
     issues: list[ProductionReadinessIssue] = []
@@ -175,7 +224,7 @@ def _require_one(
 
 def _reject_known_local_ports(
     issues: list[ProductionReadinessIssue],
-    ports: "RuntimePorts",
+    ports: ProductionRuntimePorts,
 ) -> None:
     candidates = {
         "checkpointer": ports.checkpointer,
@@ -212,7 +261,7 @@ def _reject_known_local_ports(
 
 def _warn_blocking_async_ports(
     issues: list[ProductionReadinessIssue],
-    ports: "RuntimePorts",
+    ports: ProductionRuntimePorts,
 ) -> None:
     for port, synchronous, asynchronous in (
         ("checkpoint_store", ports.checkpoint_store, ports.async_checkpoint_store),

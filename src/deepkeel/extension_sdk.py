@@ -1,12 +1,5 @@
 """Versioned Extension SDK for tools, Skills, Capability Packs, and artifacts."""
 
-from deepkeel.artifact_views import (
-    ArtifactView,
-    ArtifactViewAction,
-    ArtifactViewField,
-    project_artifact_view,
-    project_artifact_views,
-)
 from deepkeel.capabilities import (
     ArtifactTypeSpec,
     CapabilityCatalog,
@@ -38,7 +31,6 @@ from deepkeel.handoffs import (
 from deepkeel.prompts import harness_system_prompt
 from deepkeel.references import (
     DefaultReferenceProjector,
-    EvidenceBundle,
     ReferenceProjection,
     ReferenceProjector,
 )
@@ -113,9 +105,6 @@ EXTENSION_SDK_API = (
     "ArtifactPresentationFieldSpec",
     "ArtifactPresentationSpec",
     "ArtifactTypeSpec",
-    "ArtifactView",
-    "ArtifactViewAction",
-    "ArtifactViewField",
     "CapabilityCatalog",
     "CapabilityBudgetSpec",
     "CapabilityContribution",
@@ -134,7 +123,6 @@ EXTENSION_SDK_API = (
     "ClarificationRequest",
     "CompiledSkillSpec",
     "DefaultReferenceProjector",
-    "EvidenceBundle",
     "EntryToolActivationDecision",
     "EntryToolActivationRequest",
     "EntryToolSkillActivator",
@@ -185,8 +173,6 @@ EXTENSION_SDK_API = (
     "load_skill_packages",
     "load_capability_manifest",
     "standardize_pending_action_payload",
-    "project_artifact_view",
-    "project_artifact_views",
     "resolve_tool_view",
     "tool_discovery_spec",
     "validate_capability_pack",

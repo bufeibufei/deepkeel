@@ -31,7 +31,14 @@ from deepkeel.budget import (
     UsageReport,
     preview_budget,
 )
-from deepkeel.composition import HarnessRuntimeBuilder, RuntimePorts
+from deepkeel.composition import (
+    HarnessRuntimeBuilder,
+    RuntimeExecutionPorts,
+    RuntimeGovernancePorts,
+    RuntimeObservabilityPorts,
+    RuntimePersistencePorts,
+    RuntimePorts,
+)
 from deepkeel.event_journal import (
     EventJournalConflict,
     InMemoryRuntimeEventJournal,
@@ -291,6 +298,10 @@ ADAPTER_SDK_API = (
     "RunLeaseLost",
     "RunLeaseStore",
     "RuntimePorts",
+    "RuntimeExecutionPorts",
+    "RuntimeGovernancePorts",
+    "RuntimeObservabilityPorts",
+    "RuntimePersistencePorts",
     "RuntimeEventJournal",
     "RuntimeSession",
     "SecretProvider",

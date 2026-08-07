@@ -9,10 +9,10 @@ from typing import Any, Protocol
 from deepkeel.context_contracts import ContextCheckpoint
 from deepkeel.context_contracts import ModelContextProfile
 from deepkeel.context_planning import ContextBudgetPlanner
+from deepkeel.token_estimation import ConservativeTokenEstimator, TokenEstimator
 
 
-class TokenEstimatorLike(Protocol):
-    def estimate(self, value: Any) -> int: ...
+TokenEstimatorLike = TokenEstimator
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,11 +49,7 @@ class DeterministicWorkingContextCompactor:
     """Token-aware L2 reducer that never splits tool-call/result groups."""
 
     def __init__(self, estimator: TokenEstimatorLike | None = None) -> None:
-        if estimator is None:
-            from deepkeel.context_window import ConservativeTokenEstimator
-
-            estimator = ConservativeTokenEstimator()
-        self.estimator = estimator
+        self.estimator = estimator or ConservativeTokenEstimator()
 
     def compact(
         self,
@@ -167,10 +163,7 @@ def prepare_model_input_context(
 ) -> ModelInputContextResult:
     """Apply the final model-specific budget after routing selected a provider."""
 
-    if estimator is None:
-        from deepkeel.context_window import ConservativeTokenEstimator
-
-        estimator = ConservativeTokenEstimator()
+    estimator = estimator or ConservativeTokenEstimator()
     planner = ContextBudgetPlanner()
     tool_tokens = estimator.estimate(tools) if tools else 0
     l1_messages = [

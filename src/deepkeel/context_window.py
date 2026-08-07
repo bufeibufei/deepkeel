@@ -3,7 +3,6 @@ from __future__ import annotations
 import copy
 import hashlib
 import json
-import math
 from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal, Protocol
@@ -26,26 +25,8 @@ from deepkeel.context_planning import (
     ContextPlanningPolicy,
 )
 from deepkeel.context_validation import validate_context_items
+from deepkeel.token_estimation import ConservativeTokenEstimator, TokenEstimator
 from deepkeel.type_narrowing import as_dict
-
-
-class TokenEstimator(Protocol):
-    estimator_id: str
-
-    def estimate(self, value: Any) -> int: ...
-
-
-class ConservativeTokenEstimator:
-    """Dependency-free estimator that is conservative for CJK and JSON text."""
-
-    estimator_id = "conservative-cjk-v1"
-
-    def estimate(self, value: Any) -> int:
-        if not isinstance(value, str):
-            value = json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
-        ascii_count = sum(1 for char in value if ord(char) < 128)
-        non_ascii_count = len(value) - ascii_count
-        return max(1, math.ceil(ascii_count / 4) + non_ascii_count)
 
 
 @dataclass(frozen=True, slots=True)

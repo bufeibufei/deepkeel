@@ -12,6 +12,18 @@ The package root and the versioned `*_sdk` modules are public. Other modules are
 implementation details unless explicitly documented. Persisted schema versions
 and Capability Pack contracts evolve independently from the package version.
 
+Every public symbol has exactly one canonical SDK layer. The machine-readable
+manifest is available from `deepkeel.public_api.PUBLIC_API_MANIFEST`; new
+cross-layer re-exports are rejected by the release tests. Layers use three
+stability levels:
+
+- `stable`: runtime, extension, and memory contracts covered by the v4
+  compatibility policy;
+- `advanced`: adapter and MCP integration contracts intended for infrastructure
+  authors and changed only through an explicit compatibility review;
+- `experimental`: bounded orchestration contracts that remain eligible for
+  refinement during release candidates.
+
 Release candidates are intended for Host compatibility testing. Stable v4
 releases preserve documented SDK and persisted-contract behavior; deprecations
 must provide a migration path before removal in a later major version.

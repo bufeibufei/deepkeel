@@ -50,6 +50,10 @@ from deepkeel.adapter_sdk import (
     ModelInvocation,
     ModelProviderInfo,
     ModelTurn,
+    RuntimeExecutionPorts,
+    RuntimeGovernancePorts,
+    RuntimeObservabilityPorts,
+    RuntimePersistencePorts,
     RuntimePorts,
     TelemetryRecord,
     UsageReport,
@@ -57,6 +61,7 @@ from deepkeel.adapter_sdk import (
 from deepkeel.handoffs import HandoffSpec
 from deepkeel.subagents import SubAgentSpec
 from deepkeel.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
+from deepkeel.public_api import PUBLIC_API_CANONICAL_LAYER, PUBLIC_API_MANIFEST
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
@@ -94,6 +99,24 @@ def test_public_api_matches_the_frozen_v4_snapshot() -> None:
         "for an intentional contract release"
     )
 
+
+def test_public_api_has_one_canonical_layer_and_declared_stability() -> None:
+    exported = [
+        symbol
+        for symbols in PUBLIC_API_BY_LAYER.values()
+        for symbol in symbols
+    ]
+
+    assert len(exported) == len(set(exported))
+    assert set(PUBLIC_API_CANONICAL_LAYER) == set(exported)
+    assert {layer.name: layer.stability for layer in PUBLIC_API_MANIFEST} == {
+        "runtime": "stable",
+        "extension": "stable",
+        "orchestration": "experimental",
+        "mcp": "advanced",
+        "memory": "stable",
+        "adapter": "advanced",
+    }
 
 @pytest.mark.parametrize(
     "module,layer",
@@ -268,6 +291,24 @@ def test_v1_capability_pack_is_explicitly_rejected() -> None:
 
 def test_runtime_ports_dataclass_remains_directly_constructible() -> None:
     assert RuntimePorts().checkpoint_store is None
+
+
+def test_runtime_ports_compose_typed_bundles_with_explicit_overrides() -> None:
+    telemetry = InMemoryTelemetry()
+    ledger = InMemoryBudgetLedger()
+    ports = RuntimePorts.from_bundles(
+        persistence=RuntimePersistencePorts(run_lease_owner_id="worker-1"),
+        governance=RuntimeGovernancePorts(budget_ledger=ledger),
+        observability=RuntimeObservabilityPorts(telemetry=telemetry),
+        execution=RuntimeExecutionPorts(tool_view_mode="shadow"),
+        run_lease_ttl_seconds=90,
+    )
+
+    assert ports.run_lease_owner_id == "worker-1"
+    assert ports.run_lease_ttl_seconds == 90
+    assert ports.budget_ledger is ledger
+    assert ports.telemetry is telemetry
+    assert ports.tool_view_mode == "shadow"
 
 
 def test_explicit_model_adapter_and_telemetry_port_run_without_legacy_reflection() -> None:
