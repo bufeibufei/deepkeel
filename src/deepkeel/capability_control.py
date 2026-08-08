@@ -260,7 +260,10 @@ class CapabilityPackageManager:
             CapabilityPackageRecord(manifest=manifest, enabled=True)
             for manifest in remaining.values()
         )
-        return self._save(snapshot, tuple(records))
+        normalized = tuple(sorted(records, key=lambda item: item.manifest.id))
+        if normalized == snapshot.packages:
+            return snapshot
+        return self._save(snapshot, normalized)
 
     def generation(
         self,

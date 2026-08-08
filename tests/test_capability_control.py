@@ -210,3 +210,14 @@ def test_reconcile_rejects_same_version_content_drift() -> None:
         manager.reconcile(
             (_manifest("demo.domain", "1.0.0", tools=("demo.changed",)),)
         )
+
+
+def test_reconcile_is_idempotent_for_an_unchanged_generation() -> None:
+    manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
+    manifest = _manifest("demo.domain", "1.0.0")
+    installed = manager.install(manifest)
+
+    reconciled = manager.reconcile((manifest,))
+
+    assert reconciled == installed
+    assert reconciled.revision == 1
