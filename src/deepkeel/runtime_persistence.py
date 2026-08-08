@@ -216,6 +216,7 @@ async def event_latest_sequence(
     fallback: int = 0,
 ) -> int:
     resolved_scope = scope or RuntimeScope()
+    latest: Any
     if runtime.async_event_journal is not None:
         operation = scoped_adapter_operation(
             runtime.async_event_journal,
@@ -223,18 +224,22 @@ async def event_latest_sequence(
             resolved_scope,
         )
         if getattr(operation, "__name__", "") == "latest_sequence_scoped":
-            return await operation(run_id, scope=resolved_scope)
-        return await operation(run_id)
-    if runtime.event_journal is not None:
+            latest = await operation(run_id, scope=resolved_scope)
+        else:
+            latest = await operation(run_id)
+    elif runtime.event_journal is not None:
         operation = scoped_adapter_operation(
             runtime.event_journal,
             "latest_sequence",
             resolved_scope,
         )
         if getattr(operation, "__name__", "") == "latest_sequence_scoped":
-            return await run_sync_adapter(operation, run_id, scope=resolved_scope)
-        return await run_sync_adapter(operation, run_id)
-    return max(0, int(fallback))
+            latest = await run_sync_adapter(operation, run_id, scope=resolved_scope)
+        else:
+            latest = await run_sync_adapter(operation, run_id)
+    else:
+        latest = fallback
+    return max(0, int(latest if latest is not None else fallback))
 
 
 def host_owns_terminal_settlement(runtime: Any) -> bool:

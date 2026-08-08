@@ -207,3 +207,23 @@ def test_runtime_fails_closed_before_publishing_when_journal_append_fails() -> N
         )
 
     assert published == []
+
+
+def test_runtime_normalizes_missing_journal_sequence_to_zero() -> None:
+    class MissingSequenceJournal(InMemoryRuntimeEventJournal):
+        def latest_sequence(self, _run_id):
+            return None
+
+    journal = MissingSequenceJournal()
+    runtime = HarnessRuntimeBuilder().with_ports(RuntimePorts(event_journal=journal)).build()
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="hello",
+            run_id="missing-journal-sequence",
+        ),
+        provider=ScriptedProvider(),
+    )
+
+    assert result.events
+    assert result.events[0].sequence == 1
