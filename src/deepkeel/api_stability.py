@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import dataclasses
 import inspect
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Callable, Literal, Mapping, Sequence, cast
@@ -146,7 +147,19 @@ def _signature_descriptor(value: object) -> dict[str, Any]:
 def _annotation_name(value: object) -> str:
     if value is inspect.Parameter.empty or value is inspect.Signature.empty:
         return ""
-    return str(value).replace("typing.", "")
+    rendered = str(value).replace("typing.", "")
+    # CPython 3.14 exposes extra ForwardRef implementation metadata and renders
+    # Optional aliases with PEP 604 syntax. Neither changes the SDK contract.
+    rendered = re.sub(
+        r"ForwardRef\((['\"].*?['\"]), is_class=True\)",
+        r"ForwardRef(\1)",
+        rendered,
+    )
+    if rendered.endswith(" | None"):
+        rendered = f"Optional[{rendered[:-7]}]"
+    if rendered.startswith("None | "):
+        rendered = f"Optional[{rendered[7:]}]"
+    return rendered
 
 
 def _stable_default(value: object) -> Any:
