@@ -145,6 +145,27 @@ Configure either the synchronous or asynchronous form of one port, never both.
 `astream()` adds a bounded same-loop backlog to its bounded queue and coalesces
 consecutive answer deltas without losing text.
 
+Adapters may publish `AdapterCapabilities` through the Adapter SDK. Production
+readiness validates durability, process sharing, RuntimeScope support,
+transactionality and cancellation safety from that declaration instead of
+guessing from class names. Undeclared third-party adapters remain compatible,
+but should add the declaration before claiming production support. The bundled
+PostgreSQL composition exposes one async authority per persistence port and
+bridges its thread-safe psycopg adapters off the Host event loop.
+
+Run `certify_model_provider()` for every configured model binding. Static
+certification checks declared streaming, native-tool and JSON Schema
+capabilities; the optional live probe verifies actual text, streaming, forced
+tool and structured-output behavior. Certification is binding-specific because
+the same model name can behave differently behind different endpoints or
+credentials.
+
+Remote Streamable HTTP MCP denies private, loopback and link-local destinations
+by default, validates DNS before every request, refuses redirects and inherited
+proxy credentials, and enforces request/response byte ceilings. Hosts must use
+an explicit hostname allowlist; private-network access is an opt-in intended
+only for controlled internal MCP servers.
+
 ## Evaluation
 
 `EvalSuiteRunner` provides deterministic regression checks for runtime status,

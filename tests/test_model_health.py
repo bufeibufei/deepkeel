@@ -9,6 +9,7 @@ from deepkeel.model import RoutedModelGateway, _json_arguments
 from deepkeel.model_failures import ModelToolArgumentsError, ModelToolContractError
 from deepkeel.model_health import InMemoryModelHealthStore
 from deepkeel.model_routing import ModelStepContext
+from deepkeel.model_step_execution import scoped_model_health_provider_id
 from deepkeel.policy import DefaultPolicyEngine
 
 
@@ -50,9 +51,7 @@ class MalformedThenValidToolProvider:
     def complete_chat(self, messages, *_args, **_kwargs):
         self.calls.append(messages)
         arguments = (
-            '{"subject_scope" "person"}'
-            if len(self.calls) == 1
-            else '{"subject_scope":"person"}'
+            '{"subject_scope" "person"}' if len(self.calls) == 1 else '{"subject_scope":"person"}'
         )
         return {
             "message": {
@@ -143,11 +142,25 @@ def test_in_memory_health_store_opens_and_recovers_circuit() -> None:
     assert second.is_available() is False
     assert second.consecutive_failures == 2
 
-    recovered = second.is_available(
-        now=datetime.now(UTC) + timedelta(seconds=61)
-    )
+    recovered = second.is_available(now=datetime.now(UTC) + timedelta(seconds=61))
     assert recovered is True
     assert store.record_success("provider", "model").consecutive_failures == 0
+
+
+def test_model_health_identity_isolated_by_tenant_and_binding() -> None:
+    first = replace(
+        _context(),
+        governance_scope={"tenant_id": "tenant-a", "model_binding_id": "binding-1"},
+    )
+    second = replace(
+        _context(),
+        governance_scope={"tenant_id": "tenant-b", "model_binding_id": "binding-1"},
+    )
+
+    assert scoped_model_health_provider_id("provider", _context()) == "provider"
+    assert scoped_model_health_provider_id("provider", first) != (
+        scoped_model_health_provider_id("provider", second)
+    )
 
 
 def test_routed_gateway_records_failure_and_falls_back() -> None:
@@ -169,10 +182,13 @@ def test_routed_gateway_records_failure_and_falls_back() -> None:
     )
 
     assert result.content == "fast-model"
-    assert health.snapshot(
-        gateway.providers["reasoning"].info.provider_id,
-        "reasoning-model",
-    ).is_available() is False
+    assert (
+        health.snapshot(
+            gateway.providers["reasoning"].info.provider_id,
+            "reasoning-model",
+        ).is_available()
+        is False
+    )
 
 
 def test_routed_gateway_skips_an_open_model_without_invoking_it() -> None:
@@ -302,10 +318,7 @@ def test_routed_gateway_repairs_malformed_forced_tool_arguments_once() -> None:
     assert provider.calls[1][0]["role"] == "system"
     assert "invalid or truncated JSON arguments" in provider.calls[1][0]["content"]
     assert "attachment://face-image" in str(provider.calls[1])
-    assert any(
-        route.get("failure_category") == "tool_arguments_invalid"
-        for route in routes
-    )
+    assert any(route.get("failure_category") == "tool_arguments_invalid" for route in routes)
 
 
 def test_routed_gateway_repairs_missing_forced_tool_call_once() -> None:
@@ -387,14 +400,16 @@ def test_tool_contract_repairs_do_not_open_provider_health_circuit() -> None:
         },
         forced_tool_name="vision.read_face",
     )
-    tools = [{
-        "type": "function",
-        "function": {
-            "name": "vision.read_face",
-            "description": "Read visible facial features.",
-            "parameters": {"type": "object", "properties": {}},
-        },
-    }]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "vision.read_face",
+                "description": "Read visible facial features.",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
 
     with pytest.raises(ModelToolContractError):
         gateway.run_turn(
@@ -427,17 +442,13 @@ def test_json_arguments_repairs_structural_eof_truncation() -> None:
 
     assert parsed == {
         "quality": {"suitable": True},
-        "observations": [
-            {"region": "entry", "visible_feature": "clear path"}
-        ],
+        "observations": [{"region": "entry", "visible_feature": "clear path"}],
         "conclusion": "keep the route unobstructed",
     }
 
 
 def test_json_arguments_repairs_structural_trailing_comma() -> None:
-    assert _json_arguments('{"quality":{"suitable":true},') == {
-        "quality": {"suitable": True}
-    }
+    assert _json_arguments('{"quality":{"suitable":true},') == {"quality": {"suitable": True}}
 
 
 def test_json_arguments_rejects_non_structural_json_corruption() -> None:

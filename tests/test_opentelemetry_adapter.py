@@ -30,6 +30,8 @@ def test_adapter_preserves_trace_identity_and_safe_attributes() -> None:
         attributes={
             "tool_name": "lookup",
             "error_code": "TOOL_TIMEOUT",
+            "prompt": "private prompt",
+            "duration_ms": 125,
             "unsafe": {"prompt": "private"},
         },
     )
@@ -45,6 +47,8 @@ def test_adapter_preserves_trace_identity_and_safe_attributes() -> None:
     assert span.attributes["deepkeel.attr.tool_name"] == "lookup"
     assert span.attributes["deepkeel.attr.error_code"] == "TOOL_TIMEOUT"
     assert "deepkeel.attr.unsafe" not in span.attributes
+    assert "deepkeel.attr.prompt" not in span.attributes
+    assert span.attributes["deepkeel.attr.duration_ms"] == 125
     assert "deepkeel.user_id" not in span.attributes
     assert span.events[0].name == "tool.failed"
 

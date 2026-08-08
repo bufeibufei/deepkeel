@@ -24,9 +24,14 @@ try {
         throw "DeepKeel type contracts failed."
     }
 
-    & uv run pytest -q --cov=deepkeel --cov-report=term --cov-fail-under=80
+    & uv run pytest -q --cov=deepkeel --cov-report=term --cov-report=json:coverage.json --cov-fail-under=80
     if ($LASTEXITCODE -ne 0) {
         throw "DeepKeel package contract tests failed."
+    }
+
+    & uv run python verification/quality_budget.py --coverage coverage.json
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel critical coverage or complexity budget failed."
     }
 
     & uv run python verification/concurrency_benchmark.py --requests 300 --workers 32

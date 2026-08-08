@@ -76,12 +76,11 @@ def envelope_runtime_event(
     scope: RuntimeScope | None = None,
 ) -> dict[str, Any]:
     projected = project_runtime_event(event)
-    source_type = str(
-        projected.get("source_event_type") or projected.get("event_type") or ""
-    )
-    event_key = f"{run_id}:{turn_id}:{sequence}:{source_type}"
+    source_type = str(projected.get("source_event_type") or projected.get("event_type") or "")
     visibility = str(projected.get("visibility") or "internal")
     resolved_scope = scope or RuntimeScope()
+    scope_key = "\x1f".join(resolved_scope.storage_key)
+    event_key = f"{scope_key}:{run_id}:{turn_id}:{sequence}:{source_type}"
     return {
         **projected,
         "schema_version": "harness-runtime-event-v1",

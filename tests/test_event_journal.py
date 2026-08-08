@@ -14,6 +14,7 @@ from deepkeel.events import (
 )
 from deepkeel.runtime_api import RuntimeEventEnvelope
 from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.scope import RuntimeScope
 
 
 class ScriptedProvider:
@@ -28,7 +29,12 @@ class ScriptedProvider:
         }
 
 
-def _event(*, sequence: int, event_type: str = "run.created") -> RuntimeEventEnvelope:
+def _event(
+    *,
+    sequence: int,
+    event_type: str = "run.created",
+    scope: RuntimeScope | None = None,
+) -> RuntimeEventEnvelope:
     return RuntimeEventEnvelope.model_validate(
         envelope_runtime_event(
             {
@@ -41,6 +47,7 @@ def _event(*, sequence: int, event_type: str = "run.created") -> RuntimeEventEnv
             turn_id="turn-1",
             sequence=sequence,
             run_version=3,
+            scope=scope,
         )
     )
 
@@ -105,11 +112,42 @@ def test_in_memory_journal_rejects_identity_and_sequence_conflicts():
         journal.append(_event(sequence=1, event_type="agent.reasoning"))
 
 
+def test_event_journal_isolates_identical_run_ids_by_runtime_scope() -> None:
+    journal = InMemoryRuntimeEventJournal()
+    first_scope = RuntimeScope(tenant_id="tenant-a", user_id="user-1")
+    second_scope = RuntimeScope(tenant_id="tenant-b", user_id="user-1")
+
+    first = _event(sequence=1, scope=first_scope)
+    second = _event(sequence=1, scope=second_scope)
+    journal.append_scoped(first, scope=first_scope)
+    journal.append_scoped(second, scope=second_scope)
+
+    assert first.event_id != second.event_id
+    assert journal.latest_sequence_scoped("run-1", scope=first_scope) == 1
+    assert journal.latest_sequence_scoped("run-1", scope=second_scope) == 1
+    assert journal.read_after_scoped("run-1", scope=first_scope) == (first,)
+    assert journal.read_after_scoped("run-1", scope=second_scope) == (second,)
+    with pytest.raises(EventJournalConflict, match="scope is required"):
+        journal.read_after("run-1")
+
+
+def test_runtime_replays_events_with_explicit_runtime_scope() -> None:
+    journal = InMemoryRuntimeEventJournal()
+    runtime = HarnessRuntimeBuilder().with_ports(RuntimePorts(event_journal=journal)).build()
+    scope = RuntimeScope(tenant_id="tenant-a", user_id="user-a")
+
+    runtime.run(
+        RuntimeRequest(question="hello", run_id="shared", scope=scope),
+        provider=ScriptedProvider(),
+    )
+
+    assert runtime.replay_events("shared", scope=scope)
+    assert runtime.replay_events("shared")
+
+
 def test_runtime_journals_events_before_publishing_and_replays_from_cursor():
     journal = InMemoryRuntimeEventJournal()
-    runtime = HarnessRuntimeBuilder().with_ports(
-        RuntimePorts(event_journal=journal)
-    ).build()
+    runtime = HarnessRuntimeBuilder().with_ports(RuntimePorts(event_journal=journal)).build()
     published: list[dict[str, object]] = []
 
     result = runtime.run(
@@ -128,9 +166,7 @@ def test_runtime_journals_events_before_publishing_and_replays_from_cursor():
     assert persisted
     assert all(event.run_id == "run-runtime" for event in persisted)
     assert all(event.event_id for event in persisted)
-    assert [event.sequence for event in persisted] == sorted(
-        event.sequence for event in persisted
-    )
+    assert [event.sequence for event in persisted] == sorted(event.sequence for event in persisted)
     published_ids = {item["event_id"] for item in published}
     for event in persisted:
         if event.event_type == "runtime.checkpoint.cleanup.recorded":
@@ -159,9 +195,9 @@ def test_runtime_fails_closed_before_publishing_when_journal_append_fails() -> N
             return ()
 
     published: list[dict[str, object]] = []
-    runtime = HarnessRuntimeBuilder().with_ports(
-        RuntimePorts(event_journal=FailingJournal())
-    ).build()
+    runtime = (
+        HarnessRuntimeBuilder().with_ports(RuntimePorts(event_journal=FailingJournal())).build()
+    )
 
     with pytest.raises(AgentEventPersistenceError, match="journal append failed"):
         runtime.run(

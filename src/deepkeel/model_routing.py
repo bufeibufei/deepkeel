@@ -23,6 +23,13 @@ class ModelStepContext:
     forced_tool_name: str = ""
     governance_scope: dict[str, Any] = field(default_factory=dict)
     deadline_monotonic: float | None = None
+    operational_run_id: str = ""
+
+    @property
+    def accounting_run_id(self) -> str:
+        """Opaque identity for shared budget, control, and accounting stores."""
+
+        return self.operational_run_id or self.run_id
 
 
 @dataclass(frozen=True, slots=True)

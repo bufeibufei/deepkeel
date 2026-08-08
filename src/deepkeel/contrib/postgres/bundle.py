@@ -10,7 +10,13 @@ from deepkeel.composition import (
     RuntimeExecutionPorts,
     RuntimePorts,
 )
-from deepkeel.async_ports import AsyncToolExecutionStoreAdapter
+from deepkeel.async_ports import (
+    AsyncDurableCheckpointStoreAdapter,
+    AsyncRunLeaseStoreAdapter,
+    AsyncRuntimeEventJournalAdapter,
+    AsyncRuntimeStateStoreAdapter,
+    AsyncToolExecutionStoreAdapter,
+)
 
 from deepkeel.contrib.postgres.checkpoint_store import PostgresDurableCheckpointStore
 from deepkeel.contrib.postgres.database import PostgresDatabase
@@ -86,10 +92,10 @@ class PostgresRuntimeBundle:
         return RuntimePorts.from_bundles(
             persistence=RuntimePersistencePorts(
                 checkpointer=checkpointer,
-                checkpoint_store=self.checkpoint_store,
-                runtime_state_store=self.runtime_state_store,
-                event_journal=self.event_journal,
-                run_lease_store=self.run_lease_store,
+                async_checkpoint_store=AsyncDurableCheckpointStoreAdapter(self.checkpoint_store),
+                async_runtime_state_store=AsyncRuntimeStateStoreAdapter(self.runtime_state_store),
+                async_event_journal=AsyncRuntimeEventJournalAdapter(self.event_journal),
+                async_run_lease_store=AsyncRunLeaseStoreAdapter(self.run_lease_store),
                 model_invocation_store=self.model_invocation_store,
                 async_tool_execution_store=AsyncToolExecutionStoreAdapter(
                     self.tool_execution_store

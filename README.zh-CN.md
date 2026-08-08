@@ -199,6 +199,10 @@ SubAgent 编排是有界的，受并发、深度、预算和父运行取消控�
 密钥通过 `SecretProvider` 获取，不进入 Prompt、公开事件或 Artifact。生产 Host
 还应在 API 边界执行租户授权，并对外部写操作配置确认策略。
 
+远程 Streamable HTTP MCP 默认拒绝私网、回环和链路本地地址，每次请求前重新校验
+DNS，禁止重定向和环境代理凭据，并限制请求与响应体大小。生产环境应配置主机名
+白名单；只有受控的内部 MCP 才显式开启私网访问。
+
 ## 生产就绪门禁
 
 `build()` 适合本地开发和测试。生产 Worker 应使用可执行门禁：
@@ -212,6 +216,11 @@ runtime = builder.build_production()
 门禁会检查必需 Host 端口、同步/异步端口歧义、已知 `InMemory*`/`Noop*` 实现和
 异步路径中的阻塞适配器。错误会阻止构建，告警会保留在报告中。自定义数据库
 适配器仍需运行 `deepkeel.adapter_sdk` 中对应的 conformance verifier。
+
+适配器可声明 `AdapterCapabilities`，门禁会校验持久化、跨进程共享、
+`RuntimeScope`、事务和取消安全能力。模型接入应运行
+`certify_model_provider()`；可选在线探针会实际验证文本、流式、原生工具调用和
+JSON Schema，而不是只相信模型名称或静态配置。
 
 详细部署清单见 [生产就绪文档](docs/production-readiness.md)。
 

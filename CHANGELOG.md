@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Isolate runtime events, leases, tool/model idempotency, checkpoints and
+  operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
+  migration and cross-tenant contract tests.
+- Move thread-safe synchronous PostgreSQL, model, tool, telemetry and
+  cancellation operations off the async Host loop; preserve bounded streaming
+  and cooperative disconnect cancellation.
+- Add adapter capability declarations, executable model-provider
+  certification, OpenTelemetry metrics, MCP egress/size controls, semantic API
+  snapshots and critical coverage/complexity release budgets.
+
 ## 4.0.0 - 2026-08-08
 
 - Add explicit development, testing, and production runtime profiles. Production

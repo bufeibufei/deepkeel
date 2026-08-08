@@ -7,6 +7,7 @@ from typing import Any, Callable
 
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
 from deepkeel.runtime_api import RuntimeStreamEvent
+from deepkeel.scope import scoped_adapter_operation
 from deepkeel.scope import RuntimeScope
 from deepkeel.telemetry import TelemetryPort, TelemetryRecord
 from deepkeel.type_narrowing import as_dict
@@ -53,15 +54,13 @@ class RuntimeEventEmitter:
         self.telemetry_last_error = ""
         self._sequence = initial_sequence
         self._lock = Lock()
-        self._journal_loop = (
-            asyncio.get_running_loop() if async_event_journal is not None else None
-        )
-        self._async_deliveries: deque[
-            tuple[RuntimeStreamEvent | None, dict[str, Any]]
-        ] = deque()
+        self._journal_loop = asyncio.get_running_loop() if async_event_journal is not None else None
+        self._async_deliveries: deque[tuple[RuntimeStreamEvent | None, dict[str, Any]]] = deque()
         self._async_delivery_limit = 1_024
         self._async_delivery_task: asyncio.Task[None] | None = None
         self._async_delivery_error: Exception | None = None
+        self._last_async_control_check = 0.0
+        self._async_control_check_interval = 0.25
 
     @property
     def sequence(self) -> int:
@@ -75,7 +74,8 @@ class RuntimeEventEmitter:
         self._raise_async_delivery_error()
         if self.execution_fence is not None:
             self.execution_fence.raise_if_lost()
-        self.run_control.raise_if_cancelled(self.run_id)
+        if self.async_event_journal is None:
+            self.run_control.raise_if_cancelled(self.scope.qualify_identity(self.run_id))
         with self._lock:
             self._sequence += 1
             projected = envelope_runtime_event(
@@ -98,17 +98,8 @@ class RuntimeEventEmitter:
                 self.answer_delta_streamed = True
             if not projected.get("ephemeral"):
                 self.events.append(projected)
-        try:
-            self.telemetry.record(
-                TelemetryRecord.from_runtime_event(
-                    projected,
-                    run_id=self.run_id,
-                    thread_id=self.thread_id,
-                    turn_id=self.turn_id,
-                )
-            )
-        except Exception as exc:
-            self.record_telemetry_error(exc)
+        if self.async_event_journal is None:
+            self._record_telemetry(projected)
         if self.async_event_journal is not None:
             self._schedule_async_delivery(
                 envelope if not envelope.ephemeral else None,
@@ -128,12 +119,60 @@ class RuntimeEventEmitter:
             if not self._async_deliveries:
                 break
             self._ensure_async_delivery_task()
+        if self.async_event_journal is not None:
+            await self._acheck_cancelled(force=True)
         self._raise_async_delivery_error()
+
+    def _record_telemetry(self, projected: dict[str, Any]) -> None:
+        try:
+            self.telemetry.record(
+                TelemetryRecord.from_runtime_event(
+                    projected,
+                    run_id=self.run_id,
+                    thread_id=self.thread_id,
+                    turn_id=self.turn_id,
+                )
+            )
+        except Exception as exc:
+            self.record_telemetry_error(exc)
+
+    async def _arecord_telemetry(self, projected: dict[str, Any]) -> None:
+        try:
+            await asyncio.to_thread(
+                self.telemetry.record,
+                TelemetryRecord.from_runtime_event(
+                    projected,
+                    run_id=self.run_id,
+                    thread_id=self.thread_id,
+                    turn_id=self.turn_id,
+                ),
+            )
+        except Exception as exc:
+            self.record_telemetry_error(exc)
+
+    async def _acheck_cancelled(self, *, force: bool = False) -> None:
+        now = asyncio.get_running_loop().time()
+        if not force and now - self._last_async_control_check < self._async_control_check_interval:
+            return
+        self._last_async_control_check = now
+        await asyncio.to_thread(
+            self.run_control.raise_if_cancelled,
+            self.scope.qualify_identity(self.run_id),
+            force=force,
+        )
 
     def _persist_sync_event(self, envelope: RuntimeStreamEvent) -> None:
         if self.event_journal is not None:
             try:
-                self.event_journal.append(envelope)
+                append = scoped_adapter_operation(
+                    self.event_journal,
+                    "append",
+                    self.scope,
+                )
+                if getattr(append, "__name__", "") == "append_scoped":
+                    append(envelope, scope=self.scope)
+                else:
+                    append(envelope)
             except Exception as exc:
                 raise AgentEventPersistenceError(
                     f"runtime event journal append failed: {exc}"
@@ -144,8 +183,6 @@ class RuntimeEventEmitter:
         envelope: RuntimeStreamEvent | None,
         projected: dict[str, Any],
     ) -> None:
-        if envelope is None and self.event_sink is None:
-            return
         loop = self._journal_loop
         if loop is None:
             raise AgentEventPersistenceError(
@@ -214,9 +251,7 @@ class RuntimeEventEmitter:
         previous_payload["delta"] = (
             f"{previous_payload.get('delta') or ''}{current_payload.get('delta') or ''}"
         )
-        previous_payload["merged_count"] = int(
-            previous_payload.get("merged_count") or 1
-        ) + 1
+        previous_payload["merged_count"] = int(previous_payload.get("merged_count") or 1) + 1
         merged = dict(previous)
         merged["payload"] = previous_payload
         self._async_deliveries[-1] = (None, merged)
@@ -236,15 +271,30 @@ class RuntimeEventEmitter:
     async def _drain_async_deliveries(self) -> None:
         while self._async_deliveries:
             envelope, projected = self._async_deliveries.popleft()
+            try:
+                await self._acheck_cancelled()
+            except Exception as exc:
+                self._async_delivery_error = exc
+                self._async_deliveries.clear()
+                return
             if envelope is not None:
                 try:
-                    await self.async_event_journal.append(envelope)
+                    append = scoped_adapter_operation(
+                        self.async_event_journal,
+                        "append",
+                        self.scope,
+                    )
+                    if getattr(append, "__name__", "") == "append_scoped":
+                        await append(envelope, scope=self.scope)
+                    else:
+                        await append(envelope)
                 except Exception as exc:
                     self._async_delivery_error = AgentEventPersistenceError(
                         f"runtime event journal append failed: {exc}"
                     )
                     self._async_deliveries.clear()
                     return
+            await self._arecord_telemetry(projected)
             if self.event_sink is not None:
                 try:
                     self.event_sink(projected)

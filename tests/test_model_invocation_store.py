@@ -12,6 +12,7 @@ from deepkeel.model import (
     ModelTurn,
 )
 from deepkeel.runtime_api import RuntimeRequest
+from deepkeel.scope import RuntimeScope
 
 
 class CountingProvider:
@@ -70,11 +71,7 @@ def test_model_invocation_store_rejects_changed_request_and_stale_settlement():
     claim = store.claim(envelope)
 
     changed = envelope.model_copy(
-        update={
-            "request": ModelInvocation(
-                messages=[{"role": "user", "content": "different"}]
-            )
-        }
+        update={"request": ModelInvocation(messages=[{"role": "user", "content": "different"}])}
     )
     with pytest.raises(ModelInvocationConflict, match="different request"):
         store.claim(changed)
@@ -97,12 +94,12 @@ def test_runtime_replays_completed_model_invocation_without_second_provider_call
         model_policy={"mode": "single", "primary_role": "fast"},
     )
 
-    first_runtime = HarnessRuntimeBuilder().with_ports(
-        RuntimePorts(model_invocation_store=store)
-    ).build()
-    second_runtime = HarnessRuntimeBuilder().with_ports(
-        RuntimePorts(model_invocation_store=store)
-    ).build()
+    first_runtime = (
+        HarnessRuntimeBuilder().with_ports(RuntimePorts(model_invocation_store=store)).build()
+    )
+    second_runtime = (
+        HarnessRuntimeBuilder().with_ports(RuntimePorts(model_invocation_store=store)).build()
+    )
 
     first = first_runtime.run(request, provider=provider)
     second = second_runtime.run(request, provider=provider)
@@ -118,9 +115,7 @@ def test_runtime_replays_completed_model_invocation_without_second_provider_call
 def test_runtime_does_not_reuse_model_invocation_across_turns():
     store = InMemoryModelInvocationStore()
     provider = CountingProvider()
-    runtime = HarnessRuntimeBuilder().with_ports(
-        RuntimePorts(model_invocation_store=store)
-    ).build()
+    runtime = HarnessRuntimeBuilder().with_ports(RuntimePorts(model_invocation_store=store)).build()
 
     first = runtime.run(
         RuntimeRequest(
@@ -143,13 +138,37 @@ def test_runtime_does_not_reuse_model_invocation_across_turns():
         provider=provider,
     )
 
-    first_route = next(
-        item for item in first.trace if item["action"] == "model.route.selected"
-    )
-    second_route = next(
-        item for item in second.trace if item["action"] == "model.route.selected"
-    )
+    first_route = next(item for item in first.trace if item["action"] == "model.route.selected")
+    second_route = next(item for item in second.trace if item["action"] == "model.route.selected")
     assert provider.calls == 2
-    assert first_route["invocation"]["invocation_id"] != second_route["invocation"][
-        "invocation_id"
+    assert first_route["invocation"]["invocation_id"] != second_route["invocation"]["invocation_id"]
+
+
+def test_runtime_does_not_reuse_model_invocation_across_scopes() -> None:
+    store = InMemoryModelInvocationStore()
+    provider = CountingProvider()
+    runtime = HarnessRuntimeBuilder().with_ports(RuntimePorts(model_invocation_store=store)).build()
+
+    results = [
+        runtime.run(
+            RuntimeRequest(
+                question="same question",
+                run_id="shared-run",
+                thread_id="shared-thread",
+                turn_id="shared-turn",
+                scope=RuntimeScope(tenant_id=tenant_id, user_id="user-1"),
+                model_policy={"mode": "single", "primary_role": "fast"},
+            ),
+            provider=provider,
+        )
+        for tenant_id in ("tenant-a", "tenant-b")
     ]
+
+    invocation_ids = [
+        next(item for item in result.trace if item["action"] == "model.route.selected")[
+            "invocation"
+        ]["invocation_id"]
+        for result in results
+    ]
+    assert provider.calls == 2
+    assert len(set(invocation_ids)) == 2

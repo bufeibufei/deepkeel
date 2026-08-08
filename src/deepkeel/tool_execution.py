@@ -10,6 +10,7 @@ from deepkeel.contracts import ToolCall, ToolResult
 from deepkeel.control import NoopRunControl, RunControl
 from deepkeel.leases import ExecutionFence
 from deepkeel.ports import RuntimeSession, SessionFactory
+from deepkeel.scope import RuntimeScope
 
 
 @dataclass(slots=True)
@@ -26,6 +27,7 @@ class ToolExecutionContext:
     deadline_monotonic: float | None = None
     run_control: RunControl = field(default_factory=NoopRunControl)
     execution_fence: ExecutionFence | None = None
+    scope: RuntimeScope = field(default_factory=RuntimeScope)
 
     @property
     def fence_token(self) -> str:
@@ -34,6 +36,12 @@ class ToolExecutionContext:
     @property
     def fence_generation(self) -> int:
         return self.execution_fence.generation if self.execution_fence is not None else 0
+
+    @property
+    def operational_run_id(self) -> str:
+        """Return the opaque run identity used by process-wide runtime services."""
+
+        return self.scope.qualify_identity(self.run_id)
 
     def raise_if_fence_lost(self) -> None:
         if self.execution_fence is not None:
@@ -53,6 +61,7 @@ class ToolExecutionContext:
             deadline_monotonic=self.deadline_monotonic,
             run_control=self.run_control,
             execution_fence=self.execution_fence,
+            scope=self.scope,
         )
 
 
@@ -76,6 +85,7 @@ class ToolExecutionClaim:
     retry_after_seconds: float = 0.0
     terminal_status: str = ""
     detail: str = ""
+    scope: RuntimeScope = field(default_factory=RuntimeScope)
 
 
 class ToolExecutionStore(Protocol):
@@ -95,6 +105,17 @@ class ToolExecutionStore(Protocol):
 
     def settle(self, claim: ToolExecutionClaim, result: ToolResult) -> None: ...
 
+    def claim_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim: ...
+
 
 @dataclass(slots=True)
 class _MemoryToolExecution:
@@ -110,7 +131,7 @@ class InMemoryToolExecutionStore:
     """Process-local fallback for Harness tests without persistence."""
 
     def __init__(self) -> None:
-        self._entries: dict[tuple[str, str], _MemoryToolExecution] = {}
+        self._entries: dict[tuple[str, str, str, str, str], _MemoryToolExecution] = {}
         self._lock = Lock()
 
     def claim(
@@ -122,14 +143,33 @@ class InMemoryToolExecutionStore:
         max_attempts: int,
         reexecution_safe: bool = True,
     ) -> ToolExecutionClaim:
+        return self.claim_scoped(
+            scope=RuntimeScope(),
+            run_id=run_id,
+            call=call,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+        )
+
+    def claim_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim:
         now = datetime.now(UTC)
-        key = (run_id, call.idempotency_key)
+        key = (*scope.storage_key, run_id, call.idempotency_key)
         with self._lock:
             entry = self._entries.get(key)
             if entry is not None and entry.status == "uncertain":
-                return _memory_claim("uncertain", run_id, call.idempotency_key, entry)
+                return _memory_claim("uncertain", run_id, call.idempotency_key, entry, scope)
             if entry is not None and entry.status == "exhausted":
-                return _memory_claim("exhausted", run_id, call.idempotency_key, entry)
+                return _memory_claim("exhausted", run_id, call.idempotency_key, entry, scope)
             if entry is not None and entry.result is not None:
                 retry_failed = (
                     entry.result.status == "failed"
@@ -137,7 +177,7 @@ class InMemoryToolExecutionStore:
                     and entry.attempt_count < max(1, int(max_attempts))
                 )
                 if not retry_failed:
-                    return _memory_claim("replay", run_id, call.idempotency_key, entry)
+                    return _memory_claim("replay", run_id, call.idempotency_key, entry, scope)
             if (
                 entry is not None
                 and entry.result is None
@@ -145,18 +185,18 @@ class InMemoryToolExecutionStore:
                 and entry.lease_expires_at is not None
                 and entry.lease_expires_at > now
             ):
-                return _memory_claim("busy", run_id, call.idempotency_key, entry)
+                return _memory_claim("busy", run_id, call.idempotency_key, entry, scope)
             if entry is not None and entry.result is None:
                 if entry.attempt_count >= max(1, int(max_attempts)):
                     entry.status = "exhausted"
                     entry.claim_owner = ""
                     entry.lease_expires_at = None
-                    return _memory_claim("exhausted", run_id, call.idempotency_key, entry)
+                    return _memory_claim("exhausted", run_id, call.idempotency_key, entry, scope)
                 if not reexecution_safe:
                     entry.status = "uncertain"
                     entry.claim_owner = ""
                     entry.lease_expires_at = None
-                    return _memory_claim("uncertain", run_id, call.idempotency_key, entry)
+                    return _memory_claim("uncertain", run_id, call.idempotency_key, entry, scope)
             owner = uuid4().hex
             lease_expires_at = now + timedelta(seconds=max(0.001, float(lease_seconds)))
             if entry is None:
@@ -174,18 +214,22 @@ class InMemoryToolExecutionStore:
                 entry.lease_expires_at = lease_expires_at
                 entry.attempt_count += 1
                 entry.result = None
-            return _memory_claim("claimed", run_id, call.idempotency_key, entry)
+            return _memory_claim("claimed", run_id, call.idempotency_key, entry, scope)
 
     def replay(self, claim: ToolExecutionClaim) -> ToolResult:
         with self._lock:
-            entry = self._entries.get((claim.run_id, claim.idempotency_key))
+            entry = self._entries.get(
+                (*claim.scope.storage_key, claim.run_id, claim.idempotency_key)
+            )
             if entry is None or entry.result is None:
                 raise LookupError("tool execution result is not available for replay")
             return entry.result.model_copy(deep=True)
 
     def settle(self, claim: ToolExecutionClaim, result: ToolResult) -> None:
         with self._lock:
-            entry = self._entries.get((claim.run_id, claim.idempotency_key))
+            entry = self._entries.get(
+                (*claim.scope.storage_key, claim.run_id, claim.idempotency_key)
+            )
             if entry is None or entry.claim_owner != claim.claim_owner:
                 raise RuntimeError("tool execution claim is no longer owned")
             entry.status = result.status
@@ -199,6 +243,7 @@ def _memory_claim(
     run_id: str,
     idempotency_key: str,
     entry: _MemoryToolExecution,
+    scope: RuntimeScope,
 ) -> ToolExecutionClaim:
     retry_after = 0.0
     if status == "busy" and entry.lease_expires_at is not None:
@@ -215,6 +260,7 @@ def _memory_claim(
         attempt_count=entry.attempt_count,
         lease_expires_at=entry.lease_expires_at,
         retry_after_seconds=retry_after,
+        scope=scope,
     )
 
 

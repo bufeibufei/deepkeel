@@ -9,45 +9,121 @@ from typing import Any, Iterable, Protocol
 _REQUIRED_COLUMNS = {
     "schema_migrations": {"version", "name", "checksum", "applied_at", "duration_ms"},
     "runtime_states": {
-        "tenant_id", "namespace", "user_id", "run_id", "version", "sequence",
-        "status", "settled", "settlement_status", "last_event_type",
-        "checkpoint_type", "checkpoint_state", "resume_token", "fence_token",
-        "fence_generation", "updated_at",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "run_id",
+        "version",
+        "sequence",
+        "status",
+        "settled",
+        "settlement_status",
+        "last_event_type",
+        "checkpoint_type",
+        "checkpoint_state",
+        "resume_token",
+        "fence_token",
+        "fence_generation",
+        "updated_at",
     },
     "runtime_mutations": {
-        "tenant_id", "namespace", "user_id", "mutation_id", "run_id", "fingerprint",
-        "receipt", "event_type", "event_payload", "checkpoint_type",
-        "checkpoint_state", "created_at",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "mutation_id",
+        "run_id",
+        "fingerprint",
+        "receipt",
+        "event_type",
+        "event_payload",
+        "checkpoint_type",
+        "checkpoint_state",
+        "created_at",
     },
     "runtime_events": {
-        "event_id", "run_id", "sequence", "fingerprint", "envelope", "created_at",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "event_id",
+        "run_id",
+        "sequence",
+        "fingerprint",
+        "envelope",
+        "created_at",
     },
     "run_leases": {
-        "run_id", "owner_id", "token", "acquired_at", "expires_at", "generation",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "run_id",
+        "owner_id",
+        "token",
+        "acquired_at",
+        "expires_at",
+        "generation",
         "updated_at",
     },
     "durable_checkpoints": {
-        "tenant_id", "namespace", "user_id", "run_id", "state", "updated_at",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "run_id",
+        "state",
+        "updated_at",
     },
     "model_invocations": {
-        "invocation_id", "request_fingerprint", "envelope", "status", "claim_token",
-        "claim_expires_at", "result", "failure_type", "failure_message", "updated_at",
+        "invocation_id",
+        "request_fingerprint",
+        "envelope",
+        "status",
+        "claim_token",
+        "claim_expires_at",
+        "result",
+        "failure_type",
+        "failure_message",
+        "updated_at",
     },
     "tool_executions": {
-        "run_id", "idempotency_key", "record_id", "call_fingerprint", "tool_call",
-        "status", "claim_owner", "lease_expires_at", "attempt_count", "result",
+        "tenant_id",
+        "namespace",
+        "user_id",
+        "run_id",
+        "idempotency_key",
+        "record_id",
+        "call_fingerprint",
+        "tool_call",
+        "status",
+        "claim_owner",
+        "lease_expires_at",
+        "attempt_count",
+        "result",
         "updated_at",
     },
     "budget_usage": {"run_id", "metric", "amount", "updated_at"},
     "budget_decisions": {"run_id", "metric", "operation_id", "decision", "created_at"},
     "model_health": {
-        "provider_id", "model_id", "consecutive_failures", "opened_until",
-        "last_failure_category", "last_failure_at", "updated_at",
+        "provider_id",
+        "model_id",
+        "consecutive_failures",
+        "opened_until",
+        "last_failure_category",
+        "last_failure_at",
+        "updated_at",
     },
     "run_controls": {"run_id", "canceled", "updated_at"},
     "runtime_traces": {
-        "telemetry_id", "run_id", "thread_id", "turn_id", "tenant_id", "user_id",
-        "namespace", "trace_id", "component", "event_name", "sequence", "occurred_at",
+        "telemetry_id",
+        "run_id",
+        "thread_id",
+        "turn_id",
+        "tenant_id",
+        "user_id",
+        "namespace",
+        "trace_id",
+        "component",
+        "event_name",
+        "sequence",
+        "occurred_at",
         "record",
     },
 }
@@ -148,9 +224,7 @@ class PostgresSchemaRegistry:
                 status = self._status(cursor)
                 target = self._target_version(target_version, status.current_version)
                 return tuple(
-                    migration
-                    for migration in status.pending
-                    if migration.version <= target
+                    migration for migration in status.pending if migration.version <= target
                 )
 
     def upgrade(self, *, target_version: int | None = None) -> PostgresSchemaStatus:
@@ -169,13 +243,10 @@ class PostgresSchemaRegistry:
         target = self.latest_version if requested is None else int(requested)
         if target < current:
             raise PostgresSchemaError(
-                "automatic schema downgrade is not supported "
-                f"(current={current}, target={target})"
+                f"automatic schema downgrade is not supported (current={current}, target={target})"
             )
         if target < 0 or target > self.latest_version:
-            raise ValueError(
-                f"target_version must be between 0 and {self.latest_version}"
-            )
+            raise ValueError(f"target_version must be between 0 and {self.latest_version}")
         return target
 
     def _lock_and_bootstrap(self, cursor: Any) -> None:
@@ -228,9 +299,7 @@ class PostgresSchemaRegistry:
         expected_versions = set(range(1, current + 1))
         if recorded_versions != expected_versions:
             raise PostgresSchemaDriftError("database migration history contains a version gap")
-        pending = tuple(
-            migration for migration in self.migrations if migration.version > current
-        )
+        pending = tuple(migration for migration in self.migrations if migration.version > current)
         if current == self.latest_version:
             self._validate_physical_schema(cursor)
         return PostgresSchemaStatus(
@@ -251,9 +320,7 @@ class PostgresSchemaRegistry:
         )
         available: dict[str, set[str]] = {}
         for row in cursor.fetchall():
-            available.setdefault(str(row["table_name"]), set()).add(
-                str(row["column_name"])
-            )
+            available.setdefault(str(row["table_name"]), set()).add(str(row["column_name"]))
         defects = []
         for table, required in _REQUIRED_COLUMNS.items():
             missing = sorted(required - available.get(table, set()))
@@ -306,6 +373,75 @@ def default_postgres_migrations(schema: str) -> tuple[PostgresMigration, ...]:
                 """,
             ),
         ),
+        PostgresMigration(
+            version=3,
+            name="operational_scope_identity",
+            statements=(
+                f"""
+                ALTER TABLE {schema}.runtime_events
+                ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default',
+                ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'local-device'
+                """,
+                f"""
+                ALTER TABLE {schema}.runtime_events
+                DROP CONSTRAINT IF EXISTS runtime_events_run_id_sequence_key
+                """,
+                f"""
+                CREATE UNIQUE INDEX IF NOT EXISTS runtime_events_scope_run_sequence_uidx
+                ON {schema}.runtime_events (
+                    tenant_id, namespace, user_id, run_id, sequence
+                )
+                """,
+                f"""
+                ALTER TABLE {schema}.run_leases
+                ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default',
+                ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'local-device'
+                """,
+                f"""
+                ALTER TABLE {schema}.run_leases
+                DROP CONSTRAINT IF EXISTS run_leases_pkey
+                """,
+                f"""
+                ALTER TABLE {schema}.run_leases
+                ADD CONSTRAINT run_leases_pkey
+                PRIMARY KEY (tenant_id, namespace, user_id, run_id)
+                """,
+                f"""
+                ALTER TABLE {schema}.tool_executions
+                ADD COLUMN IF NOT EXISTS tenant_id TEXT NOT NULL DEFAULT '',
+                ADD COLUMN IF NOT EXISTS namespace TEXT NOT NULL DEFAULT 'default',
+                ADD COLUMN IF NOT EXISTS user_id TEXT NOT NULL DEFAULT 'local-device'
+                """,
+                f"""
+                ALTER TABLE {schema}.tool_executions
+                DROP CONSTRAINT IF EXISTS tool_executions_pkey
+                """,
+                f"""
+                ALTER TABLE {schema}.tool_executions
+                ADD CONSTRAINT tool_executions_pkey
+                PRIMARY KEY (
+                    tenant_id, namespace, user_id, run_id, idempotency_key
+                )
+                """,
+            ),
+        ),
+        PostgresMigration(
+            version=4,
+            name="runtime_event_scope_identity",
+            statements=(
+                f"""
+                ALTER TABLE {schema}.runtime_events
+                DROP CONSTRAINT IF EXISTS runtime_events_pkey
+                """,
+                f"""
+                ALTER TABLE {schema}.runtime_events
+                ADD CONSTRAINT runtime_events_pkey
+                PRIMARY KEY (tenant_id, namespace, user_id, event_id)
+                """,
+            ),
+        ),
     )
 
 
@@ -355,24 +491,31 @@ def _runtime_port_schema(schema: str) -> tuple[str, ...]:
         """,
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.runtime_events (
+            tenant_id TEXT NOT NULL DEFAULT '',
+            namespace TEXT NOT NULL DEFAULT 'default',
+            user_id TEXT NOT NULL DEFAULT 'local-device',
             event_id TEXT PRIMARY KEY,
             run_id TEXT NOT NULL,
             sequence BIGINT NOT NULL,
             fingerprint TEXT NOT NULL,
             envelope JSONB NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE (run_id, sequence)
+            UNIQUE (tenant_id, namespace, user_id, run_id, sequence)
         )
         """,
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.run_leases (
-            run_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            namespace TEXT NOT NULL DEFAULT 'default',
+            user_id TEXT NOT NULL DEFAULT 'local-device',
+            run_id TEXT NOT NULL,
             owner_id TEXT NOT NULL DEFAULT '',
             token TEXT NOT NULL DEFAULT '',
             acquired_at TIMESTAMPTZ,
             expires_at TIMESTAMPTZ,
             generation BIGINT NOT NULL DEFAULT 0,
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (tenant_id, namespace, user_id, run_id)
         )
         """,
         f"""
@@ -402,6 +545,9 @@ def _runtime_port_schema(schema: str) -> tuple[str, ...]:
         """,
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.tool_executions (
+            tenant_id TEXT NOT NULL DEFAULT '',
+            namespace TEXT NOT NULL DEFAULT 'default',
+            user_id TEXT NOT NULL DEFAULT 'local-device',
             run_id TEXT NOT NULL,
             idempotency_key TEXT NOT NULL,
             record_id TEXT NOT NULL UNIQUE,
@@ -413,7 +559,7 @@ def _runtime_port_schema(schema: str) -> tuple[str, ...]:
             attempt_count INTEGER NOT NULL DEFAULT 0,
             result JSONB,
             updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY (run_id, idempotency_key)
+            PRIMARY KEY (tenant_id, namespace, user_id, run_id, idempotency_key)
         )
         """,
         f"""

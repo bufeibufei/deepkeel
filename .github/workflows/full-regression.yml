@@ -31,7 +31,10 @@ jobs:
           uv run pytest -q -m "not postgres"
           --cov=deepkeel
           --cov-report=term-missing
+          --cov-report=json:coverage.json
           --cov-fail-under=80
+      - name: Enforce critical coverage and complexity ratchets
+        run: uv run python verification/quality_budget.py --coverage coverage.json
       - name: Run shared-runtime concurrency gate
         run: >-
           uv run python verification/concurrency_benchmark.py

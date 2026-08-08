@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING, Any
 
+from deepkeel.adapter_capabilities import AdapterCapabilities
+
 if TYPE_CHECKING:
     from deepkeel.contrib.postgres.migrations import (
         PostgresMigration,
@@ -16,6 +18,16 @@ _IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,62}$")
 
 class PostgresDatabase:
     """Owns an isolated, versioned schema used by the production adapters."""
+
+    adapter_capabilities = AdapterCapabilities(
+        durable=True,
+        process_shared=True,
+        runtime_scope=True,
+        native_async=False,
+        cancellation_safe=True,
+        transactional=True,
+        source="deepkeel_postgres",
+    )
 
     def __init__(self, dsn: str, *, schema: str = "deepkeel") -> None:
         normalized_dsn = str(dsn or "").strip().replace(

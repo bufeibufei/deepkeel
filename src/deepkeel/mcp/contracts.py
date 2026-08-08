@@ -52,6 +52,10 @@ class McpServerSpec(BaseModel):
     request_timeout_seconds: float = Field(default=45.0, gt=0)
     shutdown_timeout_seconds: float = Field(default=3.0, gt=0)
     allow_insecure_http: bool = False
+    allow_private_network: bool = False
+    allowed_hosts: list[str] = Field(default_factory=list)
+    max_request_bytes: int = Field(default=1_048_576, ge=1)
+    max_response_bytes: int = Field(default=4_194_304, ge=1)
     client_name: str = Field(default="harness-core", min_length=1)
     client_version: str = Field(default=DEEPKEEL_VERSION, min_length=1)
 
@@ -75,6 +79,15 @@ class McpServerSpec(BaseModel):
                 "streamable_http MCP server requires https; "
                 "set allow_insecure_http only for trusted local development"
             )
+        parsed = urlsplit(self.url)
+        if parsed.username or parsed.password:
+            raise ValueError("streamable_http MCP url cannot contain credentials")
+        if not parsed.hostname:
+            raise ValueError("streamable_http MCP url requires a hostname")
+        if self.allowed_hosts and parsed.hostname.lower() not in {
+            host.strip().lower() for host in self.allowed_hosts if host.strip()
+        }:
+            raise ValueError("streamable_http MCP hostname is not in allowed_hosts")
         return self
 
     def public_snapshot(self) -> dict[str, Any]:
@@ -94,6 +107,10 @@ class McpServerSpec(BaseModel):
             "startup_timeout_seconds": self.startup_timeout_seconds,
             "request_timeout_seconds": self.request_timeout_seconds,
             "allow_insecure_http": self.allow_insecure_http,
+            "allow_private_network": self.allow_private_network,
+            "allowed_hosts": sorted(self.allowed_hosts),
+            "max_request_bytes": self.max_request_bytes,
+            "max_response_bytes": self.max_response_bytes,
             "client_name": self.client_name,
             "client_version": self.client_version,
         }

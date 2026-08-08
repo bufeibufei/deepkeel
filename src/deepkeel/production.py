@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from deepkeel.adapter_capabilities import declared_adapter_capabilities
+
 
 class ProductionRuntimePorts(Protocol):
     """Minimal structural view required by the production-readiness gate."""
@@ -175,6 +177,7 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
         message="configure durable tool execution idempotency",
     )
     _reject_known_local_ports(issues, ports)
+    _validate_declared_capabilities(issues, ports)
     _warn_blocking_async_ports(issues, ports)
     if ports.tool_view_mode != "enforced":
         issues.append(
@@ -294,6 +297,59 @@ def _warn_blocking_async_ports(
                         "prefer a native async port for sustained concurrency"
                     ),
                     severity="warning",
+                    port=port,
+                )
+            )
+
+
+def _validate_declared_capabilities(
+    issues: list[ProductionReadinessIssue],
+    ports: ProductionRuntimePorts,
+) -> None:
+    candidates = {
+        "checkpointer": ports.checkpointer,
+        "runtime_state_store": ports.async_runtime_state_store or ports.runtime_state_store,
+        "event_journal": ports.async_event_journal or ports.event_journal,
+        "run_lease_store": ports.async_run_lease_store or ports.run_lease_store,
+        "model_invocation_store": ports.model_invocation_store,
+        "tool_execution_store": (
+            ports.async_tool_execution_store or ports.tool_execution_store
+        ),
+        "budget_ledger": ports.budget_ledger,
+        "model_health_store": ports.model_health_store,
+        "run_control": ports.run_control,
+        "telemetry": ports.telemetry,
+    }
+    scope_required = {
+        "runtime_state_store",
+        "event_journal",
+        "run_lease_store",
+        "model_invocation_store",
+        "tool_execution_store",
+    }
+    for port, value in candidates.items():
+        if value is None:
+            continue
+        capabilities = declared_adapter_capabilities(value)
+        if capabilities is None:
+            # Third-party adapters written before this contract remain valid;
+            # known unsafe local implementations are still rejected above.
+            continue
+        if not capabilities.durable or not capabilities.process_shared:
+            issues.append(
+                ProductionReadinessIssue(
+                    code="ADAPTER_NOT_PRODUCTION_DURABLE",
+                    message="adapter must declare durable and process_shared guarantees",
+                    severity="error",
+                    port=port,
+                )
+            )
+        if port in scope_required and not capabilities.runtime_scope:
+            issues.append(
+                ProductionReadinessIssue(
+                    code="ADAPTER_SCOPE_ISOLATION_UNDECLARED",
+                    message="adapter must declare RuntimeScope isolation",
+                    severity="error",
                     port=port,
                 )
             )

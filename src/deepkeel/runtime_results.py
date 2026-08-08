@@ -441,9 +441,11 @@ def _new_context(
                 if str(name).strip()
             ],
             "memory_recall": as_dict(context_bundle.get("memory_recall")),
+            "operational_run_id": str(context_bundle.get("operational_run_id") or ""),
             "governance_scope": {
                 "tenant_id": str(context_bundle.get("tenant_id") or ""),
                 "user_id": user_id,
+                "namespace": str(context_bundle.get("namespace") or "default"),
                 "skill_id": str(skill_activation.get("skill_id") or ""),
                 "scopes": list(context_bundle.get("governance_scopes") or []),
             },

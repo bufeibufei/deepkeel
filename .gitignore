@@ -3,6 +3,8 @@
 .mypy_cache/
 .ruff_cache/
 .coverage
+.runtime/
+coverage.json
 coverage.xml
 htmlcov/
 build/

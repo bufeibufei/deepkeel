@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from deepkeel.contracts import ToolCall, ToolResult
 from deepkeel.tool_execution import ToolExecutionClaim
+from deepkeel.scope import RuntimeScope
 
 from deepkeel.contrib.postgres.database import PostgresDatabase
 from deepkeel.contrib.postgres.support import fingerprint, json_value
@@ -25,6 +26,25 @@ class PostgresToolExecutionStore:
         max_attempts: int,
         reexecution_safe: bool = True,
     ) -> ToolExecutionClaim:
+        return self.claim_scoped(
+            scope=RuntimeScope(),
+            run_id=run_id,
+            call=call,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+        )
+
+    def claim_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim:
         normalized_run_id = str(run_id or "").strip()
         key = str(call.idempotency_key or "").strip()
         if not normalized_run_id or not key:
@@ -34,16 +54,18 @@ class PostgresToolExecutionStore:
         call_payload = call.model_dump(mode="json")
         call_fingerprint = fingerprint(call_payload)
         schema = self.database.schema
+        tenant_id, namespace, user_id = scope.storage_key
         with self.database.connect() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(
                     f"""
                     SELECT *, lease_expires_at > CURRENT_TIMESTAMP AS lease_live
                     FROM {schema}.tool_executions
-                    WHERE run_id = %s AND idempotency_key = %s
+                    WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                      AND run_id = %s AND idempotency_key = %s
                     FOR UPDATE
                     """,
-                    (normalized_run_id, key),
+                    (tenant_id, namespace, user_id, normalized_run_id, key),
                 )
                 row = cursor.fetchone()
                 if row is not None:
@@ -64,10 +86,11 @@ class PostgresToolExecutionStore:
                             UPDATE {schema}.tool_executions
                             SET status = 'exhausted', claim_owner = '',
                                 lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-                            WHERE run_id = %s AND idempotency_key = %s
+                            WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                              AND run_id = %s AND idempotency_key = %s
                             RETURNING *
                             """,
-                            (normalized_run_id, key),
+                            (tenant_id, namespace, user_id, normalized_run_id, key),
                         )
                         return _claim_from_row(cursor.fetchone(), status="exhausted")
                     if not reexecution_safe:
@@ -76,10 +99,11 @@ class PostgresToolExecutionStore:
                             UPDATE {schema}.tool_executions
                             SET status = 'uncertain', claim_owner = '',
                                 lease_expires_at = NULL, updated_at = CURRENT_TIMESTAMP
-                            WHERE run_id = %s AND idempotency_key = %s
+                            WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                              AND run_id = %s AND idempotency_key = %s
                             RETURNING *
                             """,
-                            (normalized_run_id, key),
+                            (tenant_id, namespace, user_id, normalized_run_id, key),
                         )
                         return _claim_from_row(cursor.fetchone(), status="uncertain")
                     owner = uuid4().hex
@@ -90,10 +114,19 @@ class PostgresToolExecutionStore:
                             lease_expires_at = CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'),
                             attempt_count = attempt_count + 1, result = NULL,
                             updated_at = CURRENT_TIMESTAMP
-                        WHERE run_id = %s AND idempotency_key = %s
+                        WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                          AND run_id = %s AND idempotency_key = %s
                         RETURNING *
                         """,
-                        (owner, ttl, normalized_run_id, key),
+                        (
+                            owner,
+                            ttl,
+                            tenant_id,
+                            namespace,
+                            user_id,
+                            normalized_run_id,
+                            key,
+                        ),
                     )
                     return _claim_from_row(cursor.fetchone(), status="claimed")
 
@@ -102,14 +135,18 @@ class PostgresToolExecutionStore:
                 cursor.execute(
                     f"""
                     INSERT INTO {schema}.tool_executions (
-                        run_id, idempotency_key, record_id, call_fingerprint,
-                        tool_call, status, claim_owner, lease_expires_at, attempt_count
+                        tenant_id, namespace, user_id, run_id, idempotency_key,
+                        record_id, call_fingerprint, tool_call, status, claim_owner,
+                        lease_expires_at, attempt_count
                     ) VALUES (
-                        %s, %s, %s, %s, %s::jsonb, 'running', %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s::jsonb, 'running', %s,
                         CURRENT_TIMESTAMP + (%s * INTERVAL '1 second'), 1
                     ) RETURNING *
                     """,
                     (
+                        tenant_id,
+                        namespace,
+                        user_id,
                         normalized_run_id,
                         key,
                         record_id,
@@ -119,7 +156,7 @@ class PostgresToolExecutionStore:
                         ttl,
                     ),
                 )
-                return _claim_from_row(cursor.fetchone(), status="claimed")
+                return _claim_from_row(cursor.fetchone(), status="claimed", scope=scope)
 
     def replay(self, claim: ToolExecutionClaim) -> ToolResult:
         with self.database.connect() as connection:
@@ -127,9 +164,15 @@ class PostgresToolExecutionStore:
                 cursor.execute(
                     f"""
                     SELECT result FROM {self.database.schema}.tool_executions
-                    WHERE run_id = %s AND idempotency_key = %s AND record_id = %s
+                    WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                      AND run_id = %s AND idempotency_key = %s AND record_id = %s
                     """,
-                    (claim.run_id, claim.idempotency_key, claim.record_id),
+                    (
+                        *claim.scope.storage_key,
+                        claim.run_id,
+                        claim.idempotency_key,
+                        claim.record_id,
+                    ),
                 )
                 row = cursor.fetchone()
         if row is None or row.get("result") is None:
@@ -145,12 +188,14 @@ class PostgresToolExecutionStore:
                     UPDATE {schema}.tool_executions
                     SET status = %s, claim_owner = '', lease_expires_at = NULL,
                         result = %s::jsonb, updated_at = CURRENT_TIMESTAMP
-                    WHERE run_id = %s AND idempotency_key = %s
+                    WHERE tenant_id = %s AND namespace = %s AND user_id = %s
+                      AND run_id = %s AND idempotency_key = %s
                       AND record_id = %s AND claim_owner = %s
                     """,
                     (
                         result.status,
                         json_value(result.model_dump(mode="json")),
+                        *claim.scope.storage_key,
                         claim.run_id,
                         claim.idempotency_key,
                         claim.record_id,
@@ -173,9 +218,7 @@ def _terminal_claim(
         return None
     result = ToolResult.model_validate(row["result"])
     retry_failed = (
-        result.status == "failed"
-        and result.retryable
-        and int(row["attempt_count"]) < max_attempts
+        result.status == "failed" and result.retryable and int(row["attempt_count"]) < max_attempts
     )
     return None if retry_failed else _claim_from_row(row, status="replay")
 
@@ -185,6 +228,7 @@ def _claim_from_row(
     *,
     status: str,
     detail: str = "",
+    scope: RuntimeScope | None = None,
 ) -> ToolExecutionClaim:
     lease_expires_at = row.get("lease_expires_at")
     retry_after = 0.0
@@ -205,4 +249,10 @@ def _claim_from_row(
         retry_after_seconds=retry_after,
         terminal_status=str(row.get("status") or ""),
         detail=detail,
+        scope=scope
+        or RuntimeScope(
+            tenant_id=str(row.get("tenant_id") or ""),
+            namespace=str(row.get("namespace") or "default"),
+            user_id=str(row.get("user_id") or "local-device"),
+        ),
     )

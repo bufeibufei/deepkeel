@@ -11,6 +11,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from deepkeel.contracts import ToolCall
 from deepkeel.model_capabilities import ModelCapabilities, ResponseContract
+from deepkeel.scope import RuntimeScope
 
 
 class ModelTurn(BaseModel):
@@ -56,6 +57,9 @@ class ModelInvocationEnvelope(BaseModel):
     schema_version: str = "model-invocation-envelope-v1"
     invocation_id: str
     run_id: str
+    tenant_id: str = ""
+    user_id: str = "local-device"
+    namespace: str = "default"
     thread_id: str
     turn_id: str
     step_index: int = 0
@@ -69,6 +73,14 @@ class ModelInvocationEnvelope(BaseModel):
     estimated_input_tokens: int = 0
     request: ModelInvocation
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @property
+    def runtime_scope(self) -> RuntimeScope:
+        return RuntimeScope(
+            tenant_id=self.tenant_id,
+            user_id=self.user_id,
+            namespace=self.namespace,
+        )
 
     @property
     def request_fingerprint(self) -> str:
@@ -85,6 +97,9 @@ class ModelInvocationEnvelope(BaseModel):
             "schema_version": self.schema_version,
             "invocation_id": self.invocation_id,
             "run_id": self.run_id,
+            "tenant_id": self.tenant_id,
+            "user_id": self.user_id,
+            "namespace": self.namespace,
             "thread_id": self.thread_id,
             "turn_id": self.turn_id,
             "step_index": self.step_index,
@@ -291,8 +306,7 @@ class InMemoryModelInvocationStore:
                 raise ModelInvocationConflict("cannot settle an unknown invocation")
             if record.status in {"completed", "failed"}:
                 same_result = status == record.status and (
-                    status == "failed"
-                    or (record.result is not None and record.result == result)
+                    status == "failed" or (record.result is not None and record.result == result)
                 )
                 if same_result:
                     return record.model_copy(deep=True)

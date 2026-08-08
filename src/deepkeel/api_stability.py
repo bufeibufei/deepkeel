@@ -1,7 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
+import inspect
 from dataclasses import dataclass
-from typing import Literal, Mapping, Sequence
+from enum import Enum
+from typing import Any, Callable, Literal, Mapping, Sequence, cast
+
+from pydantic import BaseModel
 
 
 ApiStability = Literal["stable", "advanced", "experimental"]
@@ -69,9 +74,93 @@ def build_public_api_manifest(
     return tuple(layers)
 
 
+def build_semantic_contract(
+    targets: Mapping[str, tuple[object, Sequence[str]]],
+) -> dict[str, dict[str, Any]]:
+    """Describe signatures and data shapes whose meaning is frozen for one API line."""
+
+    return {
+        name: _semantic_descriptor(value, members)
+        for name, (value, members) in sorted(targets.items())
+    }
+
+
+def _semantic_descriptor(value: object, members: Sequence[str]) -> dict[str, Any]:
+    descriptor: dict[str, Any] = {
+        "kind": "class" if inspect.isclass(value) else "callable",
+    }
+    if inspect.isclass(value) and issubclass(value, BaseModel):
+        descriptor["model_fields"] = {
+            name: {
+                "annotation": _annotation_name(field.annotation),
+                "alias": field.alias or name,
+                "required": field.is_required(),
+                "default": _stable_default(field.default),
+            }
+            for name, field in value.model_fields.items()
+        }
+    elif inspect.isclass(value) and dataclasses.is_dataclass(value):
+        descriptor["dataclass_fields"] = {
+            field.name: {
+                "annotation": _annotation_name(field.type),
+                "required": (
+                    field.default is dataclasses.MISSING
+                    and field.default_factory is dataclasses.MISSING
+                ),
+                "default": _stable_default(field.default),
+            }
+            for field in dataclasses.fields(value)
+        }
+    elif inspect.isclass(value) and issubclass(value, Enum):
+        descriptor["enum_values"] = [member.value for member in value]
+    if callable(value):
+        descriptor["signature"] = _signature_descriptor(value)
+    descriptor["members"] = {
+        member: _signature_descriptor(getattr(value, member))
+        for member in members
+    }
+    return descriptor
+
+
+def _signature_descriptor(value: object) -> dict[str, Any]:
+    try:
+        signature = inspect.signature(cast(Callable[..., Any], value))
+    except (TypeError, ValueError):
+        return {"available": False}
+    return {
+        "available": True,
+        "parameters": [
+            {
+                "name": parameter.name,
+                "kind": parameter.kind.name,
+                "required": parameter.default is inspect.Parameter.empty,
+                "default": _stable_default(parameter.default),
+                "annotation": _annotation_name(parameter.annotation),
+            }
+            for parameter in signature.parameters.values()
+        ],
+        "return": _annotation_name(signature.return_annotation),
+    }
+
+
+def _annotation_name(value: object) -> str:
+    if value is inspect.Parameter.empty or value is inspect.Signature.empty:
+        return ""
+    return str(value).replace("typing.", "")
+
+
+def _stable_default(value: object) -> Any:
+    if value is inspect.Parameter.empty or value is dataclasses.MISSING:
+        return "<required>"
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return value
+    return f"<{type(value).__name__}>"
+
+
 __all__ = [
     "ApiStability",
     "PUBLIC_API_LAYER_POLICY",
     "PublicApiLayer",
     "build_public_api_manifest",
+    "build_semantic_contract",
 ]

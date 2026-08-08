@@ -14,12 +14,37 @@ class OpenTelemetryTelemetry:
         self,
         tracer: Any = None,
         *,
+        meter: Any = None,
         instrumentation_name: str = "deepkeel.runtime",
         include_ephemeral: bool = False,
         include_user_id: bool = False,
     ) -> None:
         trace = _trace_api()
         self._tracer = tracer or trace.get_tracer(instrumentation_name, PACKAGE_VERSION)
+        self._meter = meter or _metrics_api().get_meter(
+            instrumentation_name,
+            PACKAGE_VERSION,
+        )
+        self._event_counter = self._meter.create_counter(
+            "deepkeel.runtime.events",
+            unit="{event}",
+            description="DeepKeel runtime events",
+        )
+        self._failure_counter = self._meter.create_counter(
+            "deepkeel.runtime.failures",
+            unit="{failure}",
+            description="DeepKeel failed or canceled operations",
+        )
+        self._duration_histogram = self._meter.create_histogram(
+            "deepkeel.operation.duration",
+            unit="ms",
+            description="Model, tool, and runtime operation latency",
+        )
+        self._active_runs = self._meter.create_up_down_counter(
+            "deepkeel.runs.active",
+            unit="{run}",
+            description="Active DeepKeel runs observed by this exporter",
+        )
         self._include_ephemeral = include_ephemeral
         self._include_user_id = include_user_id
 
@@ -30,6 +55,7 @@ class OpenTelemetryTelemetry:
         context = _parent_context(trace, event)
         timestamp_ns = int(event.occurred_at.timestamp() * 1_000_000_000)
         attributes = _span_attributes(event, include_user_id=self._include_user_id)
+        self._record_metrics(event)
         span = self._tracer.start_span(
             f"deepkeel.{event.event_name}",
             context=context,
@@ -52,6 +78,28 @@ class OpenTelemetryTelemetry:
         finally:
             span.end(end_time=timestamp_ns + 1)
 
+    def _record_metrics(self, event: TelemetryRecord) -> None:
+        attributes = {
+            "deepkeel.event_name": event.event_name,
+            "deepkeel.component": event.component,
+            "deepkeel.tenant_id": event.tenant_id,
+            "deepkeel.namespace": event.namespace,
+            "deepkeel.status": event.status,
+        }
+        metric_attributes = {
+            key: value for key, value in attributes.items() if value not in (None, "")
+        }
+        self._event_counter.add(1, metric_attributes)
+        if _is_error(event):
+            self._failure_counter.add(1, metric_attributes)
+        if event.event_name in {"run.created", "run.started"}:
+            self._active_runs.add(1, metric_attributes)
+        elif event.event_name in {"runtime.settled", "run.completed", "run.failed"}:
+            self._active_runs.add(-1, metric_attributes)
+        duration_ms = _duration_ms(event.attributes)
+        if duration_ms is not None:
+            self._duration_histogram.record(duration_ms, metric_attributes)
+
 
 def _trace_api() -> Any:
     try:
@@ -61,6 +109,16 @@ def _trace_api() -> Any:
             "OpenTelemetry support requires `deepkeel[otel]`"
         ) from exc
     return trace
+
+
+def _metrics_api() -> Any:
+    try:
+        from opentelemetry import metrics
+    except ImportError as exc:  # pragma: no cover - guarded by the otel extra
+        raise RuntimeError(
+            "OpenTelemetry support requires `deepkeel[otel]`"
+        ) from exc
+    return metrics
 
 
 def _parent_context(trace: Any, event: TelemetryRecord) -> Any:
@@ -115,6 +173,8 @@ def _span_attributes(
     if include_user_id and event.user_id:
         attributes["deepkeel.user_id"] = event.user_id
     for key, value in event.attributes.items():
+        if not _safe_attribute_key(key):
+            continue
         normalized = _attribute_value(value)
         if normalized is not None:
             attributes[f"deepkeel.attr.{key}"] = normalized
@@ -122,12 +182,40 @@ def _span_attributes(
 
 
 def _attribute_value(value: Any) -> Any:
-    if isinstance(value, (bool, str, int, float)):
+    if isinstance(value, str):
+        return value if len(value) <= 512 else None
+    if isinstance(value, (bool, int, float)):
         return value
     if isinstance(value, (list, tuple)) and all(
         isinstance(item, (bool, str, int, float)) for item in value
     ):
         return tuple(value)
+    return None
+
+
+def _safe_attribute_key(key: str) -> bool:
+    normalized = str(key or "").strip().lower()
+    sensitive_tokens = {
+        "authorization",
+        "argument",
+        "content",
+        "credential",
+        "message",
+        "password",
+        "prompt",
+        "question",
+        "result",
+        "secret",
+        "token",
+    }
+    return bool(normalized) and not any(token in normalized for token in sensitive_tokens)
+
+
+def _duration_ms(attributes: dict[str, Any]) -> float | None:
+    for key in ("duration_ms", "latency_ms", "elapsed_ms"):
+        value = attributes.get(key)
+        if isinstance(value, (int, float)) and value >= 0:
+            return float(value)
     return None
 
 

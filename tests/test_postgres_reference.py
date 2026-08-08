@@ -21,6 +21,8 @@ from deepkeel.adapter_sdk import (
     verify_trace_store_contract,
 )
 from deepkeel.failures import RunCanceledError
+from deepkeel.events import envelope_runtime_event
+from deepkeel.scope import RuntimeScope
 from deepkeel.runtime_sdk import (
     HarnessRuntimeBuilder,
     RuntimeEventEnvelope,
@@ -44,6 +46,10 @@ from deepkeel.contrib.postgres import (
     PostgresTraceStore,
 )
 from examples.production_worker import build_production_worker
+
+
+class _Checkpointer:
+    pass
 
 
 @pytest.fixture
@@ -104,6 +110,87 @@ def test_postgres_reference_adapters_satisfy_core_contracts(
 
 
 @pytest.mark.postgres
+def test_postgres_runtime_bundle_exposes_non_blocking_async_bridges(
+    postgres_database: PostgresDatabase,
+) -> None:
+    bundle = PostgresRuntimeBundle.create(
+        postgres_database.dsn,
+        schema=postgres_database.schema,
+        initialize=False,
+    )
+    ports = bundle.runtime_ports(
+        checkpointer=_Checkpointer(),
+        run_lease_owner_id="worker-1",
+    )
+
+    assert ports.async_checkpoint_store is not None
+    assert ports.async_runtime_state_store is not None
+    assert ports.async_event_journal is not None
+    assert ports.async_run_lease_store is not None
+    assert ports.async_tool_execution_store is not None
+
+
+@pytest.mark.postgres
+def test_postgres_events_and_leases_isolate_identical_run_ids_by_scope(
+    postgres_database: PostgresDatabase,
+) -> None:
+    run_id = f"shared-{uuid4().hex}"
+    first_scope = RuntimeScope(tenant_id="tenant-a", user_id="user-1")
+    second_scope = RuntimeScope(tenant_id="tenant-b", user_id="user-1")
+    journal = PostgresRuntimeEventJournal(postgres_database)
+    leases = PostgresRunLeaseStore(postgres_database)
+
+    def event_for(scope: RuntimeScope, *, sequence: int = 1) -> RuntimeEventEnvelope:
+        return RuntimeEventEnvelope.model_validate(
+            envelope_runtime_event(
+                {
+                    "event_type": "run.created",
+                    "payload": {"tenant": scope.tenant_id},
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                },
+                run_id=run_id,
+                thread_id="shared-thread",
+                turn_id="shared-turn",
+                sequence=sequence,
+                run_version=1,
+                scope=scope,
+            )
+        )
+
+    first_event = journal.append_scoped(event_for(first_scope), scope=first_scope)
+    second_event = journal.append_scoped(event_for(second_scope), scope=second_scope)
+    shared_event_id = f"explicit-shared-{uuid4().hex}"
+    first_shared = journal.append_scoped(
+        event_for(first_scope, sequence=2).model_copy(update={"event_id": shared_event_id}),
+        scope=first_scope,
+    )
+    second_shared = journal.append_scoped(
+        event_for(second_scope, sequence=2).model_copy(update={"event_id": shared_event_id}),
+        scope=second_scope,
+    )
+    first_lease = leases.claim_scoped(
+        run_id,
+        scope=first_scope,
+        owner_id="worker-a",
+        ttl_seconds=30,
+    )
+    second_lease = leases.claim_scoped(
+        run_id,
+        scope=second_scope,
+        owner_id="worker-b",
+        ttl_seconds=30,
+    )
+
+    assert first_event.event_id != second_event.event_id
+    assert journal.read_after_scoped(run_id, scope=first_scope) == (first_event, first_shared)
+    assert journal.read_after_scoped(run_id, scope=second_scope) == (second_event, second_shared)
+    assert first_lease.scope == first_scope
+    assert second_lease.scope == second_scope
+    assert leases.inspect_scoped(run_id, scope=first_scope) == first_lease
+    assert leases.inspect_scoped(run_id, scope=second_scope) == second_lease
+
+
+@pytest.mark.postgres
 def test_postgres_shared_health_and_cancellation(
     postgres_database: PostgresDatabase,
 ) -> None:
@@ -140,11 +227,7 @@ def test_postgres_bundle_satisfies_production_worker_gate(
         checkpointer=object(),
         run_lease_owner_id="conformance-worker",
     )
-    report = (
-        HarnessRuntimeBuilder(profile="production")
-        .with_ports(ports)
-        .production_readiness()
-    )
+    report = HarnessRuntimeBuilder(profile="production").with_ports(ports).production_readiness()
     assert report.ready, report.as_dict()
 
 
@@ -160,7 +243,9 @@ def test_public_production_worker_example_builds_against_postgres(
     )
 
     assert worker.schema_status.up_to_date is True
-    assert worker.runtime.runtime_state_store is worker.postgres.runtime_state_store
+    assert worker.runtime.runtime_state_store is None
+    assert worker.runtime.async_runtime_state_store is not None
+    assert worker.runtime.async_runtime_state_store.store is worker.postgres.runtime_state_store
     assert worker.postgres.database.schema == postgres_database.schema
 
 
@@ -340,8 +425,8 @@ def test_postgres_schema_registry_is_current_and_idempotent(
     second = postgres_database.migration_status()
 
     assert first.up_to_date is True
-    assert first.current_version == first.target_version == 2
-    assert [record.version for record in first.applied] == [1, 2]
+    assert first.current_version == first.target_version == 4
+    assert [record.version for record in first.applied] == list(range(1, first.target_version + 1))
     assert first.pending == ()
     assert second == first
     assert postgres_database.migration_registry().plan() == ()
@@ -430,7 +515,9 @@ def test_postgres_schema_registry_serializes_concurrent_migrators(
 
     status = postgres_database.migration_status()
     assert status.up_to_date is True
-    assert [record.version for record in status.applied] == [1, 2]
+    assert [record.version for record in status.applied] == list(
+        range(1, status.target_version + 1)
+    )
 
 
 @pytest.mark.postgres
@@ -439,4 +526,3 @@ def test_postgres_schema_registry_never_downgrades_automatically(
 ) -> None:
     with pytest.raises(PostgresSchemaError, match="downgrade"):
         postgres_database.migrate(target_version=1)
-

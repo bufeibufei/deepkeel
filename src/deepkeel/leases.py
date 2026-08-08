@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from threading import Event, Lock, Thread
 from typing import Any, Callable, Protocol
 from uuid import uuid4
+
+from deepkeel.scope import RuntimeScope, scoped_adapter_operation
 
 
 class RunLeaseConflict(RuntimeError):
@@ -24,6 +26,7 @@ class RunLease:
     acquired_at: datetime
     expires_at: datetime
     generation: int = 1
+    scope: RuntimeScope = field(default_factory=RuntimeScope)
 
     @property
     def expired(self) -> bool:
@@ -45,6 +48,17 @@ class RunLeaseStore(Protocol):
 
     def inspect(self, run_id: str) -> RunLease | None: ...
 
+    def claim_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease: ...
+
+    def inspect_scoped(self, run_id: str, *, scope: RuntimeScope) -> RunLease | None: ...
+
 
 class ExecutionFence(Protocol):
     """Active execution ownership exposed to tools and persistence adapters."""
@@ -63,14 +77,29 @@ class InMemoryRunLeaseStore:
 
     def __init__(self, *, clock: Callable[[], datetime] | None = None) -> None:
         self._clock = clock or (lambda: datetime.now(UTC))
-        self._leases: dict[str, RunLease] = {}
-        self._generations: dict[str, int] = {}
+        self._leases: dict[tuple[str, str, str, str], RunLease] = {}
+        self._generations: dict[tuple[str, str, str, str], int] = {}
         self._lock = Lock()
 
     def claim(
         self,
         run_id: str,
         *,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease:
+        return self.claim_scoped(
+            run_id,
+            scope=RuntimeScope(),
+            owner_id=owner_id,
+            ttl_seconds=ttl_seconds,
+        )
+
+    def claim_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
         owner_id: str,
         ttl_seconds: float,
     ) -> RunLease:
@@ -81,14 +110,13 @@ class InMemoryRunLeaseStore:
         if not normalized_owner:
             raise ValueError("owner_id is required")
         ttl = _validated_ttl(ttl_seconds)
+        key = (*scope.storage_key, normalized_run_id)
         with self._lock:
             now = self._clock()
-            current = self._leases.get(normalized_run_id)
+            current = self._leases.get(key)
             if current is not None and current.expires_at > now:
-                raise RunLeaseConflict(
-                    f"run {normalized_run_id} is owned by {current.owner_id}"
-                )
-            generation = self._generations.get(normalized_run_id, 0) + 1
+                raise RunLeaseConflict(f"run {normalized_run_id} is owned by {current.owner_id}")
+            generation = self._generations.get(key, 0) + 1
             lease = RunLease(
                 run_id=normalized_run_id,
                 owner_id=normalized_owner,
@@ -96,16 +124,18 @@ class InMemoryRunLeaseStore:
                 acquired_at=now,
                 expires_at=now + timedelta(seconds=ttl),
                 generation=generation,
+                scope=scope,
             )
-            self._leases[normalized_run_id] = lease
-            self._generations[normalized_run_id] = generation
+            self._leases[key] = lease
+            self._generations[key] = generation
             return lease
 
     def renew(self, lease: RunLease, *, ttl_seconds: float) -> RunLease:
         ttl = _validated_ttl(ttl_seconds)
+        key = (*lease.scope.storage_key, lease.run_id)
         with self._lock:
             now = self._clock()
-            current = self._leases.get(lease.run_id)
+            current = self._leases.get(key)
             if (
                 current is None
                 or current.token != lease.token
@@ -120,22 +150,27 @@ class InMemoryRunLeaseStore:
                 acquired_at=current.acquired_at,
                 expires_at=now + timedelta(seconds=ttl),
                 generation=current.generation,
+                scope=current.scope,
             )
-            self._leases[lease.run_id] = renewed
+            self._leases[key] = renewed
             return renewed
 
     def release(self, lease: RunLease) -> None:
+        key = (*lease.scope.storage_key, lease.run_id)
         with self._lock:
-            current = self._leases.get(lease.run_id)
+            current = self._leases.get(key)
             if current is None:
                 return
             if current.token != lease.token or current.generation != lease.generation:
                 raise RunLeaseLost(f"run lease was replaced for {lease.run_id}")
-            self._leases.pop(lease.run_id, None)
+            self._leases.pop(key, None)
 
     def inspect(self, run_id: str) -> RunLease | None:
+        return self.inspect_scoped(run_id, scope=RuntimeScope())
+
+    def inspect_scoped(self, run_id: str, *, scope: RuntimeScope) -> RunLease | None:
         with self._lock:
-            current = self._leases.get(str(run_id or ""))
+            current = self._leases.get((*scope.storage_key, str(run_id or "")))
             if current is None:
                 return None
             if current.expires_at <= self._clock():
@@ -153,11 +188,13 @@ class RunLeaseGuard:
         run_id: str,
         owner_id: str,
         ttl_seconds: float,
+        scope: RuntimeScope | None = None,
     ) -> None:
         self.store = store
         self.run_id = run_id
         self.owner_id = owner_id
         self.ttl_seconds = _validated_ttl(ttl_seconds)
+        self.scope = scope or RuntimeScope()
         self.lease: RunLease | None = None
         self._stop = Event()
         self._thread: Thread | None = None
@@ -165,11 +202,14 @@ class RunLeaseGuard:
         self._lock = Lock()
 
     def __enter__(self) -> "RunLeaseGuard":
-        self.lease = self.store.claim(
-            self.run_id,
-            owner_id=self.owner_id,
-            ttl_seconds=self.ttl_seconds,
-        )
+        operation = scoped_adapter_operation(self.store, "claim", self.scope)
+        kwargs: dict[str, Any] = {
+            "owner_id": self.owner_id,
+            "ttl_seconds": self.ttl_seconds,
+        }
+        if getattr(operation, "__name__", "") == "claim_scoped":
+            kwargs["scope"] = self.scope
+        self.lease = operation(self.run_id, **kwargs)
         self._thread = Thread(
             target=self._heartbeat,
             name=f"run-lease-{self.run_id[:16]}",
@@ -235,22 +275,27 @@ class AsyncRunLeaseGuard:
         run_id: str,
         owner_id: str,
         ttl_seconds: float,
+        scope: RuntimeScope | None = None,
     ) -> None:
         self.store = store
         self.run_id = run_id
         self.owner_id = owner_id
         self.ttl_seconds = _validated_ttl(ttl_seconds)
+        self.scope = scope or RuntimeScope()
         self.lease: RunLease | None = None
         self._stop = asyncio.Event()
         self._task: asyncio.Task[None] | None = None
         self._lost: BaseException | None = None
 
     async def __aenter__(self) -> "AsyncRunLeaseGuard":
-        self.lease = await self.store.claim(
-            self.run_id,
-            owner_id=self.owner_id,
-            ttl_seconds=self.ttl_seconds,
-        )
+        operation = scoped_adapter_operation(self.store, "claim", self.scope)
+        kwargs: dict[str, Any] = {
+            "owner_id": self.owner_id,
+            "ttl_seconds": self.ttl_seconds,
+        }
+        if getattr(operation, "__name__", "") == "claim_scoped":
+            kwargs["scope"] = self.scope
+        self.lease = await operation(self.run_id, **kwargs)
         self._task = asyncio.create_task(
             self._heartbeat(),
             name=f"run-lease-{self.run_id[:16]}",

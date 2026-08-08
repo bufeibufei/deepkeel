@@ -4,6 +4,7 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.capability_manifest import RuntimeGeneration
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
 from deepkeel.failures import classify_runtime_failure
@@ -42,6 +43,14 @@ from deepkeel.telemetry import TelemetryRecord
 from deepkeel.tools import ToolExecutionContext
 from deepkeel.turn_context import TurnExecutionContext
 from deepkeel.type_narrowing import as_dict
+
+
+async def _arestore_budget(ledger: Any, run_id: str, snapshot: Any) -> None:
+    await run_sync_adapter(ledger.restore, run_id, snapshot)
+
+
+async def _abudget_snapshot(ledger: Any, run_id: str) -> Any:
+    return await run_sync_adapter(ledger.snapshot, run_id)
 
 
 class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
@@ -176,7 +185,9 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         deadline_monotonic = (
             time.monotonic() + max_elapsed_seconds if max_elapsed_seconds > 0 else None
         )
-        self.budget_ledger.restore(run_id, _prior_budget_state(durable_state, short))
+        operational_run_id = runtime_scope.qualify_identity(run_id)
+        prior_budget = _prior_budget_state(durable_state, short)
+        await _arestore_budget(self.budget_ledger, operational_run_id, prior_budget)
         previous_diagnostics = _prior_diagnostics(durable_state, short)
         resolved_skill = _merge_skill_activation(
             durable_state=durable_state,
@@ -192,12 +203,16 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             or short.get("ask_thread_id")
             or run_id
         )
-        graph_thread_id = run_id
+        graph_thread_id = operational_run_id
         turn_id = str(
             request.turn_id or bundle.get("turn_id") or short.get("turn_id") or f"turn-{uuid4()}"
         )
+        bundle["operational_run_id"] = operational_run_id
+        bundle["tenant_id"] = runtime_scope.tenant_id
+        bundle["namespace"] = runtime_scope.namespace
         event_sequence = await self._event_latest_sequence(
             run_id,
+            scope=runtime_scope,
             fallback=max(
                 0,
                 optional_int(bundle.get("event_sequence")) or 0,
@@ -230,15 +245,15 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         # Resume must preserve run.resumed as the first newly persisted event.
         # Recall is deliberately skipped on resume and remains available in
         # diagnostics, so emitting a second skip event adds no recovery value.
-        emit_memory_recall = not bool(
-            short.get("resume") or short.get("recover_interrupted")
-        )
+        emit_memory_recall = not bool(short.get("resume") or short.get("recover_interrupted"))
         if memory_recall and emit_memory_recall:
             emit(
                 {
                     "event_type": "memory.recall.decided",
                     "title": "Memory recall policy evaluated",
-                    "summary": str(memory_recall.get("reason") or memory_recall.get("status") or ""),
+                    "summary": str(
+                        memory_recall.get("reason") or memory_recall.get("status") or ""
+                    ),
                     "payload": dict(memory_recall),
                     "visible": False,
                 }
@@ -338,11 +353,13 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 "skill_activation": skill,
                 "tenant_id": str(bundle.get("tenant_id") or ""),
                 "governance_scope": {
-                    "tenant_id": str(bundle.get("tenant_id") or ""),
+                    "tenant_id": runtime_scope.tenant_id,
                     "user_id": str(user_id or "local-device"),
+                    "namespace": runtime_scope.namespace,
                     "skill_id": str(skill.get("skill_id") or ""),
                     "scopes": list(bundle.get("governance_scopes") or []),
                 },
+                "operational_run_id": operational_run_id,
                 "model_providers": model_providers,
                 "model_policy": resolved_model_policy,
                 "event_sink": emit,
@@ -355,6 +372,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             deadline_monotonic=deadline_monotonic,
             run_control=self.run_control,
             execution_fence=execution_fence,
+            scope=runtime_scope,
         )
         turn_context = TurnExecutionContext(
             model=model_gateway,
@@ -367,6 +385,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             entry_tool_skill_activator=self.entry_tool_skill_activator,
         )
 
+        initial_budget_snapshot = await _abudget_snapshot(self.budget_ledger, operational_run_id)
         try:
             graph_outcome = await execute_graph_turn(
                 graph=graph,
@@ -379,7 +398,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 context_bundle=bundle,
                 skill_activation=skill,
                 model_policy=resolved_model_policy,
-                budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                budget_state=initial_budget_snapshot.as_dict(),
                 input_parts=input_parts,
                 durable_state=durable_state,
                 state_migrations=self.state_migrations,
@@ -412,6 +431,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                         },
                     }
                 )
+            failed_budget_snapshot = await _abudget_snapshot(self.budget_ledger, operational_run_id)
             state = _failed_runtime_state(
                 question,
                 exc,
@@ -423,7 +443,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 context_bundle=bundle,
                 skill_activation=skill,
                 model_policy=resolved_model_policy,
-                budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                budget_state=failed_budget_snapshot.as_dict(),
                 events=emitter.events,
                 failure=failure,
             )

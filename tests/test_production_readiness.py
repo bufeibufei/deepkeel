@@ -3,6 +3,7 @@ from __future__ import annotations
 import pytest
 
 from deepkeel.adapter_sdk import (
+    AdapterCapabilities,
     AsyncRuntimeStateStoreAdapter,
     HarnessRuntimeBuilder,
     ProductionConfigurationError,
@@ -17,6 +18,14 @@ class DurableHostPort:
     """Structural test double representing an external durable Host adapter."""
 
     terminal_settlement_owner = "runtime"
+
+
+class MisdeclaredHostPort(DurableHostPort):
+    adapter_capabilities = AdapterCapabilities(
+        durable=True,
+        process_shared=False,
+        runtime_scope=True,
+    )
 
 
 def _production_ports(**overrides) -> RuntimePorts:
@@ -141,5 +150,17 @@ def test_production_rejects_in_memory_tool_store_hidden_by_async_bridge() -> Non
     assert any(
         issue.code == "PROCESS_LOCAL_PRODUCTION_PORT"
         and issue.port == "tool_execution_store"
+        for issue in report.errors
+    )
+
+
+def test_production_rejects_adapter_that_disclaims_process_sharing() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(event_journal=MisdeclaredHostPort())
+    ).production_readiness()
+
+    assert any(
+        issue.code == "ADAPTER_NOT_PRODUCTION_DURABLE"
+        and issue.port == "event_journal"
         for issue in report.errors
     )

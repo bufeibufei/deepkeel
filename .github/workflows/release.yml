@@ -87,7 +87,8 @@ jobs:
           uv run ruff check src tests verification
           uv run mypy src/deepkeel
           uv run python verification/readme_contract.py
-          uv run pytest -q --cov=deepkeel --cov-fail-under=80
+          uv run pytest -q --cov=deepkeel --cov-report=json:coverage.json --cov-fail-under=80
+          uv run python verification/quality_budget.py --coverage coverage.json
           uv build --clear
           uv run python verification/verify_distributions.py dist
       - name: Attest release artifacts

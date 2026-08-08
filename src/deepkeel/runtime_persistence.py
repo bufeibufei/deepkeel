@@ -4,11 +4,16 @@ import hashlib
 import json
 from typing import Any, Callable
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.events import envelope_runtime_event
 from deepkeel.leases import ExecutionFence
 from deepkeel.persistence import durable_state_from_result
 from deepkeel.runtime_api import RuntimeResult, RuntimeStreamEvent
-from deepkeel.scope import RuntimeScope, require_legacy_compatible_scope
+from deepkeel.scope import (
+    RuntimeScope,
+    require_legacy_compatible_scope,
+    scoped_adapter_operation,
+)
 from deepkeel.state_store import RuntimeStateMutation
 from deepkeel.type_narrowing import as_dict
 
@@ -75,7 +80,8 @@ async def acleanup_run(
                 resolved_scope,
                 adapter_name=type(runtime.checkpoint_store).__name__,
             )
-            runtime.checkpoint_store.delete(
+            await run_sync_adapter(
+                runtime.checkpoint_store.delete,
                 run_id,
                 session=session,
                 user_id=legacy_user_id,
@@ -87,7 +93,9 @@ async def acleanup_run(
     else:
         cleanup["durable"] = "not_configured"
 
-    thread_ids = list(dict.fromkeys([run_id, *(graph_thread_ids or [])]))
+    thread_ids = list(
+        dict.fromkeys([resolved_scope.qualify_identity(run_id), *(graph_thread_ids or [])])
+    )
     async_delete_thread = getattr(runtime.checkpointer, "adelete_thread", None)
     delete_thread = getattr(runtime.checkpointer, "delete_thread", None)
     if callable(async_delete_thread):
@@ -101,26 +109,22 @@ async def acleanup_run(
                     )
                     continue
                 try:
-                    delete_thread(thread_id)
+                    await run_sync_adapter(delete_thread, thread_id)
                 except Exception as exc:
                     errors[f"langgraph:{thread_id}"] = str(exc)
             except Exception as exc:
                 errors[f"langgraph:{thread_id}"] = str(exc)
         cleanup["langgraph"] = (
-            "failed"
-            if any(key.startswith("langgraph:") for key in errors)
-            else "deleted"
+            "failed" if any(key.startswith("langgraph:") for key in errors) else "deleted"
         )
     elif callable(delete_thread):
         for thread_id in thread_ids:
             try:
-                delete_thread(thread_id)
+                await run_sync_adapter(delete_thread, thread_id)
             except Exception as exc:
                 errors[f"langgraph:{thread_id}"] = str(exc)
         cleanup["langgraph"] = (
-            "failed"
-            if any(key.startswith("langgraph:") for key in errors)
-            else "deleted"
+            "failed" if any(key.startswith("langgraph:") for key in errors) else "deleted"
         )
     else:
         cleanup["langgraph"] = "unsupported"
@@ -132,8 +136,9 @@ async def acleanup_run(
         if errors:
             recovery["checkpoint_cleanup_errors"] = errors
         diagnostics["recovery"] = recovery
-    runtime.budget_ledger.clear(run_id)
-    runtime.run_control.release(run_id)
+    operational_run_id = resolved_scope.qualify_identity(run_id)
+    await run_sync_adapter(runtime.budget_ledger.clear, operational_run_id)
+    await run_sync_adapter(runtime.run_control.release, operational_run_id)
     return cleanup
 
 
@@ -161,7 +166,8 @@ async def aload_authoritative_checkpoint(
         except Exception as exc:
             errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
     elif runtime.runtime_state_store is not None:
-        state, authority, sync_errors = runtime._load_authoritative_checkpoint(
+        state, authority, sync_errors = await run_sync_adapter(
+            runtime._load_authoritative_checkpoint,
             run_id,
             session=session,
             user_id=user_id,
@@ -189,7 +195,8 @@ async def aload_authoritative_checkpoint(
         except Exception as exc:
             errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
     elif runtime.runtime_state_store is None and runtime.checkpoint_store is not None:
-        state, authority, sync_errors = runtime._load_authoritative_checkpoint(
+        state, authority, sync_errors = await run_sync_adapter(
+            runtime._load_authoritative_checkpoint,
             run_id,
             session=session,
             user_id=user_id,
@@ -205,12 +212,28 @@ async def event_latest_sequence(
     runtime: Any,
     run_id: str,
     *,
+    scope: RuntimeScope | None = None,
     fallback: int = 0,
 ) -> int:
+    resolved_scope = scope or RuntimeScope()
     if runtime.async_event_journal is not None:
-        return await runtime.async_event_journal.latest_sequence(run_id)
+        operation = scoped_adapter_operation(
+            runtime.async_event_journal,
+            "latest_sequence",
+            resolved_scope,
+        )
+        if getattr(operation, "__name__", "") == "latest_sequence_scoped":
+            return await operation(run_id, scope=resolved_scope)
+        return await operation(run_id)
     if runtime.event_journal is not None:
-        return runtime.event_journal.latest_sequence(run_id)
+        operation = scoped_adapter_operation(
+            runtime.event_journal,
+            "latest_sequence",
+            resolved_scope,
+        )
+        if getattr(operation, "__name__", "") == "latest_sequence_scoped":
+            return await run_sync_adapter(operation, run_id, scope=resolved_scope)
+        return await run_sync_adapter(operation, run_id)
     return max(0, int(fallback))
 
 
@@ -220,11 +243,15 @@ def host_owns_terminal_settlement(runtime: Any) -> bool:
         if runtime.async_runtime_state_store is not None
         else runtime.runtime_state_store
     )
-    return state_store is not None and getattr(
-        state_store,
-        "terminal_settlement_owner",
-        "runtime",
-    ) == "host"
+    return (
+        state_store is not None
+        and getattr(
+            state_store,
+            "terminal_settlement_owner",
+            "runtime",
+        )
+        == "host"
+    )
 
 
 async def record_checkpoint_cleanup_event(
@@ -244,19 +271,21 @@ async def record_checkpoint_cleanup_event(
     recovery = as_dict(result.diagnostics.get("recovery"))
     cleanup = as_dict(recovery.get("checkpoint_cleanup"))
     cleanup_errors = as_dict(recovery.get("checkpoint_cleanup_errors"))
-    sequence = await event_latest_sequence(
-        runtime,
-        run_id,
-        fallback=fallback_sequence,
-    ) + 1
+    sequence = (
+        await event_latest_sequence(
+            runtime,
+            run_id,
+            scope=scope,
+            fallback=fallback_sequence,
+        )
+        + 1
+    )
     envelope = RuntimeStreamEvent.model_validate(
         envelope_runtime_event(
             {
                 "event_type": "runtime.checkpoint.cleanup.recorded",
                 "title": "Checkpoint cleanup recorded",
-                "summary": str(
-                    cleanup.get("status") or cleanup.get("durable") or "recorded"
-                ),
+                "summary": str(cleanup.get("status") or cleanup.get("durable") or "recorded"),
                 "visibility": "internal",
                 "payload": {
                     "checkpoint_cleanup": cleanup,
@@ -272,9 +301,21 @@ async def record_checkpoint_cleanup_event(
     )
     try:
         if runtime.async_event_journal is not None:
-            await runtime.async_event_journal.append(envelope)
+            operation = scoped_adapter_operation(
+                runtime.async_event_journal,
+                "append",
+                scope,
+            )
+            if getattr(operation, "__name__", "") == "append_scoped":
+                await operation(envelope, scope=scope)
+            else:
+                await operation(envelope)
         elif runtime.event_journal is not None:
-            runtime.event_journal.append(envelope)
+            operation = scoped_adapter_operation(runtime.event_journal, "append", scope)
+            if getattr(operation, "__name__", "") == "append_scoped":
+                await run_sync_adapter(operation, envelope, scope=scope)
+            else:
+                await run_sync_adapter(operation, envelope)
     except Exception as exc:
         recovery["checkpoint_cleanup_event"] = "failed"
         recovery["checkpoint_cleanup_event_error"] = str(exc)
@@ -325,11 +366,15 @@ async def persist_runtime_snapshot(
             execution_fence.raise_if_lost()
         resume_token = str(result.checkpoint.get("resume_token") or "")
         terminal = status in {"completed", "failed", "canceled"}
-        if terminal and getattr(
-            state_store,
-            "terminal_settlement_owner",
-            "runtime",
-        ) == "host":
+        if (
+            terminal
+            and getattr(
+                state_store,
+                "terminal_settlement_owner",
+                "runtime",
+            )
+            == "host"
+        ):
             recovery["atomic_checkpoint"] = "host_settlement_required"
             diagnostics["recovery"] = recovery
             return
@@ -343,9 +388,7 @@ async def persist_runtime_snapshot(
                 "status": status,
                 "stop_reason": result.stop_reason,
                 "resume_token": resume_token,
-                "checkpoint_schema_version": str(
-                    durable_state.get("schema_version") or ""
-                ),
+                "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
             },
             event_visibility="public" if terminal else "internal",
             checkpoint_type="terminal" if terminal else "runtime",
@@ -364,16 +407,10 @@ async def persist_runtime_snapshot(
             delete_checkpoint_types=(
                 ("runtime", "suspended", "resume", "settling") if terminal else ()
             ),
-            expected_version=_optional_int(
-                context_bundle.get("runtime_state_version")
-            ),
-            expected_sequence=_optional_int(
-                context_bundle.get("runtime_state_sequence")
-            ),
+            expected_version=_optional_int(context_bundle.get("runtime_state_version")),
+            expected_sequence=_optional_int(context_bundle.get("runtime_state_sequence")),
             fence_token=execution_fence.token if execution_fence is not None else "",
-            fence_generation=(
-                execution_fence.generation if execution_fence is not None else 0
-            ),
+            fence_generation=(execution_fence.generation if execution_fence is not None else 0),
         )
         try:
             if runtime.async_runtime_state_store is not None:
@@ -388,7 +425,8 @@ async def persist_runtime_snapshot(
                     raise RuntimeError("runtime state store is not configured")
                 commit_scoped = getattr(sync_state_store, "commit_scoped", None)
                 if scope is not None and callable(commit_scoped):
-                    receipt = commit_scoped(
+                    receipt = await run_sync_adapter(
+                        commit_scoped,
                         mutation,
                         session=session,
                         scope=scope,
@@ -398,7 +436,8 @@ async def persist_runtime_snapshot(
                         scope or RuntimeScope(user_id=user_id),
                         adapter_name=type(sync_state_store).__name__,
                     )
-                    receipt = sync_state_store.commit(
+                    receipt = await run_sync_adapter(
+                        sync_state_store.commit,
                         mutation,
                         session=session,
                         user_id=legacy_user_id,
@@ -436,7 +475,8 @@ async def persist_runtime_snapshot(
             sync_checkpoint_store = runtime.checkpoint_store
             if sync_checkpoint_store is None:
                 raise RuntimeError("checkpoint store is not configured")
-            sync_checkpoint_store.save(
+            await run_sync_adapter(
+                sync_checkpoint_store.save,
                 run_id,
                 durable_state,
                 session=session,

@@ -7,6 +7,7 @@ from copy import deepcopy
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.budget import (
     INPUT_TOKENS,
     MODEL_CALLS,
@@ -70,6 +71,7 @@ from deepkeel.model_step_execution import (
     execute_model_attempt,
     record_failed_attempt_usage,
     record_successful_attempt_usage,
+    scoped_model_health_provider_id as _health_provider_id,
 )
 from deepkeel.policy import (
     PolicyDeniedError,
@@ -197,6 +199,7 @@ class RoutedModelGateway:
                 forced_tool_name=step_context.forced_tool_name,
                 governance_scope=step_context.governance_scope,
                 deadline_monotonic=step_context.deadline_monotonic,
+                operational_run_id=step_context.operational_run_id,
             )
         requires_image_input = any(
             any(part.type == "image" for part in message.content_parts) for message in messages
@@ -225,8 +228,10 @@ class RoutedModelGateway:
         )
 
         for attempt_index, (route, provider, retry_kind) in enumerate(attempts, start=1):
-            health = self.model_health_store.snapshot(
-                provider.info.provider_id,
+            health_provider_id = _health_provider_id(provider.info.provider_id, step_context)
+            health = await run_sync_adapter(
+                self.model_health_store.snapshot,
+                health_provider_id,
                 provider.info.model_id,
             )
             if not health.is_available():
@@ -282,9 +287,10 @@ class RoutedModelGateway:
                 )
             )
             budget = (
-                self.budget_ledger.consume(
+                await run_sync_adapter(
+                    self.budget_ledger.consume,
                     BudgetRequest(
-                        run_id=step_context.run_id,
+                        run_id=step_context.accounting_run_id,
                         metric=MODEL_CALLS,
                         limit=_model_call_limit(step_context.model_policy),
                         operation_id=(
@@ -295,7 +301,7 @@ class RoutedModelGateway:
                             "step_index": step_context.step_index,
                             "attempt_index": attempt_index,
                         },
-                    )
+                    ),
                 )
                 if policy.allowed
                 else None
@@ -318,6 +324,10 @@ class RoutedModelGateway:
                 "max_input_tokens_per_call",
                 role=route.role,
             )
+            budget_snapshot = await run_sync_adapter(
+                self.budget_ledger.snapshot,
+                step_context.accounting_run_id,
+            )
             prepared_model_context = _prepare_model_context(
                 provider_messages,
                 tools,
@@ -325,7 +335,7 @@ class RoutedModelGateway:
                 route=route,
                 provider_capabilities=provider_capabilities,
                 budget_policy=budget_policy,
-                budget_ledger=self.budget_ledger,
+                budget_snapshot=budget_snapshot,
                 step_context=step_context,
                 per_call_input_limit=per_call_input_limit,
                 token_estimator=token_estimator,
@@ -337,9 +347,9 @@ class RoutedModelGateway:
             if per_call_input_limit is not None and estimated_input_tokens > per_call_input_limit:
                 raise BudgetExceededError(
                     preview_budget(
-                        self.budget_ledger.snapshot(step_context.run_id),
+                        budget_snapshot,
                         BudgetRequest(
-                            run_id=step_context.run_id,
+                            run_id=step_context.accounting_run_id,
                             metric=INPUT_TOKENS,
                             amount=estimated_input_tokens,
                             limit=per_call_input_limit,
@@ -348,9 +358,9 @@ class RoutedModelGateway:
                 )
             input_budget = (
                 preview_budget(
-                    self.budget_ledger.snapshot(step_context.run_id),
+                    budget_snapshot,
                     BudgetRequest(
-                        run_id=step_context.run_id,
+                        run_id=step_context.accounting_run_id,
                         metric=INPUT_TOKENS,
                         amount=estimated_input_tokens,
                         limit=budget_policy.limit("max_input_tokens_total"),
@@ -361,23 +371,24 @@ class RoutedModelGateway:
                 else None
             )
             retry_budget = (
-                self.budget_ledger.consume(
+                await run_sync_adapter(
+                    self.budget_ledger.consume,
                     BudgetRequest(
-                        run_id=step_context.run_id,
+                        run_id=step_context.accounting_run_id,
                         metric=MODEL_RETRIES,
                         limit=budget_policy.limit("max_model_retries"),
                         operation_id=(
                             f"model-retry:{step_context.step_index}:attempt:{attempt_index}"
                         ),
                         metadata={"role": route.role, "retry_kind": retry_kind},
-                    )
+                    ),
                 )
                 if policy.allowed and attempt_index > 1
                 else None
             )
             max_output_tokens = _remaining_output_tokens(
                 budget_policy,
-                self.budget_ledger.snapshot(step_context.run_id),
+                budget_snapshot,
                 route.role,
                 capabilities=provider_capabilities,
                 estimated_input_tokens=estimated_input_tokens,
@@ -471,7 +482,8 @@ class RoutedModelGateway:
                 turn = outcome.turn
             except ModelAttemptExecutionError as attempt_error:
                 exc = attempt_error.cause
-                failed_input_budget, failed_output_budget = record_failed_attempt_usage(
+                failed_input_budget, failed_output_budget = await run_sync_adapter(
+                    record_failed_attempt_usage,
                     ledger=self.budget_ledger,
                     policy=budget_policy,
                     step_context=step_context,
@@ -492,13 +504,15 @@ class RoutedModelGateway:
                     raise BudgetExceededError(failed_output_budget) from exc
                 failure = classify_model_failure(exc)
                 if failure.retryable and failure.degrades_provider_health:
-                    route_payload["health"] = self.model_health_store.record_failure(
-                        provider.info.provider_id,
+                    failed_health = await run_sync_adapter(
+                        self.model_health_store.record_failure,
+                        health_provider_id,
                         provider.info.model_id,
                         category=failure.category,
                         immediate=failure.category == "rate_limited",
                         retry_after_seconds=failure.retry_after_seconds,
-                    ).as_dict()
+                    )
+                    route_payload["health"] = failed_health.as_dict()
                 can_retry = (
                     failure.retryable
                     and not attempt_error.visible_delta_emitted
@@ -516,7 +530,8 @@ class RoutedModelGateway:
                 if on_route is not None:
                     on_route(route_payload)
                 continue
-            settled_input_budget, output_budget = record_successful_attempt_usage(
+            settled_input_budget, output_budget = await run_sync_adapter(
+                record_successful_attempt_usage,
                 ledger=self.budget_ledger,
                 policy=budget_policy,
                 step_context=step_context,

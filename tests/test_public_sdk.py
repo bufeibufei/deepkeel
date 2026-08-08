@@ -61,7 +61,11 @@ from deepkeel.adapter_sdk import (
 from deepkeel.handoffs import HandoffSpec
 from deepkeel.subagents import SubAgentSpec
 from deepkeel.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
-from deepkeel.public_api import PUBLIC_API_CANONICAL_LAYER, PUBLIC_API_MANIFEST
+from deepkeel.public_api import (
+    PUBLIC_API_CANONICAL_LAYER,
+    PUBLIC_API_MANIFEST,
+    PUBLIC_API_SEMANTIC_MANIFEST,
+)
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
@@ -97,6 +101,27 @@ def test_public_api_matches_the_frozen_v4_snapshot() -> None:
     assert actual == expected, (
         "public API changed; review compatibility and update the v4 snapshot only "
         "for an intentional contract release"
+    )
+
+
+def test_public_api_semantics_match_the_frozen_v4_snapshot() -> None:
+    serialized = json.dumps(
+        PUBLIC_API_SEMANTIC_MANIFEST,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+    ).encode("utf-8")
+    actual = hashlib.sha256(serialized).hexdigest()
+    expected = (
+        Path(__file__)
+        .with_name("public_api_semantics_v4.sha256")
+        .read_text(encoding="ascii")
+        .strip()
+    )
+
+    assert actual == expected, (
+        "public API semantics changed; review signatures and data shapes before "
+        "updating the v4 semantic snapshot"
     )
 
 

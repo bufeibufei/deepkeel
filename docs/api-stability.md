@@ -7,6 +7,9 @@ Trusted Publisher has been configured.
 DeepKeel follows Semantic Versioning. The v4 public SDK is frozen by
 `tests/public_api_v4.sha256`. A public symbol or signature change requires an
 intentional API review, changelog entry, snapshot update and migration note.
+`tests/public_api_semantics_v4.sha256` additionally freezes callable
+signatures, model/dataclass fields, enum values and selected runtime methods,
+so a name-preserving semantic break cannot bypass the release gate.
 
 The package root and the versioned `*_sdk` modules are public. Other modules are
 implementation details unless explicitly documented. Persisted schema versions

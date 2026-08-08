@@ -95,6 +95,29 @@ class AsyncRuntimeEventJournal(Protocol):
         limit: int = 100,
     ) -> tuple[RuntimeEventEnvelope, ...]: ...
 
+    async def append_scoped(
+        self,
+        event: RuntimeEventEnvelope,
+        *,
+        scope: RuntimeScope,
+    ) -> RuntimeEventEnvelope: ...
+
+    async def latest_sequence_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+    ) -> int: ...
+
+    async def read_after_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> tuple[RuntimeEventEnvelope, ...]: ...
+
 
 class AsyncTraceStore(Protocol):
     async def query(self, query: TraceQuery) -> TracePage: ...
@@ -115,6 +138,22 @@ class AsyncRunLeaseStore(Protocol):
 
     async def inspect(self, run_id: str) -> RunLease | None: ...
 
+    async def claim_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease: ...
+
+    async def inspect_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+    ) -> RunLease | None: ...
+
 
 class AsyncToolExecutionStore(Protocol):
     """Native async idempotency boundary for tool side effects."""
@@ -132,6 +171,17 @@ class AsyncToolExecutionStore(Protocol):
     async def replay(self, claim: ToolExecutionClaim) -> ToolResult: ...
 
     async def settle(self, claim: ToolExecutionClaim, result: ToolResult) -> None: ...
+
+    async def claim_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim: ...
 
 
 async def run_sync_adapter(
@@ -217,8 +267,42 @@ class AsyncRuntimeEventJournalAdapter:
     async def append(self, event: RuntimeEventEnvelope) -> RuntimeEventEnvelope:
         return await run_sync_adapter(self.journal.append, event)
 
+    async def append_scoped(
+        self,
+        event: RuntimeEventEnvelope,
+        *,
+        scope: RuntimeScope,
+    ) -> RuntimeEventEnvelope:
+        operation = getattr(self.journal, "append_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.journal).__name__,
+            )
+            return await self.append(event)
+        return await run_sync_adapter(operation, event, scope=scope)
+
     async def latest_sequence(self, run_id: str) -> int:
         return await run_sync_adapter(self.journal.latest_sequence, run_id)
+
+    async def latest_sequence_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+    ) -> int:
+        operation = getattr(self.journal, "latest_sequence_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.journal).__name__,
+            )
+            return await self.latest_sequence(run_id)
+        return await run_sync_adapter(operation, run_id, scope=scope)
 
     async def read_after(
         self,
@@ -230,6 +314,35 @@ class AsyncRuntimeEventJournalAdapter:
         return await run_sync_adapter(
             self.journal.read_after,
             run_id,
+            after_sequence=after_sequence,
+            limit=limit,
+        )
+
+    async def read_after_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        after_sequence: int = 0,
+        limit: int = 100,
+    ) -> tuple[RuntimeEventEnvelope, ...]:
+        operation = getattr(self.journal, "read_after_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.journal).__name__,
+            )
+            return await self.read_after(
+                run_id,
+                after_sequence=after_sequence,
+                limit=limit,
+            )
+        return await run_sync_adapter(
+            operation,
+            run_id,
+            scope=scope,
             after_sequence=after_sequence,
             limit=limit,
         )
@@ -263,6 +376,35 @@ class AsyncRunLeaseStoreAdapter:
             ttl_seconds=ttl_seconds,
         )
 
+    async def claim_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+        owner_id: str,
+        ttl_seconds: float,
+    ) -> RunLease:
+        operation = getattr(self.store, "claim_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.store).__name__,
+            )
+            return await self.claim(
+                run_id,
+                owner_id=owner_id,
+                ttl_seconds=ttl_seconds,
+            )
+        return await run_sync_adapter(
+            operation,
+            run_id,
+            scope=scope,
+            owner_id=owner_id,
+            ttl_seconds=ttl_seconds,
+        )
+
     async def renew(self, lease: RunLease, *, ttl_seconds: float) -> RunLease:
         return await run_sync_adapter(
             self.store.renew,
@@ -275,6 +417,23 @@ class AsyncRunLeaseStoreAdapter:
 
     async def inspect(self, run_id: str) -> RunLease | None:
         return await run_sync_adapter(self.store.inspect, run_id)
+
+    async def inspect_scoped(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope,
+    ) -> RunLease | None:
+        operation = getattr(self.store, "inspect_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.store).__name__,
+            )
+            return await self.inspect(run_id)
+        return await run_sync_adapter(operation, run_id, scope=scope)
 
 
 class AsyncToolExecutionStoreAdapter:
@@ -294,6 +453,41 @@ class AsyncToolExecutionStoreAdapter:
     ) -> ToolExecutionClaim:
         return await run_sync_adapter(
             self.store.claim,
+            run_id=run_id,
+            call=call,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+        )
+
+    async def claim_scoped(
+        self,
+        *,
+        scope: RuntimeScope,
+        run_id: str,
+        call: ToolCall,
+        lease_seconds: float,
+        max_attempts: int,
+        reexecution_safe: bool = True,
+    ) -> ToolExecutionClaim:
+        operation = getattr(self.store, "claim_scoped", None)
+        if not callable(operation):
+            from deepkeel.scope import require_legacy_compatible_scope
+
+            require_legacy_compatible_scope(
+                scope,
+                adapter_name=type(self.store).__name__,
+            )
+            return await self.claim(
+                run_id=run_id,
+                call=call,
+                lease_seconds=lease_seconds,
+                max_attempts=max_attempts,
+                reexecution_safe=reexecution_safe,
+            )
+        return await run_sync_adapter(
+            operation,
+            scope=scope,
             run_id=run_id,
             call=call,
             lease_seconds=lease_seconds,

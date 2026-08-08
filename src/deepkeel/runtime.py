@@ -2,7 +2,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import AsyncIterator
-from threading import Event as ThreadEvent, Lock
+from threading import Lock
 from typing import Any, Callable
 from uuid import uuid4
 
@@ -18,9 +18,11 @@ from deepkeel.budget import (
 )
 from deepkeel.async_ports import (
     AsyncDurableCheckpointStore,
+    AsyncRunLeaseStoreAdapter,
     AsyncRunLeaseStore,
     AsyncRuntimeEventJournal,
     AsyncRuntimeStateStore,
+    run_sync_adapter,
 )
 from deepkeel.contracts import (
     Artifact,
@@ -98,10 +100,14 @@ from deepkeel.runtime_persistence import (
     persist_runtime_snapshot,
     record_checkpoint_cleanup_event,
 )
-from deepkeel.runtime_streaming import BoundedRuntimeStreamBridge
+from deepkeel.runtime_async_stream import stream_runtime_async
 from deepkeel.skills import SkillPolicy
 from deepkeel.skill_activation import EntryToolSkillActivator
-from deepkeel.scope import RuntimeScope, require_legacy_compatible_scope
+from deepkeel.scope import (
+    RuntimeScope,
+    require_legacy_compatible_scope,
+    scoped_adapter_operation,
+)
 from deepkeel.state_store import (
     RuntimeStateStore,
     ScopedRuntimeStateStore,
@@ -298,6 +304,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self,
         run_id: str,
         *,
+        scope: RuntimeScope | None = None,
         after_sequence: int = 0,
         limit: int = 100,
     ) -> tuple[RuntimeStreamEvent, ...]:
@@ -305,34 +312,57 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             if self.async_event_journal is not None:
                 raise RuntimeError("async event journal is configured; use areplay_events()")
             return ()
+        resolved_scope = scope or RuntimeScope()
+        operation = (
+            scoped_adapter_operation(self.event_journal, "read_after", resolved_scope)
+            if scope is not None
+            else self.event_journal.read_after
+        )
+        kwargs: dict[str, Any] = {
+            "after_sequence": after_sequence,
+            "limit": limit,
+        }
+        if scope is not None and getattr(operation, "__name__", "") == "read_after_scoped":
+            kwargs["scope"] = resolved_scope
         return tuple(
-            RuntimeStreamEvent.model_validate(event)
-            for event in self.event_journal.read_after(
-                run_id,
-                after_sequence=after_sequence,
-                limit=limit,
-            )
+            RuntimeStreamEvent.model_validate(event) for event in operation(run_id, **kwargs)
         )
 
     async def areplay_events(
         self,
         run_id: str,
         *,
+        scope: RuntimeScope | None = None,
         after_sequence: int = 0,
         limit: int = 100,
     ) -> tuple[RuntimeStreamEvent, ...]:
+        resolved_scope = scope or RuntimeScope()
+        kwargs: dict[str, Any] = {
+            "after_sequence": after_sequence,
+            "limit": limit,
+        }
         if self.async_event_journal is not None:
-            events = await self.async_event_journal.read_after(
-                run_id,
-                after_sequence=after_sequence,
-                limit=limit,
+            operation = (
+                scoped_adapter_operation(
+                    self.async_event_journal,
+                    "read_after",
+                    resolved_scope,
+                )
+                if scope is not None
+                else self.async_event_journal.read_after
             )
+            if scope is not None and getattr(operation, "__name__", "") == "read_after_scoped":
+                kwargs["scope"] = resolved_scope
+            events = await operation(run_id, **kwargs)
         elif self.event_journal is not None:
-            events = self.event_journal.read_after(
-                run_id,
-                after_sequence=after_sequence,
-                limit=limit,
+            operation = (
+                scoped_adapter_operation(self.event_journal, "read_after", resolved_scope)
+                if scope is not None
+                else self.event_journal.read_after
             )
+            if scope is not None and getattr(operation, "__name__", "") == "read_after_scoped":
+                kwargs["scope"] = resolved_scope
+            events = await run_sync_adapter(operation, run_id, **kwargs)
         else:
             return ()
         return tuple(RuntimeStreamEvent.model_validate(event) for event in events)
@@ -378,6 +408,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             run_id=prepared.run_id,
             owner_id=self.run_lease_owner_id,
             ttl_seconds=self.run_lease_ttl_seconds,
+            scope=prepared.runtime_scope,
         ) as lease_guard:
 
             def guarded_sink(event: dict[str, Any]) -> None:
@@ -413,6 +444,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                 run_id=prepared.run_id,
                 owner_id=self.run_lease_owner_id,
                 ttl_seconds=self.run_lease_ttl_seconds,
+                scope=prepared.runtime_scope,
             ) as async_lease_guard:
 
                 def guarded_async_sink(event: dict[str, Any]) -> None:
@@ -438,11 +470,12 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                 session=session,
                 event_sink=event_sink,
             )
-        with RunLeaseGuard(
-            self.run_lease_store,
+        async with AsyncRunLeaseGuard(
+            AsyncRunLeaseStoreAdapter(self.run_lease_store),
             run_id=prepared.run_id,
             owner_id=self.run_lease_owner_id,
             ttl_seconds=self.run_lease_ttl_seconds,
+            scope=prepared.runtime_scope,
         ) as sync_lease_guard:
 
             def guarded_sink(event: dict[str, Any]) -> None:
@@ -470,73 +503,18 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         session: Any = None,
     ) -> AsyncIterator[RuntimeStreamEvent]:
         """Stream runtime events with cooperative cancellation for async hosts."""
-        prepared = self._ensure_request_identity(request)
-        loop = asyncio.get_running_loop()
-        closed = ThreadEvent()
-        bridge = BoundedRuntimeStreamBridge(
-            loop=loop,
-            maxsize=self.async_stream_buffer_size,
-            closed=closed,
+        stream = stream_runtime_async(
+            self,
+            request,
+            provider=provider,
+            providers=providers,
+            session=session,
         )
-
-        def sink(event: dict[str, Any]) -> None:
-            if closed.is_set():
-                self.run_control.raise_if_cancelled(prepared.run_id, force=True)
-                return
-            bridge.offer_event(event)
-
-        async def execute() -> None:
-            try:
-                result = await self.arun(
-                    prepared,
-                    provider=provider,
-                    providers=providers,
-                    session=session,
-                    event_sink=sink,
-                )
-                if not closed.is_set():
-                    await bridge.put_terminal("result", result)
-            except BaseException as exc:
-                if not closed.is_set():
-                    await bridge.put_terminal("error", exc)
-
-        task = asyncio.create_task(execute())
-        completed = False
         try:
-            while True:
-                kind, value = await bridge.get()
-                if kind == "event":
-                    yield RuntimeStreamEvent.model_validate(value)
-                    continue
-                if kind == "error":
-                    raise value
-                result = value
-                yield RuntimeStreamEvent(
-                    run_id=result.run_id,
-                    thread_id=result.thread_id,
-                    turn_id=result.turn_id,
-                    event_type="runtime.result",
-                    title="Runtime result",
-                    summary=result.final_answer.summary,
-                    payload={"result": result.model_dump(mode="json")},
-                    ephemeral=True,
-                )
-                completed = True
-                return
+            async for event in stream:
+                yield event
         finally:
-            closed.set()
-            await bridge.close()
-            if not completed and not task.done():
-                cancel = getattr(self.run_control, "cancel", None)
-                if callable(cancel):
-                    cancel(prepared.run_id)
-                try:
-                    await asyncio.wait_for(
-                        asyncio.shield(task),
-                        timeout=self.async_cancel_timeout_seconds,
-                    )
-                except (TimeoutError, asyncio.CancelledError):
-                    task.cancel()
+            await stream.aclose()
 
     def _ensure_request_identity(self, request: RuntimeRequest) -> RuntimeRequest:
         bundle = dict(request.context_bundle)
@@ -615,7 +593,10 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             cleanup["durable"] = "not_configured"
         delete_thread = getattr(self.checkpointer, "delete_thread", None)
         if callable(delete_thread):
-            thread_ids = list(dict.fromkeys([run_id, *(graph_thread_ids or [])]))
+            resolved_scope = scope or RuntimeScope(user_id=user_id)
+            thread_ids = list(
+                dict.fromkeys([resolved_scope.qualify_identity(run_id), *(graph_thread_ids or [])])
+            )
             for thread_id in thread_ids:
                 try:
                     delete_thread(thread_id)
@@ -633,8 +614,9 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             if errors:
                 recovery["checkpoint_cleanup_errors"] = errors
             diagnostics["recovery"] = recovery
-        self.budget_ledger.clear(run_id)
-        self.run_control.release(run_id)
+        operational_run_id = (scope or RuntimeScope(user_id=user_id)).qualify_identity(run_id)
+        self.budget_ledger.clear(operational_run_id)
+        self.run_control.release(operational_run_id)
         return cleanup
 
     async def _acleanup_run(
@@ -740,8 +722,19 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             scope=scope,
         )
 
-    async def _event_latest_sequence(self, run_id: str, *, fallback: int = 0) -> int:
-        return await event_latest_sequence(self, run_id, fallback=fallback)
+    async def _event_latest_sequence(
+        self,
+        run_id: str,
+        *,
+        scope: RuntimeScope | None = None,
+        fallback: int = 0,
+    ) -> int:
+        return await event_latest_sequence(
+            self,
+            run_id,
+            scope=scope,
+            fallback=fallback,
+        )
 
     def _host_owns_terminal_settlement(self) -> bool:
         return host_owns_terminal_settlement(self)

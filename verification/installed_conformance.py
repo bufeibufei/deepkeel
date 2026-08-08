@@ -43,6 +43,7 @@ from deepkeel.runtime_sdk import (
     Observation,
     PendingAction,
     RuntimeRequest,
+    RuntimeScope,
     ToolCall,
     ToolResult,
 )
@@ -394,7 +395,9 @@ def verify_wait_resume_async_and_cancel() -> None:
     assert async_resumed.status.value == "completed"
 
     control = InMemoryRunControl()
-    control.cancel("canceled")
+    control.cancel(
+        RuntimeScope(user_id="conformance-user").qualify_identity("canceled")
+    )
     canceled_runtime = HarnessRuntimeBuilder().with_ports(
         RuntimePorts(run_control=control)
     ).build()
