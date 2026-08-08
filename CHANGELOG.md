@@ -14,6 +14,13 @@
 
 ## 4.0.0 - 2026-08-08
 
+- Split turn preparation, durable snapshot commits, and tool idempotency into
+  independently testable phases, then tighten the complexity ratchets around
+  the smaller orchestration functions.
+- Freeze semantic descriptors for all stable Runtime, Extension, and Memory
+  SDK symbols rather than a hand-picked subset.
+- Extend the PostgreSQL reference bundle with capability catalog, context
+  summary, Memory, and SubAgent lineage/checkpoint/suspension stores.
 - Add explicit development, testing, and production runtime profiles. Production
   composition now fails closed unless progressive tool disclosure is enforced.
 - Promote `HarnessRuntimeBuilder` to the stable Runtime SDK. The Adapter SDK

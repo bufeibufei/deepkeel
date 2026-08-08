@@ -2,6 +2,12 @@
 
 from deepkeel.contrib.postgres.checkpoint_store import PostgresDurableCheckpointStore
 from deepkeel.contrib.postgres.bundle import PostgresRuntimeBundle
+from deepkeel.contrib.postgres.control_plane import (
+    PostgresCapabilityPackageStore,
+    PostgresContextSummaryCache,
+    PostgresMemoryStore,
+    PostgresSubAgentStore,
+)
 from deepkeel.contrib.postgres.database import PostgresDatabase
 from deepkeel.contrib.postgres.event_journal import PostgresRuntimeEventJournal
 from deepkeel.contrib.postgres.governance import (
@@ -28,9 +34,12 @@ __all__ = [
     "AppliedPostgresMigration",
     "PostgresDatabase",
     "PostgresBudgetLedger",
+    "PostgresCapabilityPackageStore",
+    "PostgresContextSummaryCache",
     "PostgresDurableCheckpointStore",
     "PostgresModelHealthStore",
     "PostgresModelInvocationStore",
+    "PostgresMemoryStore",
     "PostgresMigration",
     "PostgresRunLeaseStore",
     "PostgresRunControl",
@@ -41,6 +50,7 @@ __all__ = [
     "PostgresSchemaError",
     "PostgresSchemaRegistry",
     "PostgresSchemaStatus",
+    "PostgresSubAgentStore",
     "PostgresToolExecutionStore",
     "PostgresTraceStore",
     "default_postgres_migrations",

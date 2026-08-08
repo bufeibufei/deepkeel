@@ -48,7 +48,6 @@ from deepkeel.tool_execution import (
     ToolExecutionContext,
     ToolExecutionStore,
 )
-from deepkeel.scope import scoped_adapter_operation
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
 from deepkeel.type_narrowing import as_dict
 
@@ -74,6 +73,7 @@ from deepkeel.tool_execution_support import (
     normalize_arguments,
 )
 from deepkeel.tool_executor_contracts import ToolHandler, ToolPreflight
+from deepkeel.tool_idempotency import resolve_tool_claim, settle_tool_claim
 
 
 async def _araise_if_cancelled(context: ToolExecutionContext, *, force: bool = False) -> None:
@@ -335,101 +335,20 @@ class ToolExecutor:
             self.max_idempotent_attempts,
         )
         reexecution_safe = _tool_reexecution_safe(spec)
-        try:
-            claim_operation = scoped_adapter_operation(
-                self._execution_store,
-                "claim",
-                context.scope,
-            )
-            claim_kwargs: dict[str, Any] = {
-                "run_id": context.run_id,
-                "call": normalized,
-                "lease_seconds": lease_seconds,
-                "max_attempts": max_attempts,
-                "reexecution_safe": reexecution_safe,
-            }
-            if getattr(claim_operation, "__name__", "") == "claim_scoped":
-                claim_kwargs["scope"] = context.scope
-            claim = await claim_operation(**claim_kwargs)
-        except Exception as exc:
-            return _with_runtime_metrics(
-                _failed_result(normalized, f"tool execution claim failed: {exc}", retryable=True),
-                started_at,
-                phase="idempotent_claim",
-                executed=False,
-            )
-        if claim.status == "replay":
-            try:
-                persisted = await self._execution_store.replay(claim)
-            except Exception as exc:
-                failed = _failed_result(
-                    normalized,
-                    "Tool execution recovery failed. Retry the operation.",
-                    retryable=True,
-                )
-                failed.metadata["replay_error"] = str(exc)
-                return _with_runtime_metrics(
-                    failed,
-                    started_at,
-                    phase="idempotent_replay",
-                    executed=False,
-                )
-            return _with_runtime_metrics(
-                _replayed_result(persisted, normalized),
-                started_at,
-                phase="idempotent_replay",
-                executed=False,
-            )
-        if claim.status == "busy":
-            busy = _failed_result(
-                normalized, "tool execution is already in progress", retryable=True
-            )
-            busy.metadata = {
-                "idempotency_busy": True,
-                "retry_after_seconds": claim.retry_after_seconds,
-                "claim_owner": claim.claim_owner,
-            }
-            return _with_runtime_metrics(
-                busy,
-                started_at,
-                phase="idempotent_busy",
-                executed=False,
-            )
-        if claim.status == "blocked":
-            blocked = _failed_result(
-                normalized,
-                f"agent run is already {claim.terminal_status or 'terminal'}",
-            )
-            blocked.metadata = {
-                "terminal_run_blocked": True,
-                "terminal_status": claim.terminal_status,
-            }
-            return _with_runtime_metrics(
-                blocked,
-                started_at,
-                phase="idempotent_blocked",
-                executed=False,
-            )
-        if claim.status in {"corrupt", "uncertain", "exhausted"}:
-            messages = {
-                "corrupt": "The tool execution record is corrupt. The run ended safely; start again.",
-                "uncertain": "The prior tool result is uncertain. The run ended safely to avoid duplication.",
-                "exhausted": "Tool recovery attempts were exhausted and the run ended safely.",
-            }
-            failed = _failed_result(normalized, messages[claim.status])
-            failed.metadata = {
-                "durable_execution_status": claim.status,
-                "durable_execution_detail": claim.detail,
-                "tool_invocation_id": claim.record_id,
-                "attempt_count": claim.attempt_count,
-                "reexecution_safe": reexecution_safe,
-            }
-            return _with_runtime_metrics(
-                failed,
-                started_at,
-                phase=f"idempotent_{claim.status}",
-                executed=False,
-            )
+        resolution = await resolve_tool_claim(
+            self._execution_store,
+            normalized,
+            context,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+            started_at=started_at,
+        )
+        if resolution.result is not None:
+            return resolution.result
+        if resolution.claim is None:
+            raise RuntimeError("tool claim resolution returned no claim")
+        claim = resolution.claim
         result = await self._ainvoke(
             handler,
             normalized,
@@ -439,16 +358,7 @@ class ToolExecutor:
             started_at=started_at,
         )
         context.raise_if_fence_lost()
-        settlement_error = None
-        for settlement_attempt in range(3):
-            try:
-                await self._execution_store.settle(claim, result)
-                settlement_error = None
-                break
-            except Exception as exc:
-                settlement_error = exc
-                if settlement_attempt < 2:
-                    await asyncio.sleep(0.05 * (settlement_attempt + 1))
+        settlement_error = await settle_tool_claim(self._execution_store, claim, result)
         if settlement_error is not None:
             failed = _failed_result(
                 normalized,

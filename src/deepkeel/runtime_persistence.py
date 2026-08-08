@@ -369,7 +369,6 @@ async def persist_runtime_snapshot(
     if state_store is not None:
         if execution_fence is not None:
             execution_fence.raise_if_lost()
-        resume_token = str(result.checkpoint.get("resume_token") or "")
         terminal = status in {"completed", "failed", "canceled"}
         if (
             terminal
@@ -383,70 +382,22 @@ async def persist_runtime_snapshot(
             recovery["atomic_checkpoint"] = "host_settlement_required"
             diagnostics["recovery"] = recovery
             return
-        event_type = "run.settled" if terminal else "runtime.checkpoint.committed"
-        mutation = RuntimeStateMutation(
-            mutation_id=_runtime_state_mutation_id(run_id, status, durable_state),
+        mutation = _snapshot_mutation(
+            result,
             run_id=run_id,
-            event_type=event_type,
-            target_status=status,
-            event_payload={
-                "status": status,
-                "stop_reason": result.stop_reason,
-                "resume_token": resume_token,
-                "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
-            },
-            event_visibility="public" if terminal else "internal",
-            checkpoint_type="terminal" if terminal else "runtime",
-            checkpoint_state=durable_state,
-            resume_token=resume_token,
-            error_code=(
-                str(result.error["code"] if result.error is not None else "RUN_FAILED")
-                if status == "failed"
-                else None
-            ),
-            error_message=(
-                str(result.error["message"] if result.error is not None else "")
-                if status == "failed"
-                else None
-            ),
-            delete_checkpoint_types=(
-                ("runtime", "suspended", "resume", "settling") if terminal else ()
-            ),
-            expected_version=_optional_int(context_bundle.get("runtime_state_version")),
-            expected_sequence=_optional_int(context_bundle.get("runtime_state_sequence")),
-            fence_token=execution_fence.token if execution_fence is not None else "",
-            fence_generation=(execution_fence.generation if execution_fence is not None else 0),
+            status=status,
+            durable_state=durable_state,
+            context_bundle=context_bundle,
+            execution_fence=execution_fence,
         )
         try:
-            if runtime.async_runtime_state_store is not None:
-                receipt = await runtime.async_runtime_state_store.commit_scoped(
-                    mutation,
-                    session=session,
-                    scope=scope or RuntimeScope(user_id=user_id),
-                )
-            else:
-                sync_state_store = runtime.runtime_state_store
-                if sync_state_store is None:
-                    raise RuntimeError("runtime state store is not configured")
-                commit_scoped = getattr(sync_state_store, "commit_scoped", None)
-                if scope is not None and callable(commit_scoped):
-                    receipt = await run_sync_adapter(
-                        commit_scoped,
-                        mutation,
-                        session=session,
-                        scope=scope,
-                    )
-                else:
-                    legacy_user_id = require_legacy_compatible_scope(
-                        scope or RuntimeScope(user_id=user_id),
-                        adapter_name=type(sync_state_store).__name__,
-                    )
-                    receipt = await run_sync_adapter(
-                        sync_state_store.commit,
-                        mutation,
-                        session=session,
-                        user_id=legacy_user_id,
-                    )
+            receipt = await _commit_runtime_state(
+                runtime,
+                mutation,
+                session=session,
+                user_id=user_id,
+                scope=scope,
+            )
         except Exception as exc:
             recovery["atomic_checkpoint"] = "failed"
             recovery["checkpoint_error"] = str(exc)
@@ -492,3 +443,86 @@ async def persist_runtime_snapshot(
         recovery["durable_checkpoint"] = "failed"
         recovery["checkpoint_error"] = str(exc)
     diagnostics["recovery"] = recovery
+
+
+def _snapshot_mutation(
+    result: RuntimeResult,
+    *,
+    run_id: str,
+    status: str,
+    durable_state: dict[str, Any],
+    context_bundle: dict[str, Any],
+    execution_fence: ExecutionFence | None,
+) -> RuntimeStateMutation:
+    terminal = status in {"completed", "failed", "canceled"}
+    resume_token = str(result.checkpoint.get("resume_token") or "")
+    return RuntimeStateMutation(
+        mutation_id=_runtime_state_mutation_id(run_id, status, durable_state),
+        run_id=run_id,
+        event_type="run.settled" if terminal else "runtime.checkpoint.committed",
+        target_status=status,
+        event_payload={
+            "status": status,
+            "stop_reason": result.stop_reason,
+            "resume_token": resume_token,
+            "checkpoint_schema_version": str(durable_state.get("schema_version") or ""),
+        },
+        event_visibility="public" if terminal else "internal",
+        checkpoint_type="terminal" if terminal else "runtime",
+        checkpoint_state=durable_state,
+        resume_token=resume_token,
+        error_code=(
+            str(result.error["code"] if result.error is not None else "RUN_FAILED")
+            if status == "failed"
+            else None
+        ),
+        error_message=(
+            str(result.error["message"] if result.error is not None else "")
+            if status == "failed"
+            else None
+        ),
+        delete_checkpoint_types=(
+            ("runtime", "suspended", "resume", "settling") if terminal else ()
+        ),
+        expected_version=_optional_int(context_bundle.get("runtime_state_version")),
+        expected_sequence=_optional_int(context_bundle.get("runtime_state_sequence")),
+        fence_token=execution_fence.token if execution_fence is not None else "",
+        fence_generation=execution_fence.generation if execution_fence is not None else 0,
+    )
+
+
+async def _commit_runtime_state(
+    runtime: Any,
+    mutation: RuntimeStateMutation,
+    *,
+    session: Any,
+    user_id: str,
+    scope: RuntimeScope | None,
+) -> Any:
+    if runtime.async_runtime_state_store is not None:
+        return await runtime.async_runtime_state_store.commit_scoped(
+            mutation,
+            session=session,
+            scope=scope or RuntimeScope(user_id=user_id),
+        )
+    sync_state_store = runtime.runtime_state_store
+    if sync_state_store is None:
+        raise RuntimeError("runtime state store is not configured")
+    commit_scoped = getattr(sync_state_store, "commit_scoped", None)
+    if scope is not None and callable(commit_scoped):
+        return await run_sync_adapter(
+            commit_scoped,
+            mutation,
+            session=session,
+            scope=scope,
+        )
+    legacy_user_id = require_legacy_compatible_scope(
+        scope or RuntimeScope(user_id=user_id),
+        adapter_name=type(sync_state_store).__name__,
+    )
+    return await run_sync_adapter(
+        sync_state_store.commit,
+        mutation,
+        session=session,
+        user_id=legacy_user_id,
+    )

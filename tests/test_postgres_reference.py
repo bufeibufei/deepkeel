@@ -12,6 +12,8 @@ from deepkeel.cli import main as cli_main
 from deepkeel.adapter_sdk import (
     RunLeaseConflict,
     verify_budget_ledger_contract,
+    verify_capability_package_store_contract,
+    verify_context_summary_cache_contract,
     verify_durable_checkpoint_store_contract,
     verify_model_invocation_store_contract,
     verify_run_lease_store_contract,
@@ -31,10 +33,13 @@ from deepkeel.runtime_sdk import (
 )
 from deepkeel.contrib.postgres import (
     PostgresBudgetLedger,
+    PostgresCapabilityPackageStore,
+    PostgresContextSummaryCache,
     PostgresDatabase,
     PostgresDurableCheckpointStore,
     PostgresModelHealthStore,
     PostgresModelInvocationStore,
+    PostgresMemoryStore,
     PostgresRunControl,
     PostgresRunLeaseStore,
     PostgresRuntimeBundle,
@@ -45,6 +50,7 @@ from deepkeel.contrib.postgres import (
     PostgresToolExecutionStore,
     PostgresTraceStore,
 )
+from deepkeel.memory_sdk import MemoryClaim, MemoryMutation, MemoryQuery
 from examples.production_worker import build_production_worker
 
 
@@ -107,6 +113,46 @@ def test_postgres_reference_adapters_satisfy_core_contracts(
         PostgresTraceStore(postgres_database),
         run_id=f"trace-{uuid4().hex}",
     )
+    verify_context_summary_cache_contract(PostgresContextSummaryCache(postgres_database))
+    verify_capability_package_store_contract(
+        PostgresCapabilityPackageStore(postgres_database),
+        package_id=f"postgres.package.{uuid4().hex}",
+    )
+
+
+@pytest.mark.postgres
+def test_postgres_memory_store_is_idempotent_and_subject_scoped(
+    postgres_database: PostgresDatabase,
+) -> None:
+    store = PostgresMemoryStore(postgres_database)
+    mutation = MemoryMutation(
+        action="create",
+        claim=MemoryClaim(
+            user_id="memory-user",
+            subject_type="profile",
+            subject_id="profile-a",
+            domain="career",
+            predicate="target_role",
+            value="platform engineer",
+        ),
+        idempotency_key=f"memory-{uuid4().hex}",
+    )
+
+    first = store.apply(mutation)
+    second = store.apply(mutation)
+    page = store.search(
+        MemoryQuery(
+            user_id="memory-user",
+            subject_type="profile",
+            subject_id="profile-a",
+            text="platform engineer",
+        )
+    )
+
+    assert first == second
+    assert first.applied is True
+    assert store.get(first.claim_id) is not None
+    assert [hit.claim.claim_id for hit in page.hits] == [first.claim_id]
 
 
 @pytest.mark.postgres
@@ -128,6 +174,10 @@ def test_postgres_runtime_bundle_exposes_non_blocking_async_bridges(
     assert ports.async_event_journal is not None
     assert ports.async_run_lease_store is not None
     assert ports.async_tool_execution_store is not None
+    assert bundle.capability_package_store is not None
+    assert bundle.context_summary_cache is not None
+    assert bundle.memory_store is not None
+    assert bundle.subagent_store is not None
 
 
 @pytest.mark.postgres
@@ -425,7 +475,7 @@ def test_postgres_schema_registry_is_current_and_idempotent(
     second = postgres_database.migration_status()
 
     assert first.up_to_date is True
-    assert first.current_version == first.target_version == 4
+    assert first.current_version == first.target_version == 5
     assert [record.version for record in first.applied] == list(range(1, first.target_version + 1))
     assert first.pending == ()
     assert second == first

@@ -63,6 +63,7 @@ from deepkeel.subagents import SubAgentSpec
 from deepkeel.public_api import PUBLIC_API_BY_LAYER, PUBLIC_API_SYMBOLS, PUBLIC_API_VERSION
 from deepkeel.public_api import (
     PUBLIC_API_CANONICAL_LAYER,
+    PUBLIC_API_BY_STABILITY,
     PUBLIC_API_MANIFEST,
     PUBLIC_API_SEMANTIC_MANIFEST,
 )
@@ -123,6 +124,18 @@ def test_public_api_semantics_match_the_frozen_v4_snapshot() -> None:
         "public API semantics changed; review signatures and data shapes before "
         "updating the v4 semantic snapshot"
     )
+
+
+def test_semantic_contract_covers_every_stable_symbol() -> None:
+    expected = {
+        f"{layer.name}.{symbol}"
+        for layer in PUBLIC_API_MANIFEST
+        if layer.stability == "stable"
+        for symbol in layer.symbols
+    }
+
+    assert set(PUBLIC_API_SEMANTIC_MANIFEST) == expected
+    assert len(PUBLIC_API_BY_STABILITY["stable"]) == len(expected)
 
 
 def test_public_api_has_one_canonical_layer_and_declared_stability() -> None:

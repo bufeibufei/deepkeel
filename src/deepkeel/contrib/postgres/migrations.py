@@ -126,6 +126,46 @@ _REQUIRED_COLUMNS = {
         "occurred_at",
         "record",
     },
+    "capability_catalog": {"catalog_id", "revision", "snapshot", "updated_at"},
+    "context_summaries": {
+        "cache_key",
+        "source_fingerprint",
+        "summary",
+        "summary_version",
+        "updated_at",
+    },
+    "memory_claims": {
+        "claim_id",
+        "tenant_id",
+        "user_id",
+        "subject_type",
+        "subject_id",
+        "profile_id",
+        "domain",
+        "predicate",
+        "scope",
+        "status",
+        "sensitivity",
+        "version",
+        "payload",
+        "updated_at",
+    },
+    "memory_mutations": {"idempotency_key", "mutation", "receipt", "created_at"},
+    "subagent_runs": {
+        "child_run_id",
+        "root_run_id",
+        "parent_run_id",
+        "delegation_id",
+        "user_id",
+        "thread_id",
+        "task",
+        "spec",
+        "phase",
+        "checkpoint",
+        "result",
+        "suspension",
+        "updated_at",
+    },
 }
 
 
@@ -442,6 +482,86 @@ def default_postgres_migrations(schema: str) -> tuple[PostgresMigration, ...]:
                 """,
             ),
         ),
+        PostgresMigration(
+            version=5,
+            name="control_plane_reference_stores",
+            statements=_control_plane_schema(schema),
+        ),
+    )
+
+
+def _control_plane_schema(schema: str) -> tuple[str, ...]:
+    return (
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.capability_catalog (
+            catalog_id TEXT PRIMARY KEY,
+            revision BIGINT NOT NULL DEFAULT 0,
+            snapshot JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.context_summaries (
+            cache_key TEXT PRIMARY KEY,
+            source_fingerprint TEXT NOT NULL,
+            summary JSONB NOT NULL,
+            summary_version TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.memory_claims (
+            claim_id TEXT PRIMARY KEY,
+            tenant_id TEXT NOT NULL DEFAULT '',
+            user_id TEXT NOT NULL,
+            subject_type TEXT NOT NULL DEFAULT 'user',
+            subject_id TEXT NOT NULL DEFAULT '',
+            profile_id TEXT NOT NULL DEFAULT '',
+            domain TEXT NOT NULL DEFAULT 'general',
+            predicate TEXT NOT NULL,
+            scope TEXT NOT NULL DEFAULT 'global',
+            status TEXT NOT NULL DEFAULT 'active',
+            sensitivity TEXT NOT NULL DEFAULT 'normal',
+            version BIGINT NOT NULL DEFAULT 1,
+            payload JSONB NOT NULL,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS memory_claims_subject_idx
+        ON {schema}.memory_claims (
+            tenant_id, user_id, subject_type, subject_id, status, updated_at DESC
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.memory_mutations (
+            idempotency_key TEXT PRIMARY KEY,
+            mutation JSONB NOT NULL,
+            receipt JSONB NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        f"""
+        CREATE TABLE IF NOT EXISTS {schema}.subagent_runs (
+            child_run_id TEXT PRIMARY KEY,
+            root_run_id TEXT NOT NULL DEFAULT '',
+            parent_run_id TEXT NOT NULL DEFAULT '',
+            delegation_id TEXT NOT NULL DEFAULT '',
+            user_id TEXT NOT NULL DEFAULT '',
+            thread_id TEXT NOT NULL DEFAULT '',
+            task JSONB NOT NULL,
+            spec JSONB NOT NULL,
+            phase TEXT NOT NULL DEFAULT 'created',
+            checkpoint JSONB,
+            result JSONB,
+            suspension JSONB,
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+        """,
+        f"""
+        CREATE INDEX IF NOT EXISTS subagent_runs_parent_idx
+        ON {schema}.subagent_runs (parent_run_id, delegation_id, updated_at DESC)
+        """,
     )
 
 

@@ -19,6 +19,12 @@ from deepkeel.async_ports import (
 )
 
 from deepkeel.contrib.postgres.checkpoint_store import PostgresDurableCheckpointStore
+from deepkeel.contrib.postgres.control_plane import (
+    PostgresCapabilityPackageStore,
+    PostgresContextSummaryCache,
+    PostgresMemoryStore,
+    PostgresSubAgentStore,
+)
 from deepkeel.contrib.postgres.database import PostgresDatabase
 from deepkeel.contrib.postgres.event_journal import PostgresRuntimeEventJournal
 from deepkeel.contrib.postgres.governance import (
@@ -48,6 +54,10 @@ class PostgresRuntimeBundle:
     model_health_store: PostgresModelHealthStore
     run_control: PostgresRunControl
     trace_store: PostgresTraceStore
+    capability_package_store: PostgresCapabilityPackageStore
+    context_summary_cache: PostgresContextSummaryCache
+    memory_store: PostgresMemoryStore
+    subagent_store: PostgresSubAgentStore
 
     @classmethod
     def create(
@@ -78,6 +88,10 @@ class PostgresRuntimeBundle:
             ),
             run_control=PostgresRunControl(database),
             trace_store=PostgresTraceStore(database),
+            capability_package_store=PostgresCapabilityPackageStore(database),
+            context_summary_cache=PostgresContextSummaryCache(database),
+            memory_store=PostgresMemoryStore(database),
+            subagent_store=PostgresSubAgentStore(database),
         )
 
     def runtime_ports(

@@ -35,10 +35,8 @@ MAX_CYCLOMATIC_COMPLEXITY = 25
 MAX_FUNCTION_LINES = 180
 FUNCTION_BUDGET_OVERRIDES = {
     "execute_model_attempt": (28, MAX_FUNCTION_LINES),
-    "persist_runtime_snapshot": (33, MAX_FUNCTION_LINES),
     "project_and_settle_runtime_result": (MAX_CYCLOMATIC_COMPLEXITY, 183),
-    "RuntimeTurnExecutionMixin._arun_claimed": (63, 418),
-    "ToolExecutor._aexecute_core": (29, 248),
+    "RuntimeTurnExecutionMixin._arun_claimed": (35, 350),
 }
 
 

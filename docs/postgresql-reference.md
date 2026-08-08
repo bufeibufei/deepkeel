@@ -25,11 +25,16 @@ The packaged integration implements and verifies:
   worker processes;
 - scoped `TraceStore` persistence, deterministic queries, and bounded
   retention cleanup.
+- process-shared capability-package catalogs with optimistic revisions,
+  fingerprint-bound context summaries, idempotent typed Memory claims, and
+  durable SubAgent lineage/checkpoints/suspensions;
 - a checksummed Schema Registry with advisory-lock serialization, migration
   planning/status, drift detection, and forward-only upgrades.
 
-The LangGraph saver and capability-package catalog remain Host-owned because
-their lifecycle and deployment topology vary independently from worker state.
+The LangGraph saver remains Host-owned because its lifecycle and deployment
+topology vary independently from worker state. The packaged capability,
+summary, Memory, and SubAgent stores are reference adapters: Hosts may replace
+them with product-specific implementations without changing Core contracts.
 A Host must run each exported conformance verifier rather than treating
 successful connectivity as proof of runtime safety.
 
@@ -48,6 +53,12 @@ ports = postgres.runtime_ports(
     run_lease_owner_id="worker-01",
 )
 runtime = HarnessRuntimeBuilder(profile="production").with_ports(ports).build()
+
+# Optional control-plane references exposed by the same bundle.
+package_store = postgres.capability_package_store
+summary_cache = postgres.context_summary_cache
+memory = postgres.memory_store
+subagents = postgres.subagent_store
 ```
 
 `PostgresRuntimeBundle` never creates or owns the LangGraph saver. The Host
