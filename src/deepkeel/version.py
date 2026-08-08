@@ -1,4 +1,4 @@
-PACKAGE_VERSION = "4.0.0rc2"
+PACKAGE_VERSION = "4.0.0"
 RUNTIME_CONTRACT_VERSION = "harness-core-v3"
 EVENT_SCHEMA_VERSION = "harness-runtime-event-v1"
 SDK_API_VERSION = "4.0.0"

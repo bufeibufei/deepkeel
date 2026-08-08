@@ -41,6 +41,9 @@ def build_model_step_context(
         forced_tool_name=forced_tool_name,
         governance_scope=dict(as_dict(state.get("metadata")).get("governance_scope") or {}),
         deadline_monotonic=deadline_monotonic,
+        operational_run_id=str(
+            as_dict(state.get("metadata")).get("operational_run_id") or ""
+        ),
     )
 
 

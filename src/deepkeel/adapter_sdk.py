@@ -118,6 +118,16 @@ from deepkeel.production import (
     ProductionReadinessReport,
     assess_production_readiness,
 )
+from deepkeel.adapter_capabilities import (
+    AdapterCapabilities,
+    declared_adapter_capabilities,
+)
+from deepkeel.model_provider_certification import (
+    ModelProviderCertificationIssue,
+    ModelProviderCertificationReport,
+    acertify_model_provider,
+    certify_model_provider,
+)
 from deepkeel.migrations import (
     StateMigration,
     StateMigrationError,
@@ -125,6 +135,7 @@ from deepkeel.migrations import (
     default_state_migrations,
 )
 from deepkeel.memory_recall import (
+    AsyncMemoryRecallPolicy,
     DefaultMemoryRecallCoordinator,
     MemoryRecallCoordinator,
     MemoryRecallDecision,
@@ -206,6 +217,7 @@ ADAPTER_SDK_API = (
     "AsyncDurableCheckpointStore",
     "AsyncDurableCheckpointStoreAdapter",
     "AsyncModelProviderAdapter",
+    "AsyncMemoryRecallPolicy",
     "AsyncRunLeaseGuard",
     "AsyncRunLeaseStore",
     "AsyncRunLeaseStoreAdapter",
@@ -255,7 +267,6 @@ ADAPTER_SDK_API = (
     "GovernanceBundle",
     "GovernanceScope",
     "GraphCheckpointer",
-    "HarnessRuntimeBuilder",
     "INPUT_TOKENS",
     "InMemoryBudgetLedger",
     "InMemoryContextSummaryCache",
@@ -342,6 +353,12 @@ ADAPTER_SDK_API = (
     "UsageReport",
     "WorkingContextCompactor",
     "assess_production_readiness",
+    "AdapterCapabilities",
+    "declared_adapter_capabilities",
+    "ModelProviderCertificationIssue",
+    "ModelProviderCertificationReport",
+    "acertify_model_provider",
+    "certify_model_provider",
     "classify_model_failure",
     "context_fingerprint",
     "default_state_migrations",

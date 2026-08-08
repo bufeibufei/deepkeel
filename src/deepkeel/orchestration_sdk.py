@@ -8,8 +8,12 @@ from deepkeel.deliberation import (
     DeliberationSpec,
 )
 from deepkeel.subagents import (
+    AsyncDelegationDispatcher,
+    AsyncDelegationExecutor,
     SUBAGENT_EVENT_SCHEMA_VERSION,
     DelegationBatchResult,
+    DelegationDispatcher,
+    DelegationExecutor,
     DelegationRequest,
     DelegationTask,
     DelegationToolHandler,
@@ -31,8 +35,12 @@ from deepkeel.subagents import (
 )
 
 ORCHESTRATION_SDK_API = (
+    "AsyncDelegationDispatcher",
+    "AsyncDelegationExecutor",
     "SUBAGENT_EVENT_SCHEMA_VERSION",
     "DelegationBatchResult",
+    "DelegationDispatcher",
+    "DelegationExecutor",
     "DelegationRequest",
     "DelegationTask",
     "DelegationToolHandler",

@@ -8,7 +8,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder
 from deepkeel.runtime_sdk import RuntimeRequest
 
 

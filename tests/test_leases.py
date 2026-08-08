@@ -20,6 +20,7 @@ from deepkeel.state_store import RuntimeStateMutation
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
 from deepkeel.tools import ToolExecutionContext, ToolExecutor
 from deepkeel.contracts import ToolCall, ToolResult
+from deepkeel.scope import RuntimeScope
 
 
 class BlockingProvider:
@@ -68,6 +69,31 @@ def test_expired_lease_can_be_taken_over_with_a_new_fencing_generation() -> None
     assert second.token != first.token
     with pytest.raises(RunLeaseLost):
         store.release(first)
+
+
+def test_run_leases_isolate_identical_run_ids_by_runtime_scope() -> None:
+    store = InMemoryRunLeaseStore()
+    first_scope = RuntimeScope(tenant_id="tenant-a", user_id="user-1")
+    second_scope = RuntimeScope(tenant_id="tenant-b", user_id="user-1")
+
+    first = store.claim_scoped(
+        "shared-run",
+        scope=first_scope,
+        owner_id="worker-a",
+        ttl_seconds=10,
+    )
+    second = store.claim_scoped(
+        "shared-run",
+        scope=second_scope,
+        owner_id="worker-b",
+        ttl_seconds=10,
+    )
+
+    assert first.scope == first_scope
+    assert second.scope == second_scope
+    assert first.generation == second.generation == 1
+    assert store.inspect_scoped("shared-run", scope=first_scope) == first
+    assert store.inspect_scoped("shared-run", scope=second_scope) == second
 
 
 def test_runtime_lease_prevents_two_workers_from_executing_one_run() -> None:

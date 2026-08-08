@@ -19,6 +19,11 @@ from deepkeel.budget import (
     BudgetRequest,
     InMemoryBudgetLedger,
 )
+from deepkeel.async_ports import (
+    AsyncToolExecutionStore,
+    AsyncToolExecutionStoreAdapter,
+    run_sync_adapter,
+)
 from deepkeel.clarifications import clarification_for_missing_arguments, clarification_tool_result
 from deepkeel.contracts import Observation, PendingAction, ToolCall, ToolResult
 from deepkeel.deadlines import ensure_time_remaining
@@ -68,6 +73,15 @@ from deepkeel.tool_execution_support import (
     normalize_arguments,
 )
 from deepkeel.tool_executor_contracts import ToolHandler, ToolPreflight
+from deepkeel.tool_idempotency import resolve_tool_claim, settle_tool_claim
+
+
+async def _araise_if_cancelled(context: ToolExecutionContext, *, force: bool = False) -> None:
+    await run_sync_adapter(
+        context.run_control.raise_if_cancelled,
+        context.operational_run_id,
+        force=force,
+    )
 
 
 class ToolExecutor:
@@ -78,6 +92,7 @@ class ToolExecutor:
         preflight: ToolPreflight | None = None,
         max_parallel_tools: int = 4,
         execution_store: ToolExecutionStore | None = None,
+        async_execution_store: AsyncToolExecutionStore | None = None,
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         hook_runner: HookRunner | None = None,
@@ -87,7 +102,21 @@ class ToolExecutor:
         self.registry = registry
         self.preflight = preflight
         self.max_parallel_tools = max(1, int(max_parallel_tools))
-        self.execution_store = execution_store or InMemoryToolExecutionStore()
+        if execution_store is not None and async_execution_store is not None:
+            raise ValueError("configure either execution_store or async_execution_store, not both")
+        self.execution_store = (
+            execution_store
+            if execution_store is not None
+            else None
+            if async_execution_store is not None
+            else InMemoryToolExecutionStore()
+        )
+        self.async_execution_store = async_execution_store
+        if async_execution_store is not None:
+            self._execution_store = async_execution_store
+        else:
+            assert self.execution_store is not None
+            self._execution_store = AsyncToolExecutionStoreAdapter(self.execution_store)
         self.policy_engine = policy_engine or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or InMemoryBudgetLedger()
         self.hook_runner = hook_runner
@@ -189,7 +218,7 @@ class ToolExecutor:
         context: ToolExecutionContext,
     ) -> ToolResult:
         context.raise_if_fence_lost()
-        context.run_control.raise_if_cancelled(context.run_id)
+        await _araise_if_cancelled(context)
         ensure_time_remaining(context.deadline_monotonic)
         started_at = time.perf_counter()
         try:
@@ -306,93 +335,20 @@ class ToolExecutor:
             self.max_idempotent_attempts,
         )
         reexecution_safe = _tool_reexecution_safe(spec)
-        try:
-            claim = self.execution_store.claim(
-                run_id=context.run_id,
-                call=normalized,
-                lease_seconds=lease_seconds,
-                max_attempts=max_attempts,
-                reexecution_safe=reexecution_safe,
-            )
-        except Exception as exc:
-            return _with_runtime_metrics(
-                _failed_result(normalized, f"tool execution claim failed: {exc}", retryable=True),
-                started_at,
-                phase="idempotent_claim",
-                executed=False,
-            )
-        if claim.status == "replay":
-            try:
-                persisted = self.execution_store.replay(claim)
-            except Exception as exc:
-                failed = _failed_result(
-                    normalized,
-                    "Tool execution recovery failed. Retry the operation.",
-                    retryable=True,
-                )
-                failed.metadata["replay_error"] = str(exc)
-                return _with_runtime_metrics(
-                    failed,
-                    started_at,
-                    phase="idempotent_replay",
-                    executed=False,
-                )
-            return _with_runtime_metrics(
-                _replayed_result(persisted, normalized),
-                started_at,
-                phase="idempotent_replay",
-                executed=False,
-            )
-        if claim.status == "busy":
-            busy = _failed_result(
-                normalized, "tool execution is already in progress", retryable=True
-            )
-            busy.metadata = {
-                "idempotency_busy": True,
-                "retry_after_seconds": claim.retry_after_seconds,
-                "claim_owner": claim.claim_owner,
-            }
-            return _with_runtime_metrics(
-                busy,
-                started_at,
-                phase="idempotent_busy",
-                executed=False,
-            )
-        if claim.status == "blocked":
-            blocked = _failed_result(
-                normalized,
-                f"agent run is already {claim.terminal_status or 'terminal'}",
-            )
-            blocked.metadata = {
-                "terminal_run_blocked": True,
-                "terminal_status": claim.terminal_status,
-            }
-            return _with_runtime_metrics(
-                blocked,
-                started_at,
-                phase="idempotent_blocked",
-                executed=False,
-            )
-        if claim.status in {"corrupt", "uncertain", "exhausted"}:
-            messages = {
-                "corrupt": "The tool execution record is corrupt. The run ended safely; start again.",
-                "uncertain": "The prior tool result is uncertain. The run ended safely to avoid duplication.",
-                "exhausted": "Tool recovery attempts were exhausted and the run ended safely.",
-            }
-            failed = _failed_result(normalized, messages[claim.status])
-            failed.metadata = {
-                "durable_execution_status": claim.status,
-                "durable_execution_detail": claim.detail,
-                "tool_invocation_id": claim.record_id,
-                "attempt_count": claim.attempt_count,
-                "reexecution_safe": reexecution_safe,
-            }
-            return _with_runtime_metrics(
-                failed,
-                started_at,
-                phase=f"idempotent_{claim.status}",
-                executed=False,
-            )
+        resolution = await resolve_tool_claim(
+            self._execution_store,
+            normalized,
+            context,
+            lease_seconds=lease_seconds,
+            max_attempts=max_attempts,
+            reexecution_safe=reexecution_safe,
+            started_at=started_at,
+        )
+        if resolution.result is not None:
+            return resolution.result
+        if resolution.claim is None:
+            raise RuntimeError("tool claim resolution returned no claim")
+        claim = resolution.claim
         result = await self._ainvoke(
             handler,
             normalized,
@@ -402,16 +358,7 @@ class ToolExecutor:
             started_at=started_at,
         )
         context.raise_if_fence_lost()
-        settlement_error = None
-        for settlement_attempt in range(3):
-            try:
-                self.execution_store.settle(claim, result)
-                settlement_error = None
-                break
-            except Exception as exc:
-                settlement_error = exc
-                if settlement_attempt < 2:
-                    await asyncio.sleep(0.05 * (settlement_attempt + 1))
+        settlement_error = await settle_tool_claim(self._execution_store, claim, result)
         if settlement_error is not None:
             failed = _failed_result(
                 normalized,
@@ -454,7 +401,7 @@ class ToolExecutor:
             workers = max(1, min(self.max_parallel_tools, configured_limit, len(parallel)))
             concurrency_budget = self.budget_ledger.consume(
                 BudgetRequest(
-                    run_id=context.run_id,
+                    run_id=context.operational_run_id,
                     metric=TOOL_CONCURRENCY,
                     amount=workers,
                     limit=configured_limit,
@@ -537,9 +484,10 @@ class ToolExecutor:
                 context.budget_limits.get(TOOL_CONCURRENCY) or self.max_parallel_tools
             )
             workers = max(1, min(self.max_parallel_tools, configured_limit, len(parallel)))
-            concurrency_budget = self.budget_ledger.consume(
+            concurrency_budget = await run_sync_adapter(
+                self.budget_ledger.consume,
                 BudgetRequest(
-                    run_id=context.run_id,
+                    run_id=context.operational_run_id,
                     metric=TOOL_CONCURRENCY,
                     amount=workers,
                     limit=configured_limit,
@@ -549,7 +497,7 @@ class ToolExecutor:
                     ),
                     aggregation="max",
                     metadata={"parallel_call_count": len(parallel)},
-                )
+                ),
             )
             if not concurrency_budget.allowed:
                 workers = 1
@@ -626,7 +574,7 @@ class ToolExecutor:
             else:
                 close = getattr(isolated_session, "close", None)
                 if callable(close):
-                    close()
+                    await asyncio.to_thread(close)
 
     async def _ainvoke(
         self,
@@ -639,14 +587,15 @@ class ToolExecutor:
         started_at: float | None = None,
     ) -> ToolResult:
         started_at = started_at or time.perf_counter()
-        budget = self.budget_ledger.consume(
+        budget = await run_sync_adapter(
+            self.budget_ledger.consume,
             BudgetRequest(
-                run_id=context.run_id,
+                run_id=context.operational_run_id,
                 metric=TOOL_CALLS,
                 limit=context.budget_limits.get(TOOL_CALLS),
                 operation_id=f"tool-call:{call.idempotency_key or call.id}",
                 metadata={"tool_name": call.name},
-            )
+            ),
         )
         if not budget.allowed:
             result = _failed_result(call, budget.reason)
@@ -656,11 +605,18 @@ class ToolExecutor:
             }
             return _with_runtime_metrics(result, started_at, phase="budget", executed=False)
         try:
-            raw = handler(call, context)
-            if inspect.isawaitable(raw):
-                raw = await raw
+            native_execute = getattr(handler, "aexecute", None)
+            if callable(native_execute):
+                raw = await native_execute(call, context)
+            else:
+                # Tool handlers are sync by default. Running them in the event
+                # loop would stall every active run while MCP, database, or
+                # filesystem I/O is in flight.
+                raw = await asyncio.to_thread(handler, call, context)
+                if inspect.isawaitable(raw):
+                    raw = await raw
             context.raise_if_fence_lost()
-            context.run_control.raise_if_cancelled(context.run_id, force=True)
+            await _araise_if_cancelled(context, force=True)
             ensure_time_remaining(context.deadline_monotonic)
             if not isinstance(raw, ToolResult):
                 raise TypeError("tool handlers must return ToolResult")

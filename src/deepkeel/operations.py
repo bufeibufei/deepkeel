@@ -213,11 +213,11 @@ class RunOperations:
         user_id: str = "",
         scope: RuntimeScope | None = None,
     ) -> RunOperationReceipt:
+        resolved_scope = resolve_runtime_scope(scope, user_id=user_id)
         inspection = self.inspect(
             run_id,
             session=session,
-            user_id=user_id,
-            scope=scope,
+            scope=resolved_scope,
         )
         if not inspection.found or inspection.snapshot is None:
             return RunOperationReceipt(
@@ -237,7 +237,7 @@ class RunOperations:
             raise RunOperationsUnavailable(
                 "runtime control adapter does not support cancellation requests"
             )
-        self.run_control.cancel(str(run_id))
+        self.run_control.cancel(resolved_scope.qualify_identity(str(run_id)))
         return RunOperationReceipt(
             action="cancel",
             run_id=str(run_id),

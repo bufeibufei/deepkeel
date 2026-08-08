@@ -8,7 +8,7 @@ infrastructure, identity, deployment, and operator-facing APIs.
 Use the executable builder gate before starting a production worker:
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```
@@ -17,6 +17,10 @@ runtime = builder.build_production()
 ambiguous, or known to be process-local. Warnings identify synchronous adapters
 that can block `arun()`. The gate cannot prove that an arbitrary custom adapter
 is durable, so the conformance suites below remain mandatory.
+
+Production composition also requires `tool_view_mode="enforced"`. Development
+may retain legacy disclosure while migrating, but a production worker cannot
+silently expose the complete allowed catalog to the model.
 
 Do not use the `InMemory*` implementations in a multi-worker deployment. Install
 durable implementations for:
@@ -43,12 +47,17 @@ Run every applicable verifier in `deepkeel.adapter_sdk` against the same
 database configuration used in production. State and checkpoint adapters must
 isolate identical run identifiers belonging to different user scopes.
 
-The executable reference in `verification/postgres_reference` demonstrates
-transaction boundaries and database constraints for canonical state, the
-runtime event journal, run leases with fencing generations, and portable
-durable checkpoints. It is intentionally not packaged as a Core dependency.
-See [PostgreSQL reference adapters](postgresql-reference.md) for the contract
-test and multi-worker recovery baseline.
+The optional `deepkeel[postgres]` integration packages transaction boundaries
+and database constraints for canonical state, the runtime event journal, run
+leases with fencing generations, and portable durable checkpoints. See
+[PostgreSQL adapters](postgresql-reference.md) for the contract test and
+multi-worker recovery baseline.
+
+Run `deepkeel doctor` and `deepkeel postgres status` as deployment preflight.
+Apply pending schema versions in a dedicated migration job with
+`deepkeel postgres upgrade --yes` before workers receive traffic. The runnable
+[`production_worker`](../examples/production_worker) example shows the complete
+public-SDK composition, including an optional OpenTelemetry projection.
 
 Use `RuntimeScope` as the canonical tenant, namespace, and user boundary.
 Legacy adapters may continue to receive `user_id` for the default scope, but
@@ -121,15 +130,41 @@ from the same atomic mutation transaction used for status and checkpoint data.
 
 Network-backed adapters should expose native asynchronous implementations.
 `AsyncRuntimeStateStore`, `AsyncDurableCheckpointStore`,
-`AsyncRuntimeEventJournal`, `AsyncRunLeaseStore`, and `AsyncTraceStore` define the portable
-contracts. The supplied `Async*Adapter` bridges use `asyncio.to_thread` and are
-only suitable for thread-safe synchronous adapters; ORM sessions must not be
-offloaded unless their driver explicitly permits cross-thread use.
+`AsyncRuntimeEventJournal`, `AsyncRunLeaseStore`, `AsyncTraceStore`, and
+`AsyncToolExecutionStore` define the portable infrastructure contracts. Memory
+recall and bounded delegation likewise expose native async policy, storage,
+executor, and dispatcher boundaries. The supplied `Async*Adapter` bridges use
+`asyncio.to_thread` and are only suitable for thread-safe synchronous adapters;
+ORM sessions must not be offloaded unless their driver explicitly permits
+cross-thread use. The synchronous SubAgent bridge rejects a bound Session
+unless the Host supplies a `session_factory`, so each worker owns its Session.
 
-Native async state, event, checkpoint, and lease ports are consumed directly by
-the canonical `arun()` path. Configure either the synchronous or asynchronous
-form of one port, never both. `astream()` adds a bounded same-loop backlog to
-its bounded queue and coalesces consecutive answer deltas without losing text.
+Native async state, event, checkpoint, lease, Memory, tool-idempotency, and
+delegation ports are consumed directly by the canonical `arun()` path.
+Configure either the synchronous or asynchronous form of one port, never both.
+`astream()` adds a bounded same-loop backlog to its bounded queue and coalesces
+consecutive answer deltas without losing text.
+
+Adapters may publish `AdapterCapabilities` through the Adapter SDK. Production
+readiness validates durability, process sharing, RuntimeScope support,
+transactionality and cancellation safety from that declaration instead of
+guessing from class names. Undeclared third-party adapters remain compatible,
+but should add the declaration before claiming production support. The bundled
+PostgreSQL composition exposes one async authority per persistence port and
+bridges its thread-safe psycopg adapters off the Host event loop.
+
+Run `certify_model_provider()` for every configured model binding. Static
+certification checks declared streaming, native-tool and JSON Schema
+capabilities; the optional live probe verifies actual text, streaming, forced
+tool and structured-output behavior. Certification is binding-specific because
+the same model name can behave differently behind different endpoints or
+credentials.
+
+Remote Streamable HTTP MCP denies private, loopback and link-local destinations
+by default, validates DNS before every request, refuses redirects and inherited
+proxy credentials, and enforces request/response byte ceilings. Hosts must use
+an explicit hostname allowlist; private-network access is an opt-in intended
+only for controlled internal MCP servers.
 
 ## Evaluation
 

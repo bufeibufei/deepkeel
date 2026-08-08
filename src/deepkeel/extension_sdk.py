@@ -99,8 +99,14 @@ from deepkeel.tools import (
     ToolHandler,
     ToolPreflight,
 )
+from deepkeel.async_ports import (
+    AsyncToolExecutionStore,
+    AsyncToolExecutionStoreAdapter,
+)
 
 EXTENSION_SDK_API = (
+    "AsyncToolExecutionStore",
+    "AsyncToolExecutionStoreAdapter",
     "ArtifactPresentationActionSpec",
     "ArtifactPresentationFieldSpec",
     "ArtifactPresentationSpec",

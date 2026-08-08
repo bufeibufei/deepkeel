@@ -1,11 +1,11 @@
-"""Compatibility facade for the executable PostgreSQL reference adapters."""
+"""Compatibility facade for :mod:`deepkeel.contrib.postgres`."""
 
-from verification.postgres_reference.checkpoint_store import (
+from deepkeel.contrib.postgres import (
     PostgresDurableCheckpointStore,
+    PostgresRunLeaseStore,
+    PostgresRuntimeEventJournal,
+    PostgresRuntimeStateStore,
 )
-from verification.postgres_reference.event_journal import PostgresRuntimeEventJournal
-from verification.postgres_reference.lease_store import PostgresRunLeaseStore
-from verification.postgres_reference.state_store import PostgresRuntimeStateStore
 
 __all__ = [
     "PostgresDurableCheckpointStore",

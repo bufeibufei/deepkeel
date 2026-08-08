@@ -1,0 +1,104 @@
+name: DeepKeel Main Regression
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deepkeel-main-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra test
+      - run: uv run ruff check src tests verification examples
+      - run: uv run mypy src/deepkeel
+      - run: uv run python verification/readme_contract.py
+      - name: Run coverage gate
+        run: >-
+          uv run pytest -q -m "not postgres"
+          --cov=deepkeel
+          --cov-report=term-missing
+          --cov-report=json:coverage.json
+          --cov-fail-under=80
+      - name: Enforce critical coverage and complexity ratchets
+        run: uv run python verification/quality_budget.py --coverage coverage.json
+      - name: Run shared-runtime concurrency gate
+        run: >-
+          uv run python verification/concurrency_benchmark.py
+          --requests 300 --workers 32 --min-success-rate 1 --max-p95-ms 2000
+
+  compatibility:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python-version: ["3.12", "3.13", "3.14"]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          enable-cache: true
+      - run: uv sync --frozen --extra test
+      - run: uv run pytest -q -m "not postgres"
+
+  distributions:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra test
+      - run: uv build --clear
+      - run: uv run python verification/verify_distributions.py dist
+
+  postgres-reference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: deepkeel
+          POSTGRES_PASSWORD: deepkeel
+          POSTGRES_DB: deepkeel_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U deepkeel -d deepkeel_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DEEPKEEL_TEST_POSTGRES_DSN: postgresql://deepkeel:deepkeel@127.0.0.1:5432/deepkeel_test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --extra test --extra postgres
+      - run: uv run pytest -q -m postgres tests/test_postgres_reference.py
+      - name: Verify PostgreSQL multi-worker recovery
+        run: >-
+          uv run python -m verification.postgres_multiworker
+          --requests 64 --workers 12 --max-p95-ms 2000

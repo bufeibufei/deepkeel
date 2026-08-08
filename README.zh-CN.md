@@ -9,10 +9,10 @@ DeepKeel 负责模型与工具的单循环执行、类型化运行契约、中�
 SubAgent 编排。它不负责产品 API、业务数据库模型、领域提示词、宿主工具
 或前端页面。
 
-当前发布候选版本为 `4.0.0rc2`，安装命令如下：
+当前稳定版本为 `4.0.0`，安装命令如下：
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
 python examples/quickstart/main.py
 ```
 
@@ -35,7 +35,9 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 
 可运行的 [quickstart](examples/quickstart) 展示最小模型 Provider；
 [inventory_pack](examples/inventory_pack) 展示不依赖具体业务的工具和 Artifact；
-[durable_approval](examples/durable_approval) 展示中断、人工确认与恢复。
+[durable_approval](examples/durable_approval) 展示中断、人工确认与恢复；
+[production_worker](examples/production_worker) 展示生产 Profile、PostgreSQL
+端口、迁移与可选 OpenTelemetry 导出的完整装配。
 
 ## 架构边界
 
@@ -56,8 +58,7 @@ SDK，不应直接访问 Host 的 ORM、路由对象或私有运行状态。
 ## 快速开始
 
 ```python
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
-from deepkeel.runtime_sdk import RuntimeRequest
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder, RuntimeRequest
 
 runtime = HarnessRuntimeBuilder().build()
 result = runtime.run(
@@ -108,6 +109,9 @@ Artifact、引用、诊断、检查点、事件和稳定的 `ui_state`。
 - `AsyncRuntimeEventJournal`
 - `AsyncRunLeaseStore`
 - `AsyncTraceStore`
+- `AsyncMemoryPort` 与 `AsyncMemoryRecallPolicy`
+- `AsyncToolExecutionStore`
+- `AsyncDelegationExecutor` 与 `AsyncDelegationDispatcher`
 
 Adapter SDK 提供的 `Async*Adapter` 使用线程卸载，只适合明确线程安全的同步
 实现。生产数据库驱动应实现原生异步协议，不应把线程绑定的 ORM Session 交给
@@ -195,12 +199,16 @@ SubAgent 编排是有界的，受并发、深度、预算和父运行取消控�
 密钥通过 `SecretProvider` 获取，不进入 Prompt、公开事件或 Artifact。生产 Host
 还应在 API 边界执行租户授权，并对外部写操作配置确认策略。
 
+远程 Streamable HTTP MCP 默认拒绝私网、回环和链路本地地址，每次请求前重新校验
+DNS，禁止重定向和环境代理凭据，并限制请求与响应体大小。生产环境应配置主机名
+白名单；只有受控的内部 MCP 才显式开启私网访问。
+
 ## 生产就绪门禁
 
 `build()` 适合本地开发和测试。生产 Worker 应使用可执行门禁：
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```
@@ -209,7 +217,17 @@ runtime = builder.build_production()
 异步路径中的阻塞适配器。错误会阻止构建，告警会保留在报告中。自定义数据库
 适配器仍需运行 `deepkeel.adapter_sdk` 中对应的 conformance verifier。
 
+适配器可声明 `AdapterCapabilities`，门禁会校验持久化、跨进程共享、
+`RuntimeScope`、事务和取消安全能力。模型接入应运行
+`certify_model_provider()`；可选在线探针会实际验证文本、流式、原生工具调用和
+JSON Schema，而不是只相信模型名称或静态配置。
+
 详细部署清单见 [生产就绪文档](docs/production-readiness.md)。
+
+随包提供的 PostgreSQL 适配器使用带校验和、事务级 advisory lock 的前向迁移。
+部署前可通过 `database.migration_status()` 和
+`database.migration_registry().plan()` 检查版本；迁移历史或物理列发生漂移、以及
+自动降级请求都会 fail-closed。
 
 ## 可观测性与评测
 

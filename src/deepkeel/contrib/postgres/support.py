@@ -40,9 +40,7 @@ def snapshot_from_row(run_id: str, row: dict[str, Any] | None) -> RunStateSnapsh
 
 
 def assert_expected_state(row: dict[str, Any], mutation: RuntimeStateMutation) -> None:
-    if mutation.expected_version is not None and mutation.expected_version != int(
-        row["version"]
-    ):
+    if mutation.expected_version is not None and mutation.expected_version != int(row["version"]):
         raise RuntimeStateConflict(
             f"runtime version changed: expected {mutation.expected_version}, found {row['version']}"
         )
@@ -75,6 +73,8 @@ def assert_current_fence(row: dict[str, Any], mutation: RuntimeStateMutation) ->
 
 
 def lease_from_row(row: dict[str, Any]) -> RunLease:
+    from deepkeel.scope import RuntimeScope
+
     return RunLease(
         run_id=str(row["run_id"]),
         owner_id=str(row["owner_id"]),
@@ -82,6 +82,11 @@ def lease_from_row(row: dict[str, Any]) -> RunLease:
         acquired_at=aware(row["acquired_at"]),
         expires_at=aware(row["expires_at"]),
         generation=int(row["generation"]),
+        scope=RuntimeScope(
+            tenant_id=str(row.get("tenant_id") or ""),
+            namespace=str(row.get("namespace") or "default"),
+            user_id=str(row.get("user_id") or "local-device"),
+        ),
     )
 
 

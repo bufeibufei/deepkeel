@@ -3,6 +3,7 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.budget import ELAPSED_SECONDS, BudgetRequest
 from deepkeel.graph import HARNESS_GRAPH_CONTRACT_VERSION
 from deepkeel.hooks import HookAudit
@@ -13,6 +14,29 @@ from deepkeel.runtime_results import project_harness_result
 from deepkeel.scope import RuntimeScope
 from deepkeel.telemetry import TelemetryRecord
 from deepkeel.type_narrowing import as_dict
+
+
+async def _asettle_runtime_budget(
+    runtime: Any,
+    *,
+    operational_run_id: str,
+    turn_id: str,
+    elapsed_seconds: float,
+    model_policy: dict[str, Any],
+) -> tuple[Any, Any]:
+    elapsed = await run_sync_adapter(
+        runtime.budget_ledger.consume,
+        BudgetRequest(
+            run_id=operational_run_id,
+            metric=ELAPSED_SECONDS,
+            amount=max(0.0, elapsed_seconds),
+            limit=_budget_limits(model_policy).get(ELAPSED_SECONDS),
+            operation_id=f"runtime-elapsed:{turn_id}",
+            metadata={"turn_id": turn_id},
+        ),
+    )
+    snapshot = await run_sync_adapter(runtime.budget_ledger.snapshot, operational_run_id)
+    return elapsed, snapshot
 
 
 async def project_and_settle_runtime_result(
@@ -43,6 +67,7 @@ async def project_and_settle_runtime_result(
     execution_fence: Any,
     emit_hook_audits: Callable[..., None],
 ) -> RuntimeResult:
+    operational_run_id = runtime_scope.qualify_identity(run_id)
     await emitter.flush()
     result = project_harness_result(
         state,
@@ -57,9 +82,7 @@ async def project_and_settle_runtime_result(
             spec.name: str(spec.observation_contract.get("primary_kind") or "")
             for spec in runtime.tool_registry.list_tools()
         },
-        task_kinds={
-            spec.name: spec.task_kind for spec in runtime.tool_registry.list_tools()
-        },
+        task_kinds={spec.name: spec.task_kind for spec in runtime.tool_registry.list_tools()},
         max_steps=runtime.max_steps,
         previous_diagnostics=previous_diagnostics,
         capability_manifest=runtime._capability_manifest(),
@@ -95,21 +118,18 @@ async def project_and_settle_runtime_result(
         execution_contract["checkpoint_load_errors"] = list(checkpoint_load_errors)
     diagnostics["execution_contract"] = execution_contract
     result.checkpoint["execution_contract"] = execution_contract
-    elapsed_budget = runtime.budget_ledger.consume(
-        BudgetRequest(
-            run_id=run_id,
-            metric=ELAPSED_SECONDS,
-            amount=max(0.0, time.monotonic() - run_started_monotonic),
-            limit=_budget_limits(model_policy).get(ELAPSED_SECONDS),
-            operation_id=f"runtime-elapsed:{turn_id}",
-            metadata={"turn_id": turn_id},
-        )
+    elapsed_budget, budget_snapshot = await _asettle_runtime_budget(
+        runtime,
+        operational_run_id=operational_run_id,
+        turn_id=turn_id,
+        elapsed_seconds=time.monotonic() - run_started_monotonic,
+        model_policy=model_policy,
     )
     diagnostics["budget"] = {
         "elapsed": elapsed_budget.as_dict(),
-        "snapshot": runtime.budget_ledger.snapshot(run_id).as_dict(),
+        "snapshot": budget_snapshot.as_dict(),
     }
-    result.checkpoint["budget_state"] = runtime.budget_ledger.snapshot(run_id).as_dict()
+    result.checkpoint["budget_state"] = budget_snapshot.as_dict()
     lifecycle_audits.extend(
         await run_settlement_lifecycle_hooks(
             hook_runner=runtime.hook_runner,

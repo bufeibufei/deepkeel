@@ -13,6 +13,8 @@ from deepkeel.event_journal import InMemoryRuntimeEventJournal
 from deepkeel.graph import HarnessGraph
 from deepkeel.leases import InMemoryRunLeaseStore
 from deepkeel.model import ModelInvocation, ModelProviderInfo, ModelTurn
+from deepkeel.model_health import InMemoryModelHealthStore
+from deepkeel.model_invocations import InMemoryModelInvocationStore
 from deepkeel.persistence import InMemoryDurableCheckpointStore
 from deepkeel.scope import RuntimeScope
 from deepkeel.state_store import InMemoryRuntimeStateStore
@@ -21,7 +23,11 @@ from deepkeel.runtime_sdk import InMemoryRunControl
 from deepkeel.runtime_sdk import RuntimeRequest
 from deepkeel.runtime_persistence import acleanup_run
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
-from deepkeel.tools import ToolExecutionContext, ToolExecutor
+from deepkeel.tools import (
+    InMemoryToolExecutionStore,
+    ToolExecutionContext,
+    ToolExecutor,
+)
 
 
 class StreamingProvider:
@@ -198,12 +204,8 @@ def test_arun_uses_native_async_persistence_and_lease_ports_on_host_loop() -> No
     assert result.status.value == "completed"
     assert replay
     assert snapshot.status == "completed"
-    assert result.diagnostics["recovery"][
-        "checkpoint_cleanup"
-    ]["durable"] == "deleted"
-    assert any(
-        event.event_type == "runtime.checkpoint.cleanup.recorded" for event in replay
-    )
+    assert result.diagnostics["recovery"]["checkpoint_cleanup"]["durable"] == "deleted"
+    assert any(event.event_type == "runtime.checkpoint.cleanup.recorded" for event in replay)
     assert lease is None
     assert used_loops and all(loop is host_loop for loop in used_loops)
     assert [operation for operation, _ in checkpoint_store.operations] == ["delete"]
@@ -249,9 +251,11 @@ def test_async_cleanup_falls_back_when_checkpointer_only_implements_sync_delete(
 def test_arun_consults_async_checkpoint_fallback_for_resume_without_state_store() -> None:
     async def scenario():
         checkpoint_store = NativeAsyncCheckpointStore()
-        runtime = HarnessRuntimeBuilder().with_ports(
-            RuntimePorts(async_checkpoint_store=checkpoint_store)
-        ).build()
+        runtime = (
+            HarnessRuntimeBuilder()
+            .with_ports(RuntimePorts(async_checkpoint_store=checkpoint_store))
+            .build()
+        )
         result = await runtime.arun(
             RuntimeRequest(
                 question="hello",
@@ -305,9 +309,9 @@ def test_async_journal_persists_durable_events_before_publishing_them() -> None:
         def publish(event):
             journal.order.append(("publish", str(event.get("event_id") or "")))
 
-        runtime = HarnessRuntimeBuilder().with_ports(
-            RuntimePorts(async_event_journal=journal)
-        ).build()
+        runtime = (
+            HarnessRuntimeBuilder().with_ports(RuntimePorts(async_event_journal=journal)).build()
+        )
         result = await runtime.arun(
             RuntimeRequest(question="hello", run_id="ordered-async-journal"),
             provider=StreamingProvider(),
@@ -322,9 +326,7 @@ def test_async_journal_persists_durable_events_before_publishing_them() -> None:
         if event.event_type == "runtime.checkpoint.cleanup.recorded":
             assert ("publish", event.event_id) not in order
             continue
-        assert order.index(("append", event.event_id)) < order.index(
-            ("publish", event.event_id)
-        )
+        assert order.index(("append", event.event_id)) < order.index(("publish", event.event_id))
 
 
 def test_async_graph_falls_back_to_sync_for_sync_only_checkpointer() -> None:
@@ -381,7 +383,9 @@ def test_astream_emits_deltas_and_one_typed_terminal_result() -> None:
         ]
 
     events = asyncio.run(scenario())
-    deltas = [event.payload.get("delta", "") for event in events if event.event_type == "answer.delta"]
+    deltas = [
+        event.payload.get("delta", "") for event in events if event.event_type == "answer.delta"
+    ]
     terminal = [event for event in events if event.event_type == "runtime.result"]
 
     assert "".join(deltas) == "async answer"
@@ -515,6 +519,102 @@ def test_async_tool_handler_runs_in_host_loop_and_propagates_cancellation() -> N
     assert asyncio.run(scenario()) is True
 
 
+def test_sync_tool_handler_does_not_block_host_event_loop() -> None:
+    async def scenario() -> tuple[bool, str]:
+        registry = ToolRegistry(
+            [
+                ToolSpec(
+                    name="sync.wait",
+                    parameters_schema={"type": "object", "properties": {}},
+                    read_only=True,
+                    parallel_safe=True,
+                )
+            ]
+        )
+        executor = ToolExecutor(registry)
+
+        def wait_handler(call, _context):
+            time.sleep(0.08)
+            return ToolResult(call=call, status="succeeded")
+
+        executor.register("sync.wait", wait_handler)
+        event_loop_progressed = False
+
+        async def heartbeat() -> None:
+            nonlocal event_loop_progressed
+            await asyncio.sleep(0.01)
+            event_loop_progressed = True
+
+        result, _ = await asyncio.gather(
+            executor.aexecute(
+                ToolCall(id="sync-call", name="sync.wait", arguments={}),
+                ToolExecutionContext(run_id="sync-tool-run", user_id="user-1"),
+            ),
+            heartbeat(),
+        )
+        return event_loop_progressed, result.status
+
+    progressed, status = asyncio.run(scenario())
+    assert progressed is True
+    assert status == "succeeded"
+
+
+def test_slow_sync_governance_and_telemetry_do_not_block_host_event_loop() -> None:
+    class SlowInvocationStore(InMemoryModelInvocationStore):
+        def claim(self, *args, **kwargs):
+            time.sleep(0.05)
+            return super().claim(*args, **kwargs)
+
+        def complete(self, *args, **kwargs):
+            time.sleep(0.05)
+            return super().complete(*args, **kwargs)
+
+    class SlowHealthStore(InMemoryModelHealthStore):
+        def snapshot(self, *args, **kwargs):
+            time.sleep(0.05)
+            return super().snapshot(*args, **kwargs)
+
+        def record_success(self, *args, **kwargs):
+            time.sleep(0.05)
+            return super().record_success(*args, **kwargs)
+
+    class SlowTelemetry:
+        def record(self, _record) -> None:
+            time.sleep(0.05)
+
+    async def scenario() -> bool:
+        event_loop_progressed = False
+        runtime = (
+            HarnessRuntimeBuilder()
+            .with_ports(
+                RuntimePorts(
+                    async_event_journal=NativeAsyncEventJournal(),
+                    model_invocation_store=SlowInvocationStore(),
+                    model_health_store=SlowHealthStore(),
+                    telemetry=SlowTelemetry(),
+                )
+            )
+            .build()
+        )
+
+        async def heartbeat() -> None:
+            nonlocal event_loop_progressed
+            await asyncio.sleep(0.01)
+            event_loop_progressed = True
+
+        result, _ = await asyncio.gather(
+            runtime.arun(
+                RuntimeRequest(question="hello", run_id="slow-governance"),
+                provider=StreamingProvider(),
+            ),
+            heartbeat(),
+        )
+        assert result.status.value == "completed"
+        return event_loop_progressed
+
+    assert asyncio.run(scenario()) is True
+
+
 def test_async_tool_executor_preserves_parallel_result_order() -> None:
     async def scenario() -> tuple[list[str], float]:
         registry = ToolRegistry()
@@ -550,6 +650,59 @@ def test_async_tool_executor_preserves_parallel_result_order() -> None:
     assert elapsed < 0.09
 
 
+def test_native_async_tool_execution_store_owns_claim_replay_and_settlement() -> None:
+    class NativeAsyncExecutionStore:
+        def __init__(self) -> None:
+            self.store = InMemoryToolExecutionStore()
+            self.operations: list[tuple[str, asyncio.AbstractEventLoop]] = []
+
+        async def claim(self, **kwargs):
+            self.operations.append(("claim", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            return self.store.claim(**kwargs)
+
+        async def replay(self, claim):
+            self.operations.append(("replay", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            return self.store.replay(claim)
+
+        async def settle(self, claim, result):
+            self.operations.append(("settle", asyncio.get_running_loop()))
+            await asyncio.sleep(0)
+            self.store.settle(claim, result)
+
+    async def scenario():
+        registry = ToolRegistry(
+            [ToolSpec(name="async.idempotent", read_only=True, parallel_safe=True)]
+        )
+        store = NativeAsyncExecutionStore()
+        executor = ToolExecutor(registry, async_execution_store=store)
+        calls = 0
+
+        async def handler(call, _context):
+            nonlocal calls
+            calls += 1
+            return ToolResult(call=call, status="succeeded", summary="done")
+
+        executor.register("async.idempotent", handler)
+        call = ToolCall(
+            id="async-idempotent-call",
+            name="async.idempotent",
+            idempotency_key="stable-key",
+        )
+        context = ToolExecutionContext(run_id="async-store-run", user_id="user-1")
+        first = await executor.aexecute(call, context)
+        replay = await executor.aexecute(call, context)
+        return store, calls, first, replay, asyncio.get_running_loop()
+
+    store, calls, first, replay, loop = asyncio.run(scenario())
+
+    assert calls == 1
+    assert first.status == replay.status == "succeeded"
+    assert [name for name, _ in store.operations] == ["claim", "settle", "claim", "replay"]
+    assert all(operation_loop is loop for _, operation_loop in store.operations)
+
+
 def test_native_async_model_provider_runs_in_host_loop() -> None:
     class AsyncProvider:
         info = ModelProviderInfo(
@@ -576,13 +729,17 @@ def test_native_async_model_provider_runs_in_host_loop() -> None:
     async def scenario():
         provider = AsyncProvider()
         host_loop = asyncio.get_running_loop()
-        result = await HarnessRuntimeBuilder().build().arun(
-            RuntimeRequest(
-                question="hello",
-                run_id="native-async-run",
-                model_policy={"mode": "single", "primary_role": "fast"},
-            ),
-            provider=provider,
+        result = (
+            await HarnessRuntimeBuilder()
+            .build()
+            .arun(
+                RuntimeRequest(
+                    question="hello",
+                    run_id="native-async-run",
+                    model_policy={"mode": "single", "primary_role": "fast"},
+                ),
+                provider=provider,
+            )
         )
         return result, provider.loop is host_loop
 

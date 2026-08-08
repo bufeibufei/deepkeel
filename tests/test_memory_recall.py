@@ -53,6 +53,43 @@ class RecordingMemoryPort:
         raise NotImplementedError
 
 
+class NativeAsyncPolicy:
+    def __init__(self) -> None:
+        self.called = False
+
+    async def adecide(self, request):
+        self.called = True
+        await asyncio.sleep(0)
+        return MemoryRecallDecision(
+            mode="prefetch",
+            query=request.question,
+            reason="native_async_policy",
+            confidence=1,
+        )
+
+
+class NativeAsyncMemoryPort:
+    def __init__(self) -> None:
+        self.called = False
+
+    async def asearch(self, query):
+        self.called = True
+        await asyncio.sleep(0)
+        claim = MemoryClaim(
+            claim_id="async-memory-1",
+            user_id=query.user_id,
+            predicate="preference.response_style",
+            value="Prefer concise answers.",
+        )
+        return MemorySearchPage(hits=[MemorySearchHit(claim=claim, score=1)])
+
+    async def aapply(self, _mutation):  # pragma: no cover - protocol completeness
+        raise NotImplementedError
+
+    async def aget(self, _claim_id):  # pragma: no cover - protocol completeness
+        raise NotImplementedError
+
+
 class ScriptedProvider:
     model = "scripted-model"
     model_role = "reasoning"
@@ -110,6 +147,18 @@ def test_prefetch_injects_l3_payload_and_replays_same_run_query() -> None:
     assert first["long_term_memories"][0]["content"] == "Build reusable agent runtimes."
     assert first["memory_recall"]["cache_hit"] is False
     assert second["memory_recall"]["cache_hit"] is True
+
+
+def test_native_async_policy_and_memory_port_do_not_require_sync_facades() -> None:
+    policy = NativeAsyncPolicy()
+    port = NativeAsyncMemoryPort()
+    coordinator = DefaultMemoryRecallCoordinator(policy=policy, memory_port=port)
+
+    result = asyncio.run(coordinator.prepare("remember my style", {}, _bundle()))
+
+    assert policy.called is True
+    assert port.called is True
+    assert result["long_term_memories"][0]["content"] == "Prefer concise answers."
 
 
 def test_recall_failure_is_non_fatal_and_keeps_runtime_search_available() -> None:

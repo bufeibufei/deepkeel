@@ -3,8 +3,8 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from verification.postgres_reference.database import PostgresReferenceDatabase
-from verification.postgres_reference.support import json_value
+from deepkeel.contrib.postgres.database import PostgresDatabase
+from deepkeel.contrib.postgres.support import json_value
 
 
 class PostgresDurableCheckpointStore:
@@ -12,7 +12,7 @@ class PostgresDurableCheckpointStore:
 
     def __init__(
         self,
-        database: PostgresReferenceDatabase,
+        database: PostgresDatabase,
         *,
         tenant_id: str = "",
         namespace: str = "default",
@@ -133,3 +133,4 @@ class PostgresDurableCheckpointStore:
                 )
                 rows = cursor.fetchall()
         return tuple(str(row["run_id"]) for row in rows)
+

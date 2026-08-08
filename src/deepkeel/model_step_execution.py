@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.budget import (
     INPUT_TOKENS,
     OUTPUT_TOKENS,
@@ -26,6 +27,7 @@ from deepkeel.model_invocations import (
     ModelTurn,
 )
 from deepkeel.model_routing import ModelRouteDecision, ModelStepContext
+from deepkeel.scope import RuntimeScope
 
 
 ProviderInvoker = Callable[..., Awaitable[ModelTurn]]
@@ -53,6 +55,21 @@ class ModelAttemptExecutionError(RuntimeError):
         self.cause = cause
         self.visible_delta_emitted = visible_delta_emitted
         self.streamed_output = streamed_output
+
+
+def scoped_model_health_provider_id(
+    provider_id: str,
+    step_context: ModelStepContext,
+) -> str:
+    scope = RuntimeScope(
+        tenant_id=str(step_context.governance_scope.get("tenant_id") or ""),
+        # Provider health belongs to the tenant/model binding, not one end user.
+        user_id="local-device",
+        namespace=str(step_context.governance_scope.get("namespace") or "default"),
+    )
+    binding_id = str(step_context.governance_scope.get("model_binding_id") or "").strip()
+    identity = provider_id if not binding_id else f"{provider_id}:binding:{binding_id}"
+    return scope.qualify_identity(identity)
 
 
 async def execute_model_attempt(
@@ -91,13 +108,12 @@ async def execute_model_attempt(
             streamed_output_parts.append(delta)
             if (
                 max_output_tokens is not None
-                and token_estimator.estimate("".join(streamed_output_parts))
-                > max_output_tokens
+                and token_estimator.estimate("".join(streamed_output_parts)) > max_output_tokens
             ):
                 decision = preview_budget(
-                    BudgetSnapshot(run_id=step_context.run_id),
+                    BudgetSnapshot(run_id=step_context.accounting_run_id),
                     BudgetRequest(
-                        run_id=step_context.run_id,
+                        run_id=step_context.accounting_run_id,
                         metric=OUTPUT_TOKENS,
                         amount=token_estimator.estimate("".join(streamed_output_parts)),
                         limit=max_output_tokens,
@@ -117,12 +133,24 @@ async def execute_model_attempt(
         max_output_tokens=max_output_tokens,
         reasoning_effort=reasoning_effort,
     )
-    envelope = ModelInvocationEnvelope(
-        invocation_id=(
-            f"{step_context.run_id}:turn:{step_context.turn_id}:"
-            f"model:{step_context.step_index}:attempt:{attempt_index}"
+    scope = RuntimeScope(
+        tenant_id=str(step_context.governance_scope.get("tenant_id") or ""),
+        user_id=str(
+            step_context.governance_scope.get("user_id") or step_context.user_id or "local-device"
         ),
+        namespace=str(step_context.governance_scope.get("namespace") or "default"),
+    )
+    health_provider_id = scoped_model_health_provider_id(provider.info.provider_id, step_context)
+    invocation_id = (
+        f"{step_context.run_id}:turn:{step_context.turn_id}:"
+        f"model:{step_context.step_index}:attempt:{attempt_index}"
+    )
+    envelope = ModelInvocationEnvelope(
+        invocation_id=(scope.qualify_identity(invocation_id)),
         run_id=step_context.run_id,
+        tenant_id=scope.tenant_id,
+        user_id=scope.user_id,
+        namespace=scope.namespace,
         thread_id=step_context.thread_id,
         turn_id=step_context.turn_id,
         step_index=step_context.step_index,
@@ -139,7 +167,7 @@ async def execute_model_attempt(
     route_payload["invocation"] = envelope.public_snapshot()
     if invocation_recorder is not None:
         try:
-            invocation_recorder.record(envelope)
+            await run_sync_adapter(invocation_recorder.record, envelope)
             route_payload["invocation"]["recorded"] = True
         except Exception as recorder_error:
             route_payload["invocation"]["recorded"] = False
@@ -151,7 +179,8 @@ async def execute_model_attempt(
         if not provider.info.supports_native_tools:
             raise RuntimeError("provider does not support native tool calls")
         if invocation_store is not None:
-            claim = invocation_store.claim(
+            claim = await run_sync_adapter(
+                invocation_store.claim,
                 envelope,
                 lease_seconds=max(30.0, float(request_timeout) + 30.0),
             )
@@ -172,9 +201,7 @@ async def execute_model_attempt(
                     if claim.outcome == "in_progress"
                     else "the model invocation cannot be safely replayed"
                 )
-                raise ModelInvocationUnavailable(
-                    f"model invocation {claim.outcome}: {detail}"
-                )
+                raise ModelInvocationUnavailable(f"model invocation {claim.outcome}: {detail}")
         else:
             turn = await invoke_provider(
                 provider,
@@ -183,12 +210,14 @@ async def execute_model_attempt(
             )
         validate_turn(turn, step_context)
         ensure_time_remaining(step_context.deadline_monotonic)
-        model_health_store.record_success(
-            provider.info.provider_id,
+        await run_sync_adapter(
+            model_health_store.record_success,
+            health_provider_id,
             provider.info.model_id,
         )
         if invocation_store is not None and claim_token:
-            invocation_store.complete(
+            await run_sync_adapter(
+                invocation_store.complete,
                 envelope.invocation_id,
                 claim_token=claim_token,
                 result=turn,
@@ -201,16 +230,15 @@ async def execute_model_attempt(
     except Exception as exc:
         if invocation_store is not None and claim_token:
             try:
-                invocation_store.fail(
+                await run_sync_adapter(
+                    invocation_store.fail,
                     envelope.invocation_id,
                     claim_token=claim_token,
                     failure_type=type(exc).__name__,
                     failure_message=str(exc),
                 )
             except Exception as settlement_error:
-                route_payload["invocation"]["settlement_error"] = type(
-                    settlement_error
-                ).__name__
+                route_payload["invocation"]["settlement_error"] = type(settlement_error).__name__
         raise ModelAttemptExecutionError(
             exc,
             visible_delta_emitted=visible_delta_emitted,
@@ -239,7 +267,7 @@ def record_failed_attempt_usage(
     )
     input_budget = ledger.consume(
         BudgetRequest(
-            run_id=step_context.run_id,
+            run_id=step_context.accounting_run_id,
             metric=INPUT_TOKENS,
             amount=estimated_input_tokens,
             limit=policy.limit("max_input_tokens_total"),
@@ -251,13 +279,11 @@ def record_failed_attempt_usage(
     if failed_output_tokens:
         output_budget = ledger.consume(
             BudgetRequest(
-                run_id=step_context.run_id,
+                run_id=step_context.accounting_run_id,
                 metric=OUTPUT_TOKENS,
                 amount=failed_output_tokens,
                 limit=policy.limit("max_output_tokens_total"),
-                operation_id=(
-                    f"model-output:{step_context.step_index}:attempt:{attempt_index}"
-                ),
+                operation_id=(f"model-output:{step_context.step_index}:attempt:{attempt_index}"),
                 metadata={"role": role, "usage_source": usage.source},
             )
         )
@@ -294,7 +320,7 @@ def record_successful_attempt_usage(
     )
     input_budget = ledger.consume(
         BudgetRequest(
-            run_id=step_context.run_id,
+            run_id=step_context.accounting_run_id,
             metric=INPUT_TOKENS,
             amount=usage.input_tokens,
             limit=policy.limit("max_input_tokens_total"),
@@ -304,7 +330,7 @@ def record_successful_attempt_usage(
     )
     output_budget = ledger.consume(
         BudgetRequest(
-            run_id=step_context.run_id,
+            run_id=step_context.accounting_run_id,
             metric=OUTPUT_TOKENS,
             amount=usage.output_tokens,
             limit=policy.limit("max_output_tokens_total"),

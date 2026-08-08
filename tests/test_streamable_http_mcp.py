@@ -9,7 +9,7 @@ from typing import Iterator
 import pytest
 
 from deepkeel.adapter_sdk import GovernanceScope, MappingSecretProvider
-from deepkeel.mcp import McpClientPool, McpServerSpec
+from deepkeel.mcp import McpClientPool, McpServerSpec, McpTransportError
 
 
 class _McpHandler(BaseHTTPRequestHandler):
@@ -159,6 +159,7 @@ def test_streamable_http_transport_negotiates_session_and_redacts_secrets() -> N
             transport="streamable_http",
             url=url,
             allow_insecure_http=True,
+            allow_private_network=True,
             secret_headers={"Authorization": "remote-search-token"},
             required_scopes=["search.read"],
         )
@@ -211,6 +212,7 @@ def test_streamable_http_transport_recovers_an_expired_session_once() -> None:
                     transport="streamable_http",
                     url=f"{url}?access_token=must-not-leak",
                     allow_insecure_http=True,
+                    allow_private_network=True,
                 )
             ]
         )
@@ -243,3 +245,58 @@ def test_mcp_pool_enforces_server_scopes_even_without_secrets() -> None:
         pool.get("scope-protected")
 
     pool.close()
+
+
+def test_streamable_http_blocks_private_network_without_explicit_opt_in() -> None:
+    with _mcp_server() as url:
+        pool = McpClientPool(
+            [
+                McpServerSpec(
+                    id="private-network-blocked",
+                    transport="streamable_http",
+                    url=url,
+                    allow_insecure_http=True,
+                )
+            ]
+        )
+        client = pool.get("private-network-blocked")
+
+        with pytest.raises(McpTransportError, match="non-public address"):
+            client.list_tools()
+
+        pool.close()
+
+
+def test_streamable_http_enforces_request_and_response_size_limits() -> None:
+    with _mcp_server() as url:
+        request_limited = McpClientPool(
+            [
+                McpServerSpec(
+                    id="request-limited",
+                    transport="streamable_http",
+                    url=url,
+                    allow_insecure_http=True,
+                    allow_private_network=True,
+                    max_request_bytes=32,
+                )
+            ]
+        )
+        with pytest.raises(McpTransportError, match="max_request_bytes"):
+            request_limited.get("request-limited").list_tools()
+        request_limited.close()
+
+        response_limited = McpClientPool(
+            [
+                McpServerSpec(
+                    id="response-limited",
+                    transport="streamable_http",
+                    url=url,
+                    allow_insecure_http=True,
+                    allow_private_network=True,
+                    max_response_bytes=32,
+                )
+            ]
+        )
+        with pytest.raises(McpTransportError, match="max_response_bytes"):
+            response_limited.get("response-limited").list_tools()
+        response_limited.close()

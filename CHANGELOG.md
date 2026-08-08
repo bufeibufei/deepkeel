@@ -2,6 +2,45 @@
 
 ## Unreleased
 
+- Isolate runtime events, leases, tool/model idempotency, checkpoints and
+  operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
+  migration and cross-tenant contract tests.
+- Move thread-safe synchronous PostgreSQL, model, tool, telemetry and
+  cancellation operations off the async Host loop; preserve bounded streaming
+  and cooperative disconnect cancellation.
+- Add adapter capability declarations, executable model-provider
+  certification, OpenTelemetry metrics, MCP egress/size controls, semantic API
+  snapshots and critical coverage/complexity release budgets.
+
+## 4.0.0 - 2026-08-08
+
+- Split turn preparation, durable snapshot commits, and tool idempotency into
+  independently testable phases, then tighten the complexity ratchets around
+  the smaller orchestration functions.
+- Freeze semantic descriptors for all stable Runtime, Extension, and Memory
+  SDK symbols rather than a hand-picked subset.
+- Extend the PostgreSQL reference bundle with capability catalog, context
+  summary, Memory, and SubAgent lineage/checkpoint/suspension stores.
+- Add explicit development, testing, and production runtime profiles. Production
+  composition now fails closed unless progressive tool disclosure is enforced.
+- Promote `HarnessRuntimeBuilder` to the stable Runtime SDK. The Adapter SDK
+  keeps a transitional import attribute, but it is no longer its canonical API
+  owner.
+- Package PostgreSQL worker adapters under `deepkeel.contrib.postgres`, covering
+  canonical state, checkpoints, events, leases, model/tool idempotency, budget,
+  model health, cancellation, and scoped traces behind one composition bundle.
+- Add native async contracts for Memory recall policy/storage, tool execution
+  idempotency, and bounded SubAgent delegation. Synchronous implementations
+  remain compatible through explicit thread bridges instead of blocking the
+  Host event loop.
+- Replace ad-hoc PostgreSQL table initialization with a forward-only,
+  checksummed Schema Registry. Migrations use an advisory lock, detect history
+  and physical-column drift, repair the supported pre-cursor trace schema, and
+  reject automatic downgrades.
+- Add a privacy-safe OpenTelemetry projection, machine-readable `deepkeel`
+  diagnostics and PostgreSQL migration CLI, plus a public-SDK-only production
+  worker composition example.
+
 ## 4.0.0rc2
 
 - Make the six versioned SDK modules the unique public symbol owners, publish

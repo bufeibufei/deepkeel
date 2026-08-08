@@ -213,6 +213,13 @@ def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> N
     [
         ("src/deepkeel/model_gateway.py", "RoutedModelGateway", "arun_turn", 400),
         ("src/deepkeel/graph_model_node.py", "GraphModelNodeMixin", "amodel_node", 620),
+        (
+            "src/deepkeel/subagents/batch_execution.py",
+            "SubAgentBatchExecutionMixin",
+            "execute_many",
+            300,
+        ),
+        ("src/deepkeel/subagents/executor.py", "SubAgentExecutor", "_execute_one", 300),
     ],
 )
 def test_central_execution_methods_stay_within_ratcheted_size_budget(
@@ -237,15 +244,19 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
 @pytest.mark.parametrize(
     ("path", "maximum_lines"),
     [
-        ("src/deepkeel/runtime.py", 900),
+        ("src/deepkeel/runtime.py", 875),
+        ("src/deepkeel/runtime_results.py", 900),
+        ("src/deepkeel/graph_state.py", 800),
+        ("src/deepkeel/composition.py", 800),
         ("src/deepkeel/model.py", 250),
         ("src/deepkeel/tools.py", 80),
         ("src/deepkeel/graph_nodes.py", 300),
-        ("src/deepkeel/subagents/executor.py", 1_000),
+        ("src/deepkeel/subagents/executor.py", 700),
+        ("src/deepkeel/subagents/batch_execution.py", 400),
         ("src/deepkeel/context_window.py", 800),
-        ("src/deepkeel/runtime_turn_execution.py", 750),
+        ("src/deepkeel/runtime_turn_execution.py", 450),
         ("src/deepkeel/model_gateway.py", 750),
-        ("src/deepkeel/tool_executor.py", 750),
+        ("src/deepkeel/tool_executor.py", 700),
         ("src/deepkeel/graph_model_node.py", 750),
         ("src/deepkeel/subagents/bounded_execution.py", 750),
     ],

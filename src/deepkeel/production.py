@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol
 
+from deepkeel.adapter_capabilities import declared_adapter_capabilities
+
 
 class ProductionRuntimePorts(Protocol):
     """Minimal structural view required by the production-readiness gate."""
@@ -39,6 +41,9 @@ class ProductionRuntimePorts(Protocol):
 
     @property
     def tool_execution_store(self) -> Any: ...
+
+    @property
+    def async_tool_execution_store(self) -> Any: ...
 
     @property
     def budget_ledger(self) -> Any: ...
@@ -150,11 +155,6 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
             ports.model_invocation_store,
             "configure durable model invocation idempotency",
         ),
-        (
-            "tool_execution_store",
-            ports.tool_execution_store,
-            "configure durable tool execution idempotency",
-        ),
         ("budget_ledger", ports.budget_ledger, "configure a shared budget ledger"),
         (
             "model_health_store",
@@ -169,14 +169,22 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
         ("telemetry", ports.telemetry, "configure durable telemetry or trace export"),
     ):
         _require_explicit(issues, value, port=port, message=message)
+    _require_one(
+        issues,
+        ports.tool_execution_store,
+        ports.async_tool_execution_store,
+        port="tool_execution_store",
+        message="configure durable tool execution idempotency",
+    )
     _reject_known_local_ports(issues, ports)
+    _validate_declared_capabilities(issues, ports)
     _warn_blocking_async_ports(issues, ports)
-    if ports.tool_view_mode == "legacy":
+    if ports.tool_view_mode != "enforced":
         issues.append(
             ProductionReadinessIssue(
-                code="LEGACY_TOOL_DISCLOSURE",
-                message="legacy tool disclosure bypasses progressive catalog reduction",
-                severity="warning",
+                code="TOOL_DISCLOSURE_NOT_ENFORCED",
+                message="production requires enforced progressive tool disclosure",
+                severity="error",
                 port="tool_view_mode",
             )
         )
@@ -232,7 +240,9 @@ def _reject_known_local_ports(
         "event_journal": ports.async_event_journal or ports.event_journal,
         "run_lease_store": ports.async_run_lease_store or ports.run_lease_store,
         "model_invocation_store": ports.model_invocation_store,
-        "tool_execution_store": ports.tool_execution_store,
+        "tool_execution_store": (
+            ports.async_tool_execution_store or ports.tool_execution_store
+        ),
         "budget_ledger": ports.budget_ledger,
         "model_health_store": ports.model_health_store,
         "run_control": ports.run_control,
@@ -272,13 +282,74 @@ def _warn_blocking_async_ports(
         ),
         ("event_journal", ports.event_journal, ports.async_event_journal),
         ("run_lease_store", ports.run_lease_store, ports.async_run_lease_store),
+        (
+            "tool_execution_store",
+            ports.tool_execution_store,
+            ports.async_tool_execution_store,
+        ),
     ):
         if synchronous is not None and asynchronous is None:
             issues.append(
                 ProductionReadinessIssue(
                     code="BLOCKING_ASYNC_PATH",
-                    message="arun() will call this synchronous adapter on the Host loop",
+                    message=(
+                        "arun() requires a thread bridge for this synchronous adapter; "
+                        "prefer a native async port for sustained concurrency"
+                    ),
                     severity="warning",
+                    port=port,
+                )
+            )
+
+
+def _validate_declared_capabilities(
+    issues: list[ProductionReadinessIssue],
+    ports: ProductionRuntimePorts,
+) -> None:
+    candidates = {
+        "checkpointer": ports.checkpointer,
+        "runtime_state_store": ports.async_runtime_state_store or ports.runtime_state_store,
+        "event_journal": ports.async_event_journal or ports.event_journal,
+        "run_lease_store": ports.async_run_lease_store or ports.run_lease_store,
+        "model_invocation_store": ports.model_invocation_store,
+        "tool_execution_store": (
+            ports.async_tool_execution_store or ports.tool_execution_store
+        ),
+        "budget_ledger": ports.budget_ledger,
+        "model_health_store": ports.model_health_store,
+        "run_control": ports.run_control,
+        "telemetry": ports.telemetry,
+    }
+    scope_required = {
+        "runtime_state_store",
+        "event_journal",
+        "run_lease_store",
+        "model_invocation_store",
+        "tool_execution_store",
+    }
+    for port, value in candidates.items():
+        if value is None:
+            continue
+        capabilities = declared_adapter_capabilities(value)
+        if capabilities is None:
+            # Third-party adapters written before this contract remain valid;
+            # known unsafe local implementations are still rejected above.
+            continue
+        if not capabilities.durable or not capabilities.process_shared:
+            issues.append(
+                ProductionReadinessIssue(
+                    code="ADAPTER_NOT_PRODUCTION_DURABLE",
+                    message="adapter must declare durable and process_shared guarantees",
+                    severity="error",
+                    port=port,
+                )
+            )
+        if port in scope_required and not capabilities.runtime_scope:
+            issues.append(
+                ProductionReadinessIssue(
+                    code="ADAPTER_SCOPE_ISOLATION_UNDECLARED",
+                    message="adapter must declare RuntimeScope isolation",
+                    severity="error",
                     port=port,
                 )
             )

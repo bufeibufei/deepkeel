@@ -10,6 +10,7 @@ from deepkeel.runtime_api import RuntimeResult, RuntimeStreamEvent
 from deepkeel.runtime_execution_support import EventSink, optional_int
 from deepkeel.runtime_results import _failed_runtime_state, project_harness_result
 from deepkeel.scope import RuntimeScope
+from deepkeel.scope import scoped_adapter_operation
 from deepkeel.skills import SkillPolicy
 from deepkeel.telemetry import TelemetryRecord
 from deepkeel.type_narrowing import as_dict
@@ -53,6 +54,7 @@ class RuntimeFailureHandlingMixin:
         sequence = (
             await self._event_latest_sequence(
                 run_id,
+                scope=scope,
                 fallback=max(
                     0,
                     optional_int(context_bundle.get("event_sequence")) or 0,
@@ -89,14 +91,30 @@ class RuntimeFailureHandlingMixin:
         envelope = RuntimeStreamEvent.model_validate(event)
         if self.async_event_journal is not None:
             try:
-                await self.async_event_journal.append(envelope)
+                operation = scoped_adapter_operation(
+                    self.async_event_journal,
+                    "append",
+                    scope,
+                )
+                if getattr(operation, "__name__", "") == "append_scoped":
+                    await operation(envelope, scope=scope)
+                else:
+                    await operation(envelope)
             except Exception as journal_exc:
                 raise AgentEventPersistenceError(
                     f"runtime event journal append failed: {journal_exc}"
                 ) from journal_exc
         elif self.event_journal is not None:
             try:
-                self.event_journal.append(envelope)
+                operation = scoped_adapter_operation(
+                    self.event_journal,
+                    "append",
+                    scope,
+                )
+                if getattr(operation, "__name__", "") == "append_scoped":
+                    operation(envelope, scope=scope)
+                else:
+                    operation(envelope)
             except Exception as journal_exc:
                 raise AgentEventPersistenceError(
                     f"runtime event journal append failed: {journal_exc}"

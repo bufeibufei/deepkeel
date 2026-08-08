@@ -112,7 +112,11 @@ class GraphNodes(GraphModelNodeMixin):
         *,
         force: bool = False,
     ) -> None:
-        self.control.raise_if_cancelled(str(state.get("run_id") or ""), force=force)
+        metadata = as_dict(state.get("metadata"))
+        operational_run_id = str(
+            metadata.get("operational_run_id") or state.get("run_id") or ""
+        )
+        self.control.raise_if_cancelled(operational_run_id, force=force)
         turn_context = self.turn_context(config, state)
         deadline = (
             turn_context.deadline_monotonic if turn_context is not None else self.deadline_monotonic
@@ -186,7 +190,7 @@ class GraphNodes(GraphModelNodeMixin):
                     },
                 )
             results = await tool_executor.aexecute_many(calls, context)
-        current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
+        current["budget_state"] = ledger.snapshot(context.operational_run_id).as_dict()
         current["pending_tool_calls"] = []
         current["pending_action"] = None
         current["pending_async"] = None

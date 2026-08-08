@@ -72,6 +72,11 @@ from deepkeel.graph_workflow import (
 )
 
 
+def _operational_run_id(state: Mapping[str, Any]) -> str:
+    metadata = as_dict(state.get("metadata"))
+    return str(metadata.get("operational_run_id") or state.get("run_id") or "")
+
+
 class GraphModelNodeMixin:
     """Model-step orchestration, disclosure, hooks and completion handling."""
 
@@ -359,7 +364,9 @@ class GraphModelNodeMixin:
         except AgentEventPersistenceError:
             raise
         except Exception as exc:
-            current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
+            current["budget_state"] = ledger.snapshot(
+                _operational_run_id(current)
+            ).as_dict()
             latency_ms = int((time.perf_counter() - model_started_at) * 1000)
             if route_payload.get("budget_metrics"):
                 _emit(
@@ -411,7 +418,7 @@ class GraphModelNodeMixin:
                 )
             )
             _emit_hook_audits(current, config, after_model.audits)
-        current["budget_state"] = ledger.snapshot(current["run_id"]).as_dict()
+        current["budget_state"] = ledger.snapshot(_operational_run_id(current)).as_dict()
         model_latency_ms = int((time.perf_counter() - model_started_at) * 1000)
         model_metrics = build_model_metrics(
             turn,

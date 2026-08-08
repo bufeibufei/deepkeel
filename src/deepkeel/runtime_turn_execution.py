@@ -4,6 +4,7 @@ import time
 from typing import Any, Callable
 from uuid import uuid4
 
+from deepkeel.async_ports import run_sync_adapter
 from deepkeel.capability_manifest import RuntimeGeneration
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
 from deepkeel.failures import classify_runtime_failure
@@ -17,7 +18,6 @@ from deepkeel.runtime_events import RuntimeEventEmitter
 from deepkeel.runtime_execution_support import (
     EventSink,
     emit_runtime_hook_audits,
-    ensure_resume_generation_compatible,
     optional_int,
 )
 from deepkeel.runtime_failure_handling import RuntimeFailureHandlingMixin
@@ -26,13 +26,10 @@ from deepkeel.runtime_lifecycle import run_start_lifecycle_hooks
 from deepkeel.runtime_model_pipeline import build_runtime_model_gateway
 from deepkeel.runtime_policy import (
     _budget_limits,
-    _conservative_model_context_profile,
     _max_elapsed_seconds,
     _merge_skill_activation,
-    _model_providers,
     _prior_budget_state,
     _prior_diagnostics,
-    _resolved_model_policy,
 )
 from deepkeel.runtime_results import _failed_runtime_state, project_harness_result
 from deepkeel.runtime_settlement import project_and_settle_runtime_result
@@ -42,6 +39,15 @@ from deepkeel.telemetry import TelemetryRecord
 from deepkeel.tools import ToolExecutionContext
 from deepkeel.turn_context import TurnExecutionContext
 from deepkeel.type_narrowing import as_dict
+from deepkeel.runtime_turn_preparation import prepare_turn_identity, prepare_turn_inputs
+
+
+async def _arestore_budget(ledger: Any, run_id: str, snapshot: Any) -> None:
+    await run_sync_adapter(ledger.restore, run_id, snapshot)
+
+
+async def _abudget_snapshot(ledger: Any, run_id: str) -> Any:
+    return await run_sync_adapter(ledger.snapshot, run_id)
 
 
 class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
@@ -69,56 +75,20 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         run_started_monotonic = time.monotonic()
         short = short_context if isinstance(short_context, dict) else {}
         bundle = dict(context_bundle) if isinstance(context_bundle, dict) else {}
-        # Policy inputs must come from the typed request, not from host-specific
-        # duplication inside context_bundle.
-        if request.run_id:
-            bundle.setdefault("run_id", request.run_id)
-        if request.thread_id:
-            bundle.setdefault("thread_id", request.thread_id)
-        if runtime_scope.tenant_id:
-            bundle.setdefault("tenant_id", runtime_scope.tenant_id)
-        if user_id:
-            bundle.setdefault("user_id", user_id)
-        if skill_activation:
-            bundle["skill_activation"] = dict(skill_activation)
-        resolved_model_policy = _resolved_model_policy(
-            model_policy,
-            provider=provider,
-            providers=providers,
-            max_steps=self.max_steps,
-        )
-        model_providers = _model_providers(provider, providers, resolved_model_policy)
-        model_context_profile = _conservative_model_context_profile(
-            model_providers,
-            resolved_model_policy,
-        )
-        configured_input_limit = int(
-            as_dict(resolved_model_policy.get("budget")).get("max_input_tokens_per_call") or 0
-        )
-        context_window_diagnostics: dict[str, Any] = {}
         try:
-            if self.memory_recall_coordinator is not None:
-                bundle = await self.memory_recall_coordinator.prepare(question, short, bundle)
-                if not isinstance(bundle, dict):
-                    raise TypeError("memory recall coordinator must return a mapping")
-            if self.context_builder is not None:
-                bundle = self.context_builder(question, short, bundle)
-                if not isinstance(bundle, dict):
-                    raise TypeError("context builder must return a mapping")
-            for contributor_id, contributor in self.capability_catalog.context_contributors.items():
-                contributed = contributor(dict(bundle))
-                if not isinstance(contributed, dict):
-                    raise TypeError(f"context contributor {contributor_id} must return a mapping")
-                bundle = contributed
-            bundle["_model_context_profile"] = model_context_profile.as_dict()
-            bundle["_configured_input_limit"] = configured_input_limit
-            prepared_context = self.context_window_manager.prepare(
-                question,
-                short,
-                bundle,
+            prepared_inputs = await prepare_turn_inputs(
+                self,
+                request,
+                provider=provider,
+                providers=providers,
             )
-            bundle = prepared_context.context_bundle
-            context_window_diagnostics = dict(prepared_context.diagnostics)
+            short = prepared_inputs.short
+            bundle = prepared_inputs.bundle
+            resolved_model_policy = prepared_inputs.resolved_model_policy
+            model_providers = prepared_inputs.model_providers
+            model_context_profile = prepared_inputs.model_context_profile
+            configured_input_limit = prepared_inputs.configured_input_limit
+            context_window_diagnostics = prepared_inputs.context_window_diagnostics
         except Exception as exc:
             return await self._context_setup_failure(
                 question,
@@ -133,30 +103,12 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 execution_fence=execution_fence,
                 scope=runtime_scope,
             )
-        run_id = str(
-            request.run_id
-            or bundle.get("agent_session_id")
-            or bundle.get("agent_run_id")
-            or bundle.get("run_id")
-            or uuid4()
-        )
-        if short.get("resume"):
-            (
-                durable_state,
-                checkpoint_authority,
-                checkpoint_load_errors,
-            ) = await self._aload_authoritative_checkpoint(
-                run_id,
-                session=session,
-                user_id=str(user_id or "local-device"),
-                scope=runtime_scope,
-            )
-        else:
-            durable_state, checkpoint_authority, checkpoint_load_errors = {}, "none", []
         try:
-            ensure_resume_generation_compatible(
-                self.runtime_generation,
-                durable_state,
+            identity = await prepare_turn_identity(
+                self,
+                request,
+                prepared_inputs,
+                session=session,
             )
         except CheckpointCompatibilityError as exc:
             return await self._context_setup_failure(
@@ -172,11 +124,20 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 execution_fence=execution_fence,
                 scope=runtime_scope,
             )
+        run_id = identity.run_id
+        operational_run_id = identity.operational_run_id
+        conversation_thread_id = identity.conversation_thread_id
+        graph_thread_id = identity.graph_thread_id
+        turn_id = identity.turn_id
+        durable_state = identity.durable_state
+        checkpoint_authority = identity.checkpoint_authority
+        checkpoint_load_errors = identity.checkpoint_load_errors
         max_elapsed_seconds = _max_elapsed_seconds(resolved_model_policy)
         deadline_monotonic = (
             time.monotonic() + max_elapsed_seconds if max_elapsed_seconds > 0 else None
         )
-        self.budget_ledger.restore(run_id, _prior_budget_state(durable_state, short))
+        prior_budget = _prior_budget_state(durable_state, short)
+        await _arestore_budget(self.budget_ledger, operational_run_id, prior_budget)
         previous_diagnostics = _prior_diagnostics(durable_state, short)
         resolved_skill = _merge_skill_activation(
             durable_state=durable_state,
@@ -185,36 +146,12 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         )
         skill_policy = SkillPolicy.from_snapshot(resolved_skill)
         skill = skill_policy.runtime_snapshot()
-        conversation_thread_id = str(
-            request.thread_id
-            or bundle.get("thread_id")
-            or bundle.get("ask_thread_id")
-            or short.get("ask_thread_id")
-            or run_id
-        )
-        graph_thread_id = run_id
-        turn_id = str(
-            request.turn_id or bundle.get("turn_id") or short.get("turn_id") or f"turn-{uuid4()}"
-        )
-        event_sequence = await self._event_latest_sequence(
-            run_id,
-            fallback=max(
-                0,
-                optional_int(bundle.get("event_sequence")) or 0,
-                optional_int(short.get("event_sequence")) or 0,
-            ),
-        )
-        run_version = max(
-            0,
-            optional_int(bundle.get("run_version")) or 0,
-            optional_int(short.get("run_version")) or 0,
-        )
         emitter = RuntimeEventEmitter(
             run_id=run_id,
             thread_id=conversation_thread_id,
             turn_id=turn_id,
-            run_version=run_version,
-            initial_sequence=event_sequence,
+            run_version=identity.run_version,
+            initial_sequence=identity.event_sequence,
             skill_id=str(skill.get("skill_id") or ""),
             scope=runtime_scope,
             run_control=self.run_control,
@@ -230,15 +167,15 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
         # Resume must preserve run.resumed as the first newly persisted event.
         # Recall is deliberately skipped on resume and remains available in
         # diagnostics, so emitting a second skip event adds no recovery value.
-        emit_memory_recall = not bool(
-            short.get("resume") or short.get("recover_interrupted")
-        )
+        emit_memory_recall = not bool(short.get("resume") or short.get("recover_interrupted"))
         if memory_recall and emit_memory_recall:
             emit(
                 {
                     "event_type": "memory.recall.decided",
                     "title": "Memory recall policy evaluated",
-                    "summary": str(memory_recall.get("reason") or memory_recall.get("status") or ""),
+                    "summary": str(
+                        memory_recall.get("reason") or memory_recall.get("status") or ""
+                    ),
                     "payload": dict(memory_recall),
                     "visible": False,
                 }
@@ -338,11 +275,13 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 "skill_activation": skill,
                 "tenant_id": str(bundle.get("tenant_id") or ""),
                 "governance_scope": {
-                    "tenant_id": str(bundle.get("tenant_id") or ""),
+                    "tenant_id": runtime_scope.tenant_id,
                     "user_id": str(user_id or "local-device"),
+                    "namespace": runtime_scope.namespace,
                     "skill_id": str(skill.get("skill_id") or ""),
                     "scopes": list(bundle.get("governance_scopes") or []),
                 },
+                "operational_run_id": operational_run_id,
                 "model_providers": model_providers,
                 "model_policy": resolved_model_policy,
                 "event_sink": emit,
@@ -355,6 +294,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             deadline_monotonic=deadline_monotonic,
             run_control=self.run_control,
             execution_fence=execution_fence,
+            scope=runtime_scope,
         )
         turn_context = TurnExecutionContext(
             model=model_gateway,
@@ -367,6 +307,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             entry_tool_skill_activator=self.entry_tool_skill_activator,
         )
 
+        initial_budget_snapshot = await _abudget_snapshot(self.budget_ledger, operational_run_id)
         try:
             graph_outcome = await execute_graph_turn(
                 graph=graph,
@@ -379,7 +320,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 context_bundle=bundle,
                 skill_activation=skill,
                 model_policy=resolved_model_policy,
-                budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                budget_state=initial_budget_snapshot.as_dict(),
                 input_parts=input_parts,
                 durable_state=durable_state,
                 state_migrations=self.state_migrations,
@@ -412,6 +353,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                         },
                     }
                 )
+            failed_budget_snapshot = await _abudget_snapshot(self.budget_ledger, operational_run_id)
             state = _failed_runtime_state(
                 question,
                 exc,
@@ -423,7 +365,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
                 context_bundle=bundle,
                 skill_activation=skill,
                 model_policy=resolved_model_policy,
-                budget_state=self.budget_ledger.snapshot(run_id).as_dict(),
+                budget_state=failed_budget_snapshot.as_dict(),
                 events=emitter.events,
                 failure=failure,
             )

@@ -11,6 +11,7 @@ from deepkeel.budget import (
     BudgetLedger,
     BudgetPolicy,
     BudgetRequest,
+    BudgetSnapshot,
     preview_budget,
 )
 from deepkeel.context_compaction import (
@@ -117,14 +118,14 @@ def _prepare_model_context(
     route: ModelRouteDecision,
     provider_capabilities: ModelCapabilities,
     budget_policy: BudgetPolicy,
-    budget_ledger: BudgetLedger,
+    budget_snapshot: BudgetSnapshot,
     step_context: ModelStepContext,
     per_call_input_limit: float | None,
     token_estimator: ConservativeTokenEstimator,
 ) -> ModelInputContextResult:
     output_tokens = _remaining_output_tokens(
         budget_policy,
-        budget_ledger.snapshot(step_context.run_id),
+        budget_snapshot,
         route.role,
         capabilities=provider_capabilities,
         estimated_input_tokens=0,
@@ -152,9 +153,9 @@ def _prepare_model_context(
         estimated = token_estimator.estimate({"messages": messages, "tools": tools})
         raise BudgetExceededError(
             preview_budget(
-                budget_ledger.snapshot(step_context.run_id),
+                budget_snapshot,
                 BudgetRequest(
-                    run_id=step_context.run_id,
+                    run_id=step_context.accounting_run_id,
                     metric=INPUT_TOKENS,
                     amount=max(limit + 1, estimated),
                     limit=limit,

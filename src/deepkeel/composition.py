@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, fields, replace
-from typing import Any, Mapping, Self, TypedDict, Unpack, cast
+from typing import Any, Literal, Mapping, Self, TypedDict, Unpack, cast
 
 from deepkeel.async_ports import (
     AsyncDurableCheckpointStore,
     AsyncRunLeaseStore,
     AsyncRuntimeEventJournal,
     AsyncRuntimeStateStore,
+    AsyncToolExecutionStore,
 )
 from deepkeel.budget import BudgetLedger
 from deepkeel.capabilities import (
@@ -51,6 +52,38 @@ from deepkeel.skill_activation import EntryToolSkillActivator
 from deepkeel.turn_context import ToolViewMode
 
 
+RuntimeProfileName = Literal["development", "testing", "production"]
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeProfile:
+    """Opinionated runtime defaults for a deployment environment."""
+
+    name: RuntimeProfileName
+    tool_view_mode: ToolViewMode
+    graph_durability: GraphDurability = "exit"
+    strict_capability_conformance: bool = True
+    require_production_readiness: bool = False
+
+    @classmethod
+    def resolve(cls, value: RuntimeProfile | RuntimeProfileName) -> RuntimeProfile:
+        if isinstance(value, RuntimeProfile):
+            return value
+        profiles = {
+            "development": cls(name="development", tool_view_mode="legacy"),
+            "testing": cls(name="testing", tool_view_mode="enforced"),
+            "production": cls(
+                name="production",
+                tool_view_mode="enforced",
+                require_production_readiness=True,
+            ),
+        }
+        try:
+            return profiles[value]
+        except KeyError as exc:
+            raise ValueError(f"unsupported runtime profile: {value!r}") from exc
+
+
 class RuntimePortChanges(TypedDict, total=False):
     checkpointer: GraphCheckpointer | None
     checkpoint_store: DurableCheckpointStore | None
@@ -65,6 +98,7 @@ class RuntimePortChanges(TypedDict, total=False):
     budget_ledger: BudgetLedger | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
+    async_tool_execution_store: AsyncToolExecutionStore | None
     tool_preflight: ToolPreflight | None
     secret_provider: SecretProvider | None
     telemetry: TelemetryPort | None
@@ -104,6 +138,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     model_health_store: ModelHealthStore | None
     run_control: RunControl | None
     tool_execution_store: ToolExecutionStore | None
+    async_tool_execution_store: AsyncToolExecutionStore | None
     tool_preflight: ToolPreflight | None
     telemetry: TelemetryPort | None
     context_builder: ContextBuilder | None
@@ -145,6 +180,7 @@ class RuntimePersistencePorts:
     async_run_lease_store: AsyncRunLeaseStore | None = None
     model_invocation_store: ModelInvocationStore | None = None
     tool_execution_store: ToolExecutionStore | None = None
+    async_tool_execution_store: AsyncToolExecutionStore | None = None
     run_lease_owner_id: str = ""
     run_lease_ttl_seconds: float = 60.0
 
@@ -209,6 +245,7 @@ class RuntimePorts:
     budget_ledger: BudgetLedger | None = None
     run_control: RunControl | None = None
     tool_execution_store: ToolExecutionStore | None = None
+    async_tool_execution_store: AsyncToolExecutionStore | None = None
     tool_preflight: ToolPreflight | None = None
     secret_provider: SecretProvider | None = None
     telemetry: TelemetryPort | None = None
@@ -285,12 +322,18 @@ class HarnessRuntimeBuilder:
         self,
         registry: ToolRegistry | None = None,
         executor: ToolExecutor | None = None,
+        *,
+        profile: RuntimeProfile | RuntimeProfileName = "development",
     ) -> None:
         if executor is not None and registry is not None and executor.registry is not registry:
             raise ValueError("executor and registry must reference the same ToolRegistry")
+        self._profile = RuntimeProfile.resolve(profile)
         self._registry = registry or (executor.registry if executor is not None else ToolRegistry())
         self._executor = executor
-        self._ports = RuntimePorts()
+        self._ports = RuntimePorts(
+            graph_durability=self._profile.graph_durability,
+            tool_view_mode=self._profile.tool_view_mode,
+        )
         self._capability_packs: list[CapabilityPack] = []
         self._capability_manifests: dict[str, CapabilityManifest] = {}
         self._runtime_generation: RuntimeGeneration | None = None
@@ -298,12 +341,16 @@ class HarnessRuntimeBuilder:
         self._installed_contributions: tuple[CapabilityContribution, ...] = ()
         self._max_steps = 12
         self._max_parallel_tools = 4
-        self._strict_capability_conformance = True
+        self._strict_capability_conformance = self._profile.strict_capability_conformance
         self._built = False
 
     @property
     def registry(self) -> ToolRegistry:
         return self._registry
+
+    @property
+    def profile(self) -> RuntimeProfile:
+        return self._profile
 
     def with_ports(self, ports: RuntimePorts) -> Self:
         self._ensure_mutable()
@@ -384,11 +431,14 @@ class HarnessRuntimeBuilder:
 
     def build(self) -> HarnessRuntime:
         self._ensure_mutable()
+        if self._profile.require_production_readiness:
+            self.production_readiness().require_ready()
         executor = self._executor or ToolExecutor(
             self._registry,
             preflight=self._ports.tool_preflight,
             max_parallel_tools=self._max_parallel_tools,
             execution_store=self._ports.tool_execution_store,
+            async_execution_store=self._ports.async_tool_execution_store,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
         )

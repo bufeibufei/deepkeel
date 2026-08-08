@@ -12,7 +12,7 @@ It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0-rc.2"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
 python examples/quickstart/main.py
 ```
 
@@ -35,14 +35,16 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
-- [PostgreSQL reference adapters](docs/postgresql-reference.md)
+- [PostgreSQL adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
 - [Release process](docs/releasing.md)
 
 The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
 The [inventory package](examples/inventory_pack) demonstrates product-neutral
 tools and artifacts. The [durable approval example](examples/durable_approval)
-demonstrates suspension and resume.
+demonstrates suspension and resume. The
+[production worker](examples/production_worker) composes the production profile,
+packaged PostgreSQL ports, migrations and optional OpenTelemetry export.
 
 Production deployments should follow
 [`docs/production-readiness.md`](docs/production-readiness.md), replace every
@@ -61,7 +63,7 @@ non-domain example is available in
 There is no implicit registration or legacy Pack adapter in the v3 contract.
 
 ```python
-from deepkeel.adapter_sdk import HarnessRuntimeBuilder
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder
 from deepkeel.extension_sdk import (
     ArtifactTypeSpec,
     CapabilityContribution,
@@ -180,13 +182,19 @@ Thread-safe synchronous persistence adapters can be exposed to async Host
 control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
 Production async database drivers should implement the corresponding
 `Async*Store` protocol directly instead of using thread offload.
+The same rule applies to selective Memory recall, tool idempotency, and
+SubAgent delegation through `AsyncMemoryPort`, `AsyncMemoryRecallPolicy`,
+`AsyncToolExecutionStore`, and the async orchestration contracts.
+When a synchronous SubAgent bridge needs database access, provide a
+`session_factory`; DeepKeel will not move an already-bound Session across
+threads.
 
 Production composition is executable rather than advisory. Inspect missing or
 process-local Host ports with `production_readiness()`, and use
 `build_production()` to fail closed before a worker starts:
 
 ```python
-builder = HarnessRuntimeBuilder().with_ports(production_ports)
+builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
 report = builder.production_readiness()
 runtime = builder.build_production()
 ```
@@ -414,8 +422,8 @@ remote_search = McpServerSpec(
 )
 ```
 
-The Capability Pack contract remains `harness-core-v3`; the DeepKeel release
-candidate is `4.0.0rc2` and the public SDK surface is `4.0.0`. Consumers import
+The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
+release and public SDK surface are `4.0.0`. Consumers import
 only from `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`,
 `deepkeel.adapter_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, or
 `deepkeel.orchestration_sdk`. The versioned public

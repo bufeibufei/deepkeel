@@ -120,7 +120,18 @@ class MemoryPort(Protocol):
     def get(self, claim_id: str) -> MemoryClaim | None: ...
 
 
+class AsyncMemoryPort(Protocol):
+    """Native async memory boundary for network-backed Host implementations."""
+
+    async def aapply(self, mutation: MemoryMutation) -> MemoryMutationReceipt: ...
+
+    async def asearch(self, query: MemoryQuery) -> MemorySearchPage: ...
+
+    async def aget(self, claim_id: str) -> MemoryClaim | None: ...
+
+
 MEMORY_SDK_API = (
+    "AsyncMemoryPort",
     "MemoryClaim",
     "MemoryEvidence",
     "MemoryMutation",

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import ipaddress
+import socket
 import threading
 from itertools import count
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -193,6 +196,7 @@ class StreamableHttpMcpClient:
             self._closed = True
             if self._session_id:
                 try:
+                    self._validate_egress_target()
                     self._client.delete(
                         self.spec.url,
                         headers=self._request_headers(include_session=True),
@@ -286,17 +290,39 @@ class StreamableHttpMcpClient:
         timeout_seconds: float,
         include_session: bool,
     ) -> httpx.Response:
+        encoded_size = len(
+            json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+        if encoded_size > self.spec.max_request_bytes:
+            raise McpTransportError(
+                f"MCP request exceeds max_request_bytes: {self.server_id}"
+            )
         with self._state_lock:
             if self._closed:
                 raise McpTransportError(f"MCP client is closed: {self.server_id}")
             self._in_flight += 1
         try:
-            response = self._client.post(
+            self._validate_egress_target()
+            with self._client.stream(
+                "POST",
                 self.spec.url,
                 json=payload,
                 headers=self._request_headers(include_session=include_session),
                 timeout=max(0.001, float(timeout_seconds)),
-            )
+            ) as streamed:
+                content = bytearray()
+                for chunk in streamed.iter_bytes():
+                    content.extend(chunk)
+                    if len(content) > self.spec.max_response_bytes:
+                        raise McpTransportError(
+                            f"MCP response exceeds max_response_bytes: {self.server_id}"
+                        )
+                response = httpx.Response(
+                    streamed.status_code,
+                    headers=streamed.headers,
+                    content=bytes(content),
+                    request=streamed.request,
+                )
         except httpx.TimeoutException as exc:
             self._timeout_count += 1
             timeout_error = McpTimeoutError(f"MCP request timed out: {self.server_id}")
@@ -319,6 +345,37 @@ class StreamableHttpMcpClient:
                 f"MCP HTTP {response.status_code}: {self.server_id}: {detail}"
             )
         return response
+
+    def _validate_egress_target(self) -> None:
+        parsed = urlsplit(self.spec.url)
+        hostname = str(parsed.hostname or "").strip().lower()
+        if not hostname:
+            raise McpTransportError(f"MCP endpoint has no hostname: {self.server_id}")
+        if self.spec.allowed_hosts and hostname not in {
+            host.strip().lower() for host in self.spec.allowed_hosts if host.strip()
+        }:
+            raise McpTransportError(f"MCP endpoint host is not allowed: {self.server_id}")
+        try:
+            addresses = {
+                item[4][0]
+                for item in socket.getaddrinfo(
+                    hostname,
+                    parsed.port or (443 if parsed.scheme == "https" else 80),
+                    type=socket.SOCK_STREAM,
+                )
+            }
+        except OSError as exc:
+            raise McpTransportError(
+                f"MCP endpoint DNS resolution failed: {self.server_id}"
+            ) from exc
+        if self.spec.allow_private_network:
+            return
+        for value in addresses:
+            address = ipaddress.ip_address(value)
+            if not address.is_global:
+                raise McpTransportError(
+                    f"MCP endpoint resolved to a non-public address: {self.server_id}"
+                )
 
     def _request_headers(self, *, include_session: bool) -> dict[str, str]:
         headers = {

@@ -9,9 +9,9 @@ from time import perf_counter
 from uuid import uuid4
 
 from deepkeel.runtime_sdk import RuntimeStateMutation
-from verification.postgres_reference import (
+from deepkeel.contrib.postgres import (
+    PostgresDatabase,
     PostgresDurableCheckpointStore,
-    PostgresReferenceDatabase,
     PostgresRunLeaseStore,
     PostgresRuntimeStateStore,
 )
@@ -25,7 +25,7 @@ def run_baseline(
     max_p95_ms: float,
 ) -> dict[str, float | int]:
     schema = f"deepkeel_baseline_{uuid4().hex[:12]}"
-    database = PostgresReferenceDatabase(dsn, schema=schema)
+    database = PostgresDatabase(dsn, schema=schema)
     database.initialize()
     started = perf_counter()
 
