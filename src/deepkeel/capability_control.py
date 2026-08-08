@@ -217,6 +217,51 @@ class CapabilityPackageManager:
         )
         return self._save(snapshot, remaining)
 
+    def reconcile(
+        self,
+        manifests: tuple[CapabilityManifest, ...],
+        *,
+        disable_missing: bool = True,
+    ) -> CapabilityPackageSnapshot:
+        """Atomically replace the active package generation.
+
+        Package ownership can move between manifests during a deployment. A
+        sequence of otherwise-valid per-package upgrades may therefore create
+        an invalid intermediate generation. Reconciliation validates and saves
+        only the final generation while preserving package history.
+        """
+
+        desired = {manifest.id: manifest for manifest in manifests}
+        if len(desired) != len(manifests):
+            raise ValueError("capability package reconciliation contains duplicate ids")
+        validate_manifest_set(tuple(desired.values()))
+
+        snapshot = self.store.load()
+        now = datetime.now(UTC)
+        records: list[CapabilityPackageRecord] = []
+        remaining = dict(desired)
+        for current in snapshot.packages:
+            manifest = remaining.pop(current.manifest.id, None)
+            if manifest is None:
+                records.append(
+                    current.model_copy(
+                        update={
+                            "enabled": False if disable_missing else current.enabled,
+                            "updated_at": now
+                            if disable_missing and current.enabled
+                            else current.updated_at,
+                        }
+                    )
+                )
+                continue
+            records.append(self._reconciled_record(current, manifest, now=now))
+
+        records.extend(
+            CapabilityPackageRecord(manifest=manifest, enabled=True)
+            for manifest in remaining.values()
+        )
+        return self._save(snapshot, tuple(records))
+
     def generation(
         self,
         generation_id: str = "",
@@ -255,6 +300,47 @@ class CapabilityPackageManager:
             update={"enabled": enabled, "updated_at": datetime.now(UTC)}
         )
         return self._save(snapshot, self._replace(snapshot, replacement))
+
+    @staticmethod
+    def _reconciled_record(
+        current: CapabilityPackageRecord,
+        manifest: CapabilityManifest,
+        *,
+        now: datetime,
+    ) -> CapabilityPackageRecord:
+        if current.manifest == manifest:
+            if current.enabled:
+                return current
+            return current.model_copy(update={"enabled": True, "updated_at": now})
+        if current.manifest.version == manifest.version:
+            raise ValueError(
+                "capability package content changed without a version bump: "
+                f"{manifest.id}@{manifest.version}"
+            )
+        if version_satisfies(manifest.version, f">{current.manifest.version}"):
+            history = (*current.history, current.manifest)
+        else:
+            selected = next(
+                (item for item in current.history if item == manifest),
+                None,
+            )
+            if selected is None:
+                raise ValueError(
+                    "capability package reconciliation cannot select unavailable version: "
+                    f"{manifest.id}@{manifest.version}"
+                )
+            history = (
+                *(item for item in current.history if item is not selected),
+                current.manifest,
+            )
+        return current.model_copy(
+            update={
+                "manifest": manifest,
+                "enabled": True,
+                "history": history,
+                "updated_at": now,
+            }
+        )
 
     def _save(
         self,

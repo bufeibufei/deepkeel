@@ -18,6 +18,7 @@ def _manifest(
     *,
     dependencies: dict[str, str] | None = None,
     tools: tuple[str, ...] = (),
+    subagents: tuple[str, ...] = (),
 ) -> CapabilityManifest:
     return CapabilityManifest(
         id=package_id,
@@ -26,6 +27,7 @@ def _manifest(
         entrypoint=f"{package_id}:Pack",
         dependencies=dependencies or {},
         tools=tools,
+        subagents=subagents,
     )
 
 
@@ -173,3 +175,38 @@ def test_store_uses_optimistic_concurrency() -> None:
 
     with pytest.raises(CapabilityPackageConflict):
         store.save(CapabilityPackageSnapshot(), expected_revision=0)
+
+
+def test_reconcile_atomically_transfers_capability_ownership() -> None:
+    manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
+    manager.install(
+        _manifest("demo.orchestration", "1.0.0", subagents=("demo.reviewer",))
+    )
+    manager.install(_manifest("demo.domain", "1.0.0"))
+
+    snapshot = manager.reconcile(
+        (
+            _manifest("demo.orchestration", "1.1.0"),
+            _manifest("demo.domain", "1.1.0", subagents=("demo.reviewer",)),
+        )
+    )
+
+    assert snapshot.revision == 3
+    assert snapshot.get("demo.orchestration").manifest.subagents == ()
+    assert snapshot.get("demo.domain").manifest.subagents == ("demo.reviewer",)
+    assert [
+        item.version for item in snapshot.get("demo.orchestration").history
+    ] == ["1.0.0"]
+    assert [item.version for item in snapshot.get("demo.domain").history] == [
+        "1.0.0"
+    ]
+
+
+def test_reconcile_rejects_same_version_content_drift() -> None:
+    manager = CapabilityPackageManager(InMemoryCapabilityPackageStore())
+    manager.install(_manifest("demo.domain", "1.0.0"))
+
+    with pytest.raises(ValueError, match="content changed without a version bump"):
+        manager.reconcile(
+            (_manifest("demo.domain", "1.0.0", tools=("demo.changed",)),)
+        )
