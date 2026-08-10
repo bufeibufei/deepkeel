@@ -8,6 +8,11 @@
 - Add a replaceable semantic context-checkpoint builder that is verified
   against deterministic source ranges, fingerprints, subjects, and fact
   references before it can enrich L2 working context.
+- Route adaptive model steps against provider health, context capacity,
+  modality, native-tool support, latency, cost and remaining budget while
+  preserving strict user-selected single-model semantics.
+- Split model-node execution and RuntimeResult projection into typed phases,
+  and move trace/diagnostic projection behind independently ratcheted modules.
 - Isolate runtime events, leases, tool/model idempotency, checkpoints and
   operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
   migration and cross-tenant contract tests.

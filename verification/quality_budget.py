@@ -33,6 +33,8 @@ CRITICAL_COVERAGE = {
 CRITICAL_COMPLEXITY_FILES = tuple(CRITICAL_COVERAGE) + (
     "src/deepkeel/runtime_results.py",
     "src/deepkeel/runtime_diagnostics.py",
+    "src/deepkeel/graph_model_node.py",
+    "src/deepkeel/graph_model_execution.py",
 )
 MAX_CYCLOMATIC_COMPLEXITY = 25
 MAX_FUNCTION_LINES = 180
