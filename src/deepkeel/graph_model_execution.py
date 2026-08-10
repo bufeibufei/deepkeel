@@ -47,6 +47,7 @@ from deepkeel.graph_workflow import (
 from deepkeel.hooks import HookAction, HookPoint
 from deepkeel.model import ModelGateway, ModelTurn, model_tools_from_registry
 from deepkeel.model_failures import ModelToolContractError
+from deepkeel.planning.runtime import complete_plan_for_answer
 from deepkeel.skill_activation import EntryToolActivationRequest
 from deepkeel.skills import SkillPolicy
 from deepkeel.tool_disclosure import ToolView, resolve_tool_view
@@ -159,9 +160,7 @@ class ModelNodeExecution:
             mode=self.turn_context.tool_view_mode if self.turn_context else "legacy",
             discovered_names={
                 str(name)
-                for name in as_dict(self.current.get("metadata")).get(
-                    "discovered_tool_names", []
-                )
+                for name in as_dict(self.current.get("metadata")).get("discovered_tool_names", [])
                 if str(name).strip()
             },
         )
@@ -169,9 +168,7 @@ class ModelNodeExecution:
         self.tools = model_tools_from_registry(
             self.tool_registry,
             allowed_names=set(self.tool_view.exposed_names),
-            parameter_overrides=_skill_tool_parameter_overrides(
-                self.current, self.tool_registry
-            ),
+            parameter_overrides=_skill_tool_parameter_overrides(self.current, self.tool_registry),
         )
         self.forced_tool_name = _forced_workflow_tool_name(self.current, self.tools)
 
@@ -351,8 +348,7 @@ class ModelNodeExecution:
                 {
                     "tool_name": self.forced_tool_name,
                     "recovery": str(
-                        as_dict(recovered.raw).get("recovery")
-                        or "forced_tool_clarification"
+                        as_dict(recovered.raw).get("recovery") or "forced_tool_clarification"
                     ),
                     "visible": False,
                 },
@@ -417,9 +413,7 @@ class ModelNodeExecution:
         telemetry: _InvocationTelemetry,
         exc: Exception,
     ) -> None:
-        self.current["budget_state"] = self.ledger.snapshot(
-            self._operational_run_id()
-        ).as_dict()
+        self.current["budget_state"] = self.ledger.snapshot(self._operational_run_id()).as_dict()
         payload = telemetry.route_payload
         if payload.get("budget_metrics"):
             _emit(
@@ -481,16 +475,12 @@ class ModelNodeExecution:
         turn: ModelTurn,
         telemetry: _InvocationTelemetry,
     ) -> tuple[dict[str, Any], list[ToolCall]]:
-        self.current["budget_state"] = self.ledger.snapshot(
-            self._operational_run_id()
-        ).as_dict()
+        self.current["budget_state"] = self.ledger.snapshot(self._operational_run_id()).as_dict()
         metrics = build_model_metrics(
             turn,
             telemetry.route_payload,
             latency_ms=int((time.perf_counter() - telemetry.started_at) * 1000),
-            first_token_latency_ms=_latency_ms(
-                telemetry.started_at, telemetry.first_delta_at
-            ),
+            first_token_latency_ms=_latency_ms(telemetry.started_at, telemetry.first_delta_at),
             delta_count=telemetry.delta_index,
             delta_chars=telemetry.delta_chars,
             forced_tool_name=self.forced_tool_name,
@@ -536,9 +526,7 @@ class ModelNodeExecution:
         names = [call.name for call in rejected]
         self.current.setdefault("metadata", {}).setdefault(
             "rejected_undisclosed_tool_calls", []
-        ).append(
-            {"step_index": int(self.current["step_count"]), "tool_names": names}
-        )
+        ).append({"step_index": int(self.current["step_count"]), "tool_names": names})
         _emit(
             self.current,
             self.config,
@@ -709,12 +697,21 @@ class ModelNodeExecution:
             return _repair_or_fail_workflow(self.current, skill, completion, self.config)
         if skill.active and skill.durable:
             _set_policy_state(self.current, phase="completed", decision=completion)
-        content = _complete_continued_answer(
-            self.current.setdefault("metadata", {}), turn.content
-        )
+        content = _complete_continued_answer(self.current.setdefault("metadata", {}), turn.content)
         content, terminal = await self._before_answer_hook(turn, content)
         if terminal is not None:
             return terminal
+        complete_plan_for_answer(
+            self.current,
+            emit=lambda event_type, title, summary, payload: _emit(
+                self.current,
+                self.config,
+                event_type,
+                title,
+                summary,
+                payload,
+            ),
+        )
         answer = FinalAnswer(
             markdown=content,
             summary=_answer_summary(content),

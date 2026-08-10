@@ -21,6 +21,13 @@ my_capability/
 `CapabilityPackSpec` with `capability_pack_spec_from_manifest`; duplicating
 tool or Skill declarations in Python is not supported.
 
+Skills may declare a `planning_policy` when their work benefits from several
+dependent capabilities. The supported modes are `disabled`, `allowed`,
+`preferred`, and `required`, with bounded `max_steps`, `max_revisions`,
+`max_parallel_steps`, and `max_attempts_per_step`. Planning never expands the
+Skill allowlist: every plan step must still reference a tool already available
+to the active Skill.
+
 The manifest must declare:
 
 - package identity, semantic version, Core contract, and entrypoint;

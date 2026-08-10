@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add optional bounded Plan & Execute orchestration inside the canonical ReAct
+  graph, including validated DAGs, safe parallel reads, serialized side effects,
+  bounded revisions, typed progress events, and portable interruption recovery.
+
 ## 4.1.0rc1 - 2026-08-10
 
 - Project each uninterrupted run segment as one hierarchical OpenTelemetry

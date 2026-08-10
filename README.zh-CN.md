@@ -180,6 +180,13 @@ Skill 约束任务上下文、允许工具、预算和输出方式，但工具�
 策略和预算选择 Provider。模型 Provider、路由策略和健康存储均通过公开端口注入，
 Capability Pack 不绑定具体云厂商。
 
+复杂任务可选择启用同一 ReAct 图内的有界 Plan & Execute。Host 通过
+`RuntimePorts(planning_enabled=True)` 安装内部计划控制工具，Skill 再使用
+`planning_policy` 声明 `disabled`、`allowed`、`preferred` 或 `required`。
+简单对话仍直接执行；复杂计划中的工具、Workflow 与 SubAgent 仍经过原有权限、
+预算、幂等、Checkpoint 和事件边界，不会形成第二套运行时。详细契约见
+[执行计划](docs/execution-planning.md)。
+
 ## 上下文与记忆
 
 Core 提供 L1/L2/L3 上下文规划、token 预算、原子消息组保护、确定性压缩和工作
@@ -244,7 +251,7 @@ Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生
 - `deepkeel.extension_sdk`：工具、Skill、Artifact 和 Capability Pack。
 - `deepkeel.adapter_sdk`：模型、存储、策略、预算、租约和生产门禁。
 - `deepkeel.memory_sdk`：记忆端口与主题契约。
-- `deepkeel.orchestration_sdk`：有界 SubAgent 编排。
+- `deepkeel.orchestration_sdk`：有界执行计划、SubAgent 与多方论证编排。
 - `deepkeel.mcp_sdk`：MCP Client、传输和工具映射。
 
 当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.1.0rc1`。

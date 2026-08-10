@@ -32,6 +32,7 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Capability Packages](docs/capability-package-v1.md)
 - [Context management](docs/context-management.md)
 - [Durable execution](docs/durable-execution.md)
+- [Execution planning](docs/execution-planning.md)
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
@@ -177,6 +178,38 @@ async for event in runtime.astream(request, provider=provider):
     if event.event_type == "answer.delta":
         publish(event.payload["delta"])
 ```
+
+Multi-step planning is an opt-in execution capability inside the same ReAct
+graph, not a second agent runtime. Enable the control tool at composition time,
+then let each Skill choose whether planning is disabled, allowed, preferred, or
+required. Valid plans are bounded DAGs whose executable steps still pass through
+the normal tool registry, Skill scope, policy, budget, idempotency, checkpoint,
+and event boundaries.
+
+```python
+from deepkeel.adapter_sdk import RuntimePorts
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder
+
+runtime = (
+    HarnessRuntimeBuilder()
+    .with_ports(RuntimePorts(planning_enabled=True))
+    .build()
+)
+
+skill_activation = {
+    "skill_id": "evidence-consultation",
+    "planning_policy": {
+        "mode": "preferred",
+        "max_steps": 6,
+        "max_parallel_steps": 3,
+    },
+}
+```
+
+Simple turns remain direct ReAct turns. Planning only changes how ready work is
+scheduled; tools, workflows and delegated SubAgents remain ordinary governed
+capabilities. See [Execution planning](docs/execution-planning.md) for plan,
+resume, revision and event contracts.
 
 Thread-safe synchronous persistence adapters can be exposed to async Host
 control paths through the opt-in bridges in `deepkeel.adapter_sdk`.

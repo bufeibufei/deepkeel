@@ -32,13 +32,9 @@ def _require_supported_version(
 ) -> None:
     version = str(value.get("schema_version") or "").strip()
     if value and not version:
-        raise CheckpointCompatibilityError(
-            f"missing {contract_name} schema version"
-        )
+        raise CheckpointCompatibilityError(f"missing {contract_name} schema version")
     if version and version not in supported:
-        raise CheckpointCompatibilityError(
-            f"unsupported {contract_name} schema version: {version}"
-        )
+        raise CheckpointCompatibilityError(f"unsupported {contract_name} schema version: {version}")
 
 
 class DurableCheckpointStore(Protocol):
@@ -149,9 +145,7 @@ class InMemoryDurableCheckpointStore:
         del session
         with self._lock:
             run_ids = sorted(
-                run_id
-                for stored_user_id, run_id in self._states
-                if stored_user_id == user_id
+                run_id for stored_user_id, run_id in self._states if stored_user_id == user_id
             )
         return tuple(run_ids[: max(0, int(limit))])
 
@@ -320,9 +314,21 @@ def restore_run_context(
         raise CheckpointCompatibilityError(
             f"checkpoint run_id mismatch: expected {run_id}, found {checkpoint_run_id}"
         )
-    messages = [AgentMessage.model_validate(item) for item in checkpoint.get("messages", []) if isinstance(item, dict)]
-    observations = [Observation.model_validate(item) for item in checkpoint.get("observations", []) if isinstance(item, dict)]
-    artifacts = [Artifact.model_validate(item) for item in checkpoint.get("artifacts", []) if isinstance(item, dict)]
+    messages = [
+        AgentMessage.model_validate(item)
+        for item in checkpoint.get("messages", [])
+        if isinstance(item, dict)
+    ]
+    observations = [
+        Observation.model_validate(item)
+        for item in checkpoint.get("observations", [])
+        if isinstance(item, dict)
+    ]
+    artifacts = [
+        Artifact.model_validate(item)
+        for item in checkpoint.get("artifacts", [])
+        if isinstance(item, dict)
+    ]
     pending_action = as_dict(checkpoint.get("pending_action"))
     pending_async = as_dict(checkpoint.get("pending_async"))
     pending = pending_action or pending_async
@@ -342,7 +348,9 @@ def restore_run_context(
                     "run_id": run_id,
                     "tool_call_id": call.id,
                     "tool_name": call.name,
-                    "policy_id": str(as_dict(payload.get("policy_decision")).get("policy_id") or ""),
+                    "policy_id": str(
+                        as_dict(payload.get("policy_decision")).get("policy_id") or ""
+                    ),
                 },
             },
         }
@@ -355,6 +363,7 @@ def restore_run_context(
             messages=messages,
             observations=observations,
             pending_tool_calls=[call],
+            execution_plan=as_dict(checkpoint.get("execution_plan")) or None,
             artifacts=artifacts,
             skill_activation=skill_activation or {},
             model_policy=model_policy or {},
@@ -362,7 +371,9 @@ def restore_run_context(
             metadata=metadata,
             step_count=int(checkpoint.get("step_count") or 0),
         )
-    tool_call_id = str(pending.get("tool_call_id") or resume_payload.get("tool_call_id") or "resume")
+    tool_call_id = str(
+        pending.get("tool_call_id") or resume_payload.get("tool_call_id") or "resume"
+    )
     source = str(
         pending.get("tool_name")
         or pending.get("action_type")
@@ -381,7 +392,9 @@ def restore_run_context(
         run_id=run_id,
         tool_call_id=tool_call_id,
         source=source,
-        status="failed" if str(resume_payload.get("status") or "").lower() == "failed" else "succeeded",
+        status="failed"
+        if str(resume_payload.get("status") or "").lower() == "failed"
+        else "succeeded",
         summary=summary,
         data=data,
         error=str(resume_payload.get("error") or ""),
@@ -449,6 +462,7 @@ def restore_run_context(
         status=RunStatus.REASONING,
         messages=messages,
         observations=observations,
+        execution_plan=as_dict(checkpoint.get("execution_plan")) or None,
         artifacts=artifacts,
         skill_activation=restored_skill,
         model_policy=model_policy or {},
@@ -490,10 +504,15 @@ def _confirmed_policy_tool_call(
     payload = as_dict(pending_action.get("payload"))
     data = as_dict(resume_payload.get("data"))
     status = str(resume_payload.get("status") or "").lower()
-    confirmed = data.get("confirmed") is True or resume_payload.get("confirmed") is True or status in {
-        "confirmed",
-        "approved",
-    }
+    confirmed = (
+        data.get("confirmed") is True
+        or resume_payload.get("confirmed") is True
+        or status
+        in {
+            "confirmed",
+            "approved",
+        }
+    )
     return (
         confirmed
         and (

@@ -77,13 +77,13 @@ class HarnessGraph:
     ) -> HarnessGraphState:
         keys = self._bind_turn_context(turn_context, context.run_id, context.thread_id)
         try:
-            return validate_graph_state(self.compiled_graph.invoke(
-                _state_from_context(context),
-                config=_graph_config(
-                    context.thread_id, tool_context, event_sink, turn_context
-                ),
-                durability=self.durability,
-            ))
+            return validate_graph_state(
+                self.compiled_graph.invoke(
+                    _state_from_context(context),
+                    config=_graph_config(context.thread_id, tool_context, event_sink, turn_context),
+                    durability=self.durability,
+                )
+            )
         finally:
             self._release_turn_context(turn_context, keys)
 
@@ -98,11 +98,14 @@ class HarnessGraph:
     ) -> HarnessGraphState:
         keys = self._bind_turn_context(turn_context, thread_id)
         try:
-            return migrate_legacy_graph_state(self.compiled_graph.invoke(
-                Command(resume=resume_payload),
-                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
-                durability=self.durability,
-            ), thread_id=thread_id)
+            return migrate_legacy_graph_state(
+                self.compiled_graph.invoke(
+                    Command(resume=resume_payload),
+                    config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                    durability=self.durability,
+                ),
+                thread_id=thread_id,
+            )
         finally:
             self._release_turn_context(turn_context, keys)
 
@@ -117,11 +120,14 @@ class HarnessGraph:
         """Continue an interrupted super-step from its durable checkpoint."""
         keys = self._bind_turn_context(turn_context, thread_id)
         try:
-            return migrate_legacy_graph_state(self.compiled_graph.invoke(
-                None,
-                config=_graph_config(thread_id, tool_context, event_sink, turn_context),
-                durability=self.durability,
-            ), thread_id=thread_id)
+            return migrate_legacy_graph_state(
+                self.compiled_graph.invoke(
+                    None,
+                    config=_graph_config(thread_id, tool_context, event_sink, turn_context),
+                    durability=self.durability,
+                ),
+                thread_id=thread_id,
+            )
         finally:
             self._release_turn_context(turn_context, keys)
 
@@ -145,9 +151,7 @@ class HarnessGraph:
         try:
             state = await self.compiled_graph.ainvoke(
                 _state_from_context(context),
-                config=_graph_config(
-                    context.thread_id, tool_context, event_sink, turn_context
-                ),
+                config=_graph_config(context.thread_id, tool_context, event_sink, turn_context),
                 durability=self.durability,
             )
             return validate_graph_state(state)
@@ -285,6 +289,7 @@ def create_harness_graph(
         "tools",
         _route_after_tools,
         {
+            "tools": "tools",
             "model": "model",
             "await_user": "await_user",
             "await_async": "await_async",
@@ -295,7 +300,11 @@ def create_harness_graph(
         _route_after_user_resume,
         {"tools": "tools", "model": "model"},
     )
-    graph.add_edge("await_async", "model")
+    graph.add_conditional_edges(
+        "await_async",
+        _route_after_user_resume,
+        {"tools": "tools", "model": "model"},
+    )
     return HarnessGraph(
         compiled_graph=graph.compile(checkpointer=checkpointer),
         supports_async_checkpointer=supports_async_checkpointer,

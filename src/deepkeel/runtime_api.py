@@ -190,6 +190,7 @@ class RuntimeResult(BaseModel):
     observations: list[Observation] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None
+    execution_plan: dict[str, Any] | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
     artifact_views: list[ArtifactView] = Field(default_factory=list)
     events: list[RuntimeStreamEvent] = Field(default_factory=list)

@@ -10,6 +10,13 @@ and emits replayable lifecycle events. Resume uses the persisted run snapshot,
 pending action and observations; it does not reconstruct progress from assistant
 prose.
 
+When execution planning is enabled, the model may create a bounded DAG through
+the internal `runtime.create_plan` control tool. The plan is part of graph state
+and the portable runtime checkpoint. Ready read-only steps may execute in a
+bounded parallel batch; side-effecting, suspending, and unsafe steps execute
+serially. User-action and asynchronous interruptions resume the same plan step,
+including when a different worker restores the portable checkpoint.
+
 Hosts are responsible for durable implementations of state, checkpoints,
 idempotency, model invocation settlement and event delivery. Reference
 `InMemory*` adapters exist only for tests and single-process embedding.

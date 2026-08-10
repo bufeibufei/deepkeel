@@ -12,6 +12,7 @@ from deepkeel.persistence import (
     restore_run_context,
     resume_payload_from_context,
 )
+from deepkeel.planning.runtime import advance_plan_after_resume
 from deepkeel.runtime_results import (
     _new_context,
     _skill_precondition_tool_calls,
@@ -146,6 +147,27 @@ async def execute_graph_turn(
                 model_policy=model_policy,
                 migrations=state_migrations,
             )
+            recovered_state = recovered.model_dump(mode="json")
+            pending = (
+                recovered_checkpoint.get("pending_action")
+                or recovered_checkpoint.get("pending_async")
+                or {}
+            )
+            advance_plan_after_resume(
+                recovered_state,
+                pending=pending if isinstance(pending, dict) else {},
+                resume_payload=resume_payload,
+                registry=tool_registry,
+                emit=lambda event_type, title, summary, payload: emit(
+                    {
+                        "event_type": event_type,
+                        "title": title,
+                        "summary": summary,
+                        "payload": payload,
+                    }
+                ),
+            )
+            recovered = type(recovered).model_validate(recovered_state)
             if not any(message.role == "user" for message in recovered.messages):
                 recovered.messages = [
                     *build_initial_messages(

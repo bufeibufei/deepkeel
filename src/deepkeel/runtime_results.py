@@ -74,6 +74,7 @@ class _ProjectionEnvelope:
     context_snapshot: dict[str, Any]
     active_task: RuntimeActiveTask | None
 
+
 def project_harness_result(
     state: dict[str, Any],
     *,
@@ -230,11 +231,7 @@ def _build_projection_envelope(
         or context_bundle.get("thread_id")
         or "unbound-thread"
     )
-    turn_id = str(
-        state.get("turn_id")
-        or context_bundle.get("turn_id")
-        or "unbound-turn"
-    )
+    turn_id = str(state.get("turn_id") or context_bundle.get("turn_id") or "unbound-turn")
     checkpoint: dict[str, Any] = {
         "schema_version": "harness-checkpoint-v2",
         "run_id": run_id,
@@ -245,6 +242,7 @@ def _build_projection_envelope(
         "artifacts": [item for item in state.get("artifacts", []) if isinstance(item, dict)],
         "pending_action": inputs.checkpoint_pending_action,
         "pending_async": inputs.checkpoint_pending_async,
+        "execution_plan": as_optional_dict(state.get("execution_plan")),
         "pending_tool_calls": [
             item for item in state.get("pending_tool_calls", []) if isinstance(item, dict)
         ],
@@ -262,13 +260,14 @@ def _build_projection_envelope(
         "core_contract_version": DEEPKEEL_CONTRACT_VERSION,
         "core_version": DEEPKEEL_VERSION,
         "loop_engine": "langgraph_native_tools",
-        "mode": "react_loop",
+        "mode": "plan_execute" if checkpoint["execution_plan"] else "react_loop",
         "status": inputs.runtime_status,
         "stop_reason": inputs.stop_reason,
         "step_count": int(state.get("step_count") or 0),
         "observations": inputs.projected_observations,
         "artifacts": checkpoint["artifacts"],
         "pending_action": inputs.pending_action,
+        "execution_plan": checkpoint["execution_plan"],
         "checkpoint": checkpoint,
         "trace": trace,
         "answer_delta_streamed": answer_delta_streamed,
@@ -337,20 +336,13 @@ def _assemble_runtime_result(
             "category": str(state_error.get("category") or "internal"),
             "retryable": bool(state_error.get("retryable")),
             "message": str(
-                state_error.get("user_message")
-                or "The run ended safely and can be retried."
+                state_error.get("user_message") or "The run ended safely and can be retried."
             ),
         }
     answer_fields = set(FinalAnswer.model_fields)
-    answer_metadata = (
-        as_dict(final_answer.get("metadata"))
-    )
+    answer_metadata = as_dict(final_answer.get("metadata"))
     answer_metadata.update(
-        {
-            key: value
-            for key, value in final_answer.items()
-            if key not in answer_fields
-        }
+        {key: value for key, value in final_answer.items() if key not in answer_fields}
     )
     answer_values = {
         key: value
@@ -382,29 +374,22 @@ def _assemble_runtime_result(
             "failed": RunStatus.FAILED,
             "canceled": RunStatus.CANCELED,
         }.get(inputs.graph_status, RunStatus.REASONING),
-        messages=[
-            AgentMessage.model_validate(item) for item in checkpoint["messages"]
-        ],
-        observations=[
-            Observation.model_validate(item) for item in inputs.checkpoint_observations
-        ],
+        messages=[AgentMessage.model_validate(item) for item in checkpoint["messages"]],
+        observations=[Observation.model_validate(item) for item in inputs.checkpoint_observations],
         pending_tool_calls=[
             ToolCall.model_validate(item) for item in checkpoint["pending_tool_calls"]
         ],
         pending_action=typed_pending_action,
         pending_async=inputs.checkpoint_pending_async,
-        artifacts=[
-            Artifact.model_validate(item) for item in checkpoint["artifacts"]
-        ],
+        execution_plan=checkpoint["execution_plan"],
+        artifacts=[Artifact.model_validate(item) for item in checkpoint["artifacts"]],
         skill_activation=inputs.skill,
         model_policy=as_dict(state.get("model_policy")),
         budget_state=dict(checkpoint["budget_state"]),
         metadata=dict(checkpoint["metadata"]),
         step_count=int(checkpoint["step_count"]),
     )
-    typed_artifacts = [
-        Artifact.model_validate(item) for item in checkpoint["artifacts"]
-    ]
+    typed_artifacts = [Artifact.model_validate(item) for item in checkpoint["artifacts"]]
     output_contract = as_dict(inputs.skill.get("output_contract"))
     artifact_presentation = output_contract.get("artifact_presentation")
     artifact_views = project_artifact_views(
@@ -427,11 +412,10 @@ def _assemble_runtime_result(
         step_count=int(runtime["step_count"]),
         final_answer=FinalAnswer(**answer_values, metadata=answer_metadata),
         run_context=typed_run_context,
-        observations=[
-            Observation.model_validate(item) for item in inputs.checkpoint_observations
-        ],
+        observations=[Observation.model_validate(item) for item in inputs.checkpoint_observations],
         tool_results=[ToolResult.model_validate(item) for item in inputs.typed_tool_results],
         pending_action=typed_pending_action,
+        execution_plan=checkpoint["execution_plan"],
         artifacts=typed_artifacts,
         artifact_views=artifact_views,
         events=[RuntimeStreamEvent.model_validate(item) for item in streamed_events],
@@ -490,7 +474,9 @@ def _failed_runtime_state(
                 else RunStatus.FAILED.value
             ),
             "step_count": sum(
-                1 for event in events if event.get("event_type") in {"model.completed", "model.failed"}
+                1
+                for event in events
+                if event.get("event_type") in {"model.completed", "model.failed"}
             ),
             "tool_results": [],
             "pending_tool_calls": [],
@@ -501,9 +487,7 @@ def _failed_runtime_state(
                 "markdown": failure.user_message,
                 "status": "canceled" if failure.category == "canceled" else "failed",
                 "stop_reason": (
-                    "user_cancelled"
-                    if failure.category == "canceled"
-                    else failure.code.lower()
+                    "user_cancelled" if failure.category == "canceled" else failure.code.lower()
                 ),
                 "metadata": {
                     "error_code": failure.code,
@@ -664,11 +648,19 @@ def _project_final_answer(
         answer.setdefault("answer_mode", "bubble")
         return answer
     latest_summary = next(
-        (str(item.get("summary") or "") for item in reversed(tool_results) if str(item.get("summary") or "").strip()),
+        (
+            str(item.get("summary") or "")
+            for item in reversed(tool_results)
+            if str(item.get("summary") or "").strip()
+        ),
         "",
     )
     if runtime_status in {"waiting_user_action", "waiting_user_input"}:
-        summary = str((pending_action or {}).get("prompt") or latest_summary or "Complete the required action and the agent will continue.")
+        summary = str(
+            (pending_action or {}).get("prompt")
+            or latest_summary
+            or "Complete the required action and the agent will continue."
+        )
         return {
             "answer_mode": "tool_handoff",
             "summary": summary,
@@ -676,7 +668,10 @@ def _project_final_answer(
             "pending_action": pending_action or {},
         }
     if runtime_status == "task_running":
-        summary = latest_summary or "The asynchronous task has started; the agent will continue when it finishes."
+        summary = (
+            latest_summary
+            or "The asynchronous task has started; the agent will continue when it finishes."
+        )
         return {"answer_mode": "task_running", "summary": summary, "markdown": summary}
     summary = "The run did not produce a usable answer."
     return {"answer_mode": "bubble", "summary": summary, "markdown": summary, "status": "failed"}
@@ -695,9 +690,7 @@ def _active_task(
         artifact = next((value for value in artifacts if isinstance(value, dict)), {})
         artifact_data = as_dict(artifact.get("data"))
         artifact_type = str(
-            artifact.get("artifact_type")
-            or artifact_data.get("artifact_type")
-            or ""
+            artifact.get("artifact_type") or artifact_data.get("artifact_type") or ""
         )
         return {
             "kind": task_kinds.get(tool_name) or "task",
@@ -713,4 +706,3 @@ def _active_task(
             "summary": str(item.get("summary") or ""),
         }
     return {}
-

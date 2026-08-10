@@ -11,7 +11,7 @@ Host application
   -> RuntimeRequest + RuntimePorts
   -> DeepKeel HarnessRuntime
        -> context planning and model routing
-       -> governed model/tool loop
+       -> governed model/tool loop with optional bounded execution plans
        -> interruption, resume and settlement
        -> typed events, artifacts and diagnostics
   -> RuntimeResult
@@ -33,7 +33,7 @@ Each public symbol has exactly one owner:
 - `adapter_sdk`: Host infrastructure ports, conformance suites, and composition;
 - `memory_sdk`: product-neutral memory records and memory ports;
 - `mcp_sdk`: governed MCP server and transport integration;
-- `orchestration_sdk`: bounded SubAgent and deliberation contracts.
+- `orchestration_sdk`: bounded execution-plan, SubAgent, and deliberation contracts.
 
 `RuntimePorts` remains a flat compatibility contract, while infrastructure
 authors can compose it from four cohesive bundles:

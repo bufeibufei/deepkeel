@@ -123,6 +123,7 @@ class RuntimePortChanges(TypedDict, total=False):
     hook_runner: HookRunner | None
     tool_discovery_port: ToolDiscoveryPort | None
     entry_tool_skill_activator: EntryToolSkillActivator | None
+    planning_enabled: bool
     capability_services: Mapping[str, object]
 
 
@@ -162,6 +163,7 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     hook_runner: HookRunner | None
     tool_discovery_port: ToolDiscoveryPort | None
     entry_tool_skill_activator: EntryToolSkillActivator | None
+    planning_enabled: bool
     capability_services: Mapping[str, object]
 
 
@@ -225,6 +227,7 @@ class RuntimeExecutionPorts:
     hook_runner: HookRunner | None = None
     tool_discovery_port: ToolDiscoveryPort | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
+    planning_enabled: bool = False
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
 
@@ -270,6 +273,7 @@ class RuntimePorts:
     hook_runner: HookRunner | None = None
     tool_discovery_port: ToolDiscoveryPort | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
+    planning_enabled: bool = False
     capability_services: Mapping[str, object] = field(default_factory=dict)
 
     @classmethod
@@ -289,12 +293,7 @@ class RuntimePorts:
         for bundle in (persistence, governance, observability, execution):
             if bundle is None:
                 continue
-            values.update(
-                {
-                    item.name: getattr(bundle, item.name)
-                    for item in fields(bundle)
-                }
-            )
+            values.update({item.name: getattr(bundle, item.name) for item in fields(bundle)})
         values.update(overrides)
         # Dataclass field discovery validates the keys above; the cast preserves
         # precise field types at the public constructor boundary for static tools.
@@ -444,19 +443,14 @@ class HarnessRuntimeBuilder:
         )
         if executor.registry is not self._registry:
             raise ValueError("ToolExecutor registry changed during runtime composition")
-        contributions = [
-            self._install_pack(pack, executor) for pack in self._capability_packs
-        ]
+        contributions = [self._install_pack(pack, executor) for pack in self._capability_packs]
         self._installed_contributions = tuple(contributions)
         hook_runner = self._ports.hook_runner or HookRunner()
         for hook in self._capability_catalog.hooks.values():
             if hook.id not in hook_runner.registered_hooks:
                 hook_runner.register(hook)
         executor.configure_artifact_schemas(
-            {
-                name: spec.schema
-                for name, spec in self._capability_catalog.artifact_types.items()
-            }
+            {name: spec.schema for name, spec in self._capability_catalog.artifact_types.items()}
         )
         composed_generation = RuntimeGenerationManager().activate(
             tuple(self._capability_manifests.values()),
@@ -510,6 +504,7 @@ class HarnessRuntimeBuilder:
             tool_discovery_port=self._ports.tool_discovery_port,
             entry_tool_skill_activator=self._ports.entry_tool_skill_activator,
             runtime_generation=runtime_generation,
+            planning_enabled=self._ports.planning_enabled,
         )
 
     def _install_pack(
@@ -568,13 +563,9 @@ class HarnessRuntimeBuilder:
             package_id=spec.package_id,
             tools=installed_tools or spec.declared_tools,
             skills=_catalog_delta(catalog_before, catalog_after, "skills"),
-            artifact_types=_catalog_delta(
-                catalog_before, catalog_after, "artifact_types"
-            ),
+            artifact_types=_catalog_delta(catalog_before, catalog_after, "artifact_types"),
             handoffs=_catalog_delta(catalog_before, catalog_after, "handoffs"),
-            tool_providers=_catalog_delta(
-                catalog_before, catalog_after, "tool_providers"
-            ),
+            tool_providers=_catalog_delta(catalog_before, catalog_after, "tool_providers"),
             subagents=_catalog_delta(catalog_before, catalog_after, "subagents"),
             hooks=_catalog_delta(catalog_before, catalog_after, "hooks"),
             context_contributors=_catalog_delta(
@@ -619,9 +610,7 @@ class HarnessRuntimeBuilder:
                 for scope in runtime_policy.get("required_scopes") or ()
                 if str(scope).strip()
             )
-            runtime_policy["required_scopes"] = list(
-                dict.fromkeys((*existing, *scopes))
-            )
+            runtime_policy["required_scopes"] = list(dict.fromkeys((*existing, *scopes)))
             self._registry.register(
                 tool.model_copy(update={"runtime_policy": runtime_policy}),
                 replace=True,
@@ -694,8 +683,7 @@ def _validate_pack_manifest(
 ) -> None:
     if manifest.id != spec.package_id:
         raise ValueError(
-            f"capability manifest id {manifest.id!r} does not match "
-            f"package id {spec.package_id!r}"
+            f"capability manifest id {manifest.id!r} does not match package id {spec.package_id!r}"
         )
     comparisons = {
         "tools": (set(spec.declared_tools), set(manifest.tools)),
@@ -714,9 +702,7 @@ def _validate_pack_manifest(
         "resources": (set(spec.declared_resources), set(manifest.resources)),
     }
     mismatches = [
-        name
-        for name, (declared, manifested) in comparisons.items()
-        if declared != manifested
+        name for name, (declared, manifested) in comparisons.items() if declared != manifested
     ]
     if mismatches:
         raise ValueError(

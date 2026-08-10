@@ -276,6 +276,7 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
         ("src/deepkeel/tool_executor.py", 700),
         ("src/deepkeel/graph_model_node.py", 50),
         ("src/deepkeel/graph_model_execution.py", 800),
+        ("src/deepkeel/planning/runtime.py", 450),
         ("src/deepkeel/subagents/bounded_execution.py", 75),
         ("src/deepkeel/subagents/bounded_coordinator.py", 575),
     ],

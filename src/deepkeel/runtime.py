@@ -73,6 +73,7 @@ from deepkeel.persistence import (
     CheckpointCompatibilityError,
     DurableCheckpointStore,
 )
+from deepkeel.planning.tool import execution_planning_prompt, install_execution_planning
 from deepkeel.capabilities import CapabilityCatalog, CapabilityContribution
 from deepkeel.capability_manifest import RuntimeGeneration
 from deepkeel.ports import ContextBuilder, GraphCheckpointer, SessionFactory
@@ -196,13 +197,26 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         tool_discovery_port: ToolDiscoveryPort | None = None,
         entry_tool_skill_activator: EntryToolSkillActivator | None = None,
         runtime_generation: RuntimeGeneration | None = None,
+        planning_enabled: bool = False,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
         self.checkpointer = checkpointer or LangGraphCheckpointerAdapter()
         self.checkpoint_store = checkpoint_store
         self.async_checkpoint_store = async_checkpoint_store
-        self.system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
+        base_system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
+        self.planning_enabled = bool(planning_enabled)
+        if self.planning_enabled:
+            self.system_prompt_factory = lambda skill: "\n\n".join(
+                part
+                for part in (
+                    base_system_prompt_factory(skill),
+                    execution_planning_prompt(skill),
+                )
+                if part.strip()
+            )
+        else:
+            self.system_prompt_factory = base_system_prompt_factory
         self.session_factory = session_factory
         self.max_steps = max(2, int(max_steps))
         self.model_router = model_router or AdaptiveStepModelRouter()
@@ -246,6 +260,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                 self.tool_executor,
                 discovery_port=tool_discovery_port,
             )
+        if self.planning_enabled:
+            install_execution_planning(self.tool_registry, self.tool_executor)
         self._compiled_graph: HarnessGraph | None = None
         self._graph_compile_count = 0
         self._graph_compile_lock = Lock()

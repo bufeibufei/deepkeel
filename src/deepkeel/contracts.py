@@ -182,20 +182,11 @@ class ToolResult(ContractModel):
             raise ValueError("tool_call_id is required")
         if not self.name:
             raise ValueError("name is required")
-        correlated = [
-            item
-            for item in (self.observation, self.pending_action)
-            if item is not None
-        ]
+        correlated = [item for item in (self.observation, self.pending_action) if item is not None]
         for item in correlated:
             if item.tool_call_id and item.tool_call_id != self.tool_call_id:
-                raise ValueError(
-                    f"{type(item).__name__}.tool_call_id must match tool_call_id"
-                )
-        run_ids = {
-            item.run_id
-            for item in [*correlated, *self.artifacts]
-        }
+                raise ValueError(f"{type(item).__name__}.tool_call_id must match tool_call_id")
+        run_ids = {item.run_id for item in [*correlated, *self.artifacts]}
         if len(run_ids) > 1:
             raise ValueError("tool result projections must belong to one run")
         _require_unique_ids(self.artifacts, field_name="artifacts")
@@ -244,6 +235,7 @@ class RunContext(ContractModel):
     pending_tool_calls: list[ToolCall] = Field(default_factory=list)
     pending_action: PendingAction | None = None
     pending_async: dict[str, Any] | None = None
+    execution_plan: dict[str, Any] | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
     model_policy: dict[str, Any] = Field(default_factory=dict)
