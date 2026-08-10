@@ -18,6 +18,7 @@ from deepkeel.context_compaction import (
     ContextInputBudgetError,
     ModelInputContextResult,
     prepare_model_input_context,
+    WorkingContextCompactor,
 )
 from deepkeel.context_contracts import ModelContextProfile
 from deepkeel.context_window import ConservativeTokenEstimator
@@ -122,6 +123,7 @@ def _prepare_model_context(
     step_context: ModelStepContext,
     per_call_input_limit: float | None,
     token_estimator: ConservativeTokenEstimator,
+    context_compactor: WorkingContextCompactor | None = None,
 ) -> ModelInputContextResult:
     output_tokens = _remaining_output_tokens(
         budget_policy,
@@ -147,6 +149,7 @@ def _prepare_model_context(
             estimator=token_estimator,
             thread_id=step_context.thread_id,
             subject_id=str(step_context.governance_scope.get("subject_id") or ""),
+            compactor=context_compactor,
         )
     except ContextInputBudgetError as exc:
         limit = int(per_call_input_limit or provider_capabilities.context_window_tokens or 1)

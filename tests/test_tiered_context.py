@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from deepkeel.context import build_initial_messages
 from deepkeel.context_compaction import (
+    ContextCheckpointBuildRequest,
     DeterministicWorkingContextCompactor,
     prepare_model_input_context,
 )
@@ -38,6 +41,68 @@ def test_context_attributes_are_orthogonal_and_subjects_are_validated() -> None:
     assert item.protected is True
     assert result.valid is False
     assert result.errors == ("subject mismatch for friend_chart",)
+
+
+class _SemanticCheckpointBuilder:
+    builder_id = "semantic-test-v1"
+
+    def build(self, request: ContextCheckpointBuildRequest) -> ContextCheckpoint:
+        draft = request.deterministic_checkpoint
+        return replace(
+            draft,
+            goal="Preserve the verified long-running objective",
+            key_decisions=("Keep the selected subject unchanged",),
+        )
+
+
+class _UntraceableCheckpointBuilder:
+    builder_id = "invalid-semantic-test-v1"
+
+    def build(self, request: ContextCheckpointBuildRequest) -> ContextCheckpoint:
+        return replace(
+            request.deterministic_checkpoint,
+            source_fingerprint="invented-source",
+        )
+
+
+def test_semantic_checkpoint_builder_enriches_a_source_linked_draft() -> None:
+    messages = [
+        {"id": f"message-{index}", "role": "user", "content": "detail " * 80}
+        for index in range(6)
+    ]
+    compactor = DeterministicWorkingContextCompactor(
+        checkpoint_builder=_SemanticCheckpointBuilder()
+    )
+
+    result = compactor.compact(
+        messages,
+        token_budget=80,
+        thread_id="thread-semantic",
+        subject_id="subject-1",
+    )
+
+    assert result.checkpoint is not None
+    assert result.checkpoint.goal == "Preserve the verified long-running objective"
+    assert result.checkpoint.source_fingerprint
+    assert result.diagnostics["checkpoint_builder"] == "semantic-test-v1"
+    assert result.diagnostics["checkpoint_fallback"] is False
+
+
+def test_untraceable_semantic_checkpoint_falls_back_deterministically() -> None:
+    messages = [
+        {"id": f"message-{index}", "role": "user", "content": "detail " * 80}
+        for index in range(6)
+    ]
+    compactor = DeterministicWorkingContextCompactor(
+        checkpoint_builder=_UntraceableCheckpointBuilder()
+    )
+
+    result = compactor.compact(messages, token_budget=80, thread_id="thread-fallback")
+
+    assert result.checkpoint is not None
+    assert result.checkpoint.source_fingerprint != "invented-source"
+    assert result.diagnostics["checkpoint_fallback"] is True
+    assert result.diagnostics["checkpoint_fallback_reason"] == "ValueError"
 
 
 def test_configured_input_limit_caps_input_without_double_reserving_output() -> None:

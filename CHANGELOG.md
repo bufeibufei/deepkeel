@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Project each uninterrupted run segment as one hierarchical OpenTelemetry
+  trace, with operation child spans, lifecycle events, replay deduplication,
+  delta aggregation, and links between resumed segments.
+- Add a replaceable semantic context-checkpoint builder that is verified
+  against deterministic source ranges, fingerprints, subjects, and fact
+  references before it can enrich L2 working context.
 - Isolate runtime events, leases, tool/model idempotency, checkpoints and
   operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
   migration and cross-tenant contract tests.

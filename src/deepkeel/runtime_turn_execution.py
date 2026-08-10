@@ -245,6 +245,7 @@ class RuntimeTurnExecutionMixin(RuntimeFailureHandlingMixin):
             invocation_recorder=self.model_invocation_recorder,
             invocation_store=self.model_invocation_store,
             model_health_store=self.model_health_store,
+            context_compactor=getattr(self.context_window_manager, "compactor", None),
         )
         if self.reuse_compiled_graph:
             graph = self._shared_compiled_graph()

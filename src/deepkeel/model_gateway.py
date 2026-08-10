@@ -23,6 +23,7 @@ from deepkeel.context_window import ConservativeTokenEstimator
 from deepkeel.context_compaction import (
     ContextInputBudgetError,
     ModelInputContextResult,
+    WorkingContextCompactor,
     prepare_model_input_context,
 )
 from deepkeel.context_contracts import ModelContextProfile
@@ -121,6 +122,7 @@ class RoutedModelGateway:
         invocation_store: ModelInvocationStore | None = None,
         model_health_store: ModelHealthStore | None = None,
         request_timeout: int = 300,
+        context_compactor: WorkingContextCompactor | None = None,
     ) -> None:
         self.providers = {
             str(role): _as_provider_adapter(provider)
@@ -134,6 +136,7 @@ class RoutedModelGateway:
         self.invocation_store = invocation_store
         self.model_health_store = model_health_store or InMemoryModelHealthStore()
         self.request_timeout = request_timeout
+        self.context_compactor = context_compactor
 
     def run_turn(
         self,
@@ -339,6 +342,7 @@ class RoutedModelGateway:
                 step_context=step_context,
                 per_call_input_limit=per_call_input_limit,
                 token_estimator=token_estimator,
+                context_compactor=self.context_compactor,
             )
             provider_messages = prepared_model_context.messages
             estimated_input_tokens = token_estimator.estimate(

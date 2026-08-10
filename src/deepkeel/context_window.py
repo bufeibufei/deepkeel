@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal, Protocol
 
-from deepkeel.context_compaction import DeterministicWorkingContextCompactor
+from deepkeel.context_compaction import (
+    ContextCheckpointBuilder,
+    DeterministicWorkingContextCompactor,
+)
 from deepkeel.context_contracts import (
     ContextCheckpoint,
     ContextAuthority,
@@ -69,11 +72,15 @@ class DeterministicContextWindowManager:
         policy: ContextWindowPolicy | None = None,
         estimator: TokenEstimator | None = None,
         summary_cache: ContextSummaryCache | None = None,
+        checkpoint_builder: ContextCheckpointBuilder | None = None,
     ) -> None:
         self.policy = policy or ContextWindowPolicy()
         self.estimator = estimator or ConservativeTokenEstimator()
         self.summary_cache = summary_cache
-        self.compactor = DeterministicWorkingContextCompactor(self.estimator)
+        self.compactor = DeterministicWorkingContextCompactor(
+            self.estimator,
+            checkpoint_builder=checkpoint_builder,
+        )
 
     def prepare(
         self,

@@ -71,8 +71,11 @@ from deepkeel.context_window import (
     context_fingerprint,
 )
 from deepkeel.context_compaction import (
+    ContextCheckpointBuilder,
+    ContextCheckpointBuildRequest,
     ContextCompactionResult,
     ContextInputBudgetError,
+    DeterministicContextCheckpointBuilder,
     DeterministicWorkingContextCompactor,
     ModelInputContextResult,
     WorkingContextCompactor,
@@ -238,6 +241,8 @@ ADAPTER_SDK_API = (
     "ContextBudgetPlanner",
     "ContextBuilder",
     "ContextCheckpoint",
+    "ContextCheckpointBuilder",
+    "ContextCheckpointBuildRequest",
     "ContextCompactionResult",
     "ContextDecision",
     "ContextInputBudgetError",
@@ -259,6 +264,7 @@ ADAPTER_SDK_API = (
     "DefaultPolicyEngine",
     "DenySecretProvider",
     "DeterministicContextWindowManager",
+    "DeterministicContextCheckpointBuilder",
     "DeterministicWorkingContextCompactor",
     "ELAPSED_SECONDS",
     "EnvironmentSecretProvider",
