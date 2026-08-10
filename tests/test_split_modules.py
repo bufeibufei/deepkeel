@@ -226,6 +226,12 @@ def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> N
             "_run_bounded_agent",
             50,
         ),
+        (
+            "src/deepkeel/runtime_turn_execution.py",
+            "RuntimeTurnExecutionMixin",
+            "_arun_claimed",
+            35,
+        ),
     ],
 )
 def test_central_execution_methods_stay_within_ratcheted_size_budget(
@@ -263,7 +269,8 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
         ("src/deepkeel/subagents/batch_execution.py", 75),
         ("src/deepkeel/subagents/batch_coordinator.py", 425),
         ("src/deepkeel/context_window.py", 800),
-        ("src/deepkeel/runtime_turn_execution.py", 450),
+        ("src/deepkeel/runtime_turn_execution.py", 50),
+        ("src/deepkeel/runtime_turn_coordinator.py", 500),
         ("src/deepkeel/model_gateway.py", 400),
         ("src/deepkeel/model_turn_execution.py", 650),
         ("src/deepkeel/tool_executor.py", 700),

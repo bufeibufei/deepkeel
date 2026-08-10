@@ -137,6 +137,7 @@ from deepkeel.runtime_results import (
 from deepkeel.runtime_model_pipeline import build_runtime_model_gateway
 from deepkeel.runtime_execution_support import hook_audit_dict
 from deepkeel.runtime_turn_execution import RuntimeTurnExecutionMixin
+from deepkeel.checkpoint_authority import CheckpointAuthority
 
 
 EventSink = Callable[[dict[str, Any]], None]
@@ -657,7 +658,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         session: Any,
         user_id: str,
         scope: RuntimeScope | None = None,
-    ) -> tuple[dict[str, Any], str, list[str]]:
+    ) -> tuple[dict[str, Any], CheckpointAuthority, list[str]]:
         """Load portable state from the canonical store before compatibility fallbacks."""
 
         errors: list[str] = []
@@ -686,7 +687,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     )
                 state = snapshot.checkpoint_state
                 if isinstance(state, dict) and state:
-                    return dict(state), "runtime_state_store", errors
+                    return dict(state), CheckpointAuthority.RUNTIME_STATE_STORE, errors
             except Exception as exc:
                 errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
         if self.checkpoint_store is not None:
@@ -701,10 +702,10 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     user_id=legacy_user_id,
                 )
                 if isinstance(legacy_state, dict) and legacy_state:
-                    return dict(legacy_state), "durable_checkpoint_store", errors
+                    return dict(legacy_state), CheckpointAuthority.DURABLE_CHECKPOINT_STORE, errors
             except Exception as exc:
                 errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
-        return {}, "session_projection", errors
+        return {}, CheckpointAuthority.SESSION_PROJECTION, errors
 
     async def _aload_authoritative_checkpoint(
         self,

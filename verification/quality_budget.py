@@ -37,6 +37,7 @@ CRITICAL_COMPLEXITY_FILES = tuple(CRITICAL_COVERAGE) + (
     "src/deepkeel/graph_model_execution.py",
     "src/deepkeel/model_gateway.py",
     "src/deepkeel/model_turn_execution.py",
+    "src/deepkeel/runtime_turn_coordinator.py",
     "src/deepkeel/subagents/batch_execution.py",
     "src/deepkeel/subagents/batch_coordinator.py",
     "src/deepkeel/subagents/bounded_execution.py",
@@ -49,7 +50,6 @@ MAX_FUNCTION_LINES = 180
 FUNCTION_BUDGET_OVERRIDES = {
     "execute_model_attempt": (28, MAX_FUNCTION_LINES),
     "project_and_settle_runtime_result": (MAX_CYCLOMATIC_COMPLEXITY, 183),
-    "RuntimeTurnExecutionMixin._arun_claimed": (35, 350),
 }
 
 

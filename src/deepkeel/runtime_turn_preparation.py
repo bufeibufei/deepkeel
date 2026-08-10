@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from deepkeel.checkpoint_authority import CheckpointAuthority
 from deepkeel.persistence import CheckpointCompatibilityError
 from deepkeel.runtime_api import RuntimeRequest
 from deepkeel.runtime_execution_support import optional_int
@@ -34,7 +35,7 @@ class PreparedTurnIdentity:
     graph_thread_id: str
     turn_id: str
     durable_state: dict[str, Any]
-    checkpoint_authority: str
+    checkpoint_authority: CheckpointAuthority
     checkpoint_load_errors: list[str]
     event_sequence: int
     run_version: int
@@ -131,7 +132,7 @@ async def prepare_turn_identity(
             scope=scope,
         )
     else:
-        durable_state, authority, load_errors = {}, "none", []
+        durable_state, authority, load_errors = {}, CheckpointAuthority.NONE, []
     try:
         from deepkeel.runtime_execution_support import ensure_resume_generation_compatible
 
