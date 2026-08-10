@@ -95,3 +95,44 @@ def test_incomplete_observation_identity_does_not_downgrade_to_fast_model():
 
 def test_contract_repair_always_uses_reasoning_model():
     assert AdaptiveStepModelRouter().route(_context(policy_phase="repair")).role == "reasoning"
+
+
+def test_adaptive_router_skips_unhealthy_or_context_incompatible_roles():
+    decision = AdaptiveStepModelRouter().route(
+        _context(
+            estimated_input_tokens=12_000,
+            provider_profiles={
+                "fast": {
+                    "health": {"available": True},
+                    "capabilities": {"context_window_tokens": 8_000},
+                },
+                "reasoning": {
+                    "health": {"available": True},
+                    "capabilities": {"context_window_tokens": 32_000},
+                },
+            },
+        )
+    )
+
+    assert decision.role == "reasoning"
+    assert decision.metadata["eligible_roles"] == ["reasoning"]
+
+
+def test_adaptive_router_requires_declared_image_capability():
+    decision = AdaptiveStepModelRouter().route(
+        _context(
+            requires_image_input=True,
+            provider_profiles={
+                "fast": {
+                    "health": {"available": True},
+                    "capabilities": {"supports_image_input": False},
+                },
+                "reasoning": {
+                    "health": {"available": True},
+                    "capabilities": {"supports_image_input": True},
+                },
+            },
+        )
+    )
+
+    assert decision.role == "reasoning"

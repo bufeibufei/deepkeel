@@ -4,6 +4,7 @@ import asyncio
 import inspect
 import json
 from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Callable, Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
@@ -171,41 +172,21 @@ class RoutedModelGateway:
         step_context: ModelStepContext | None = None,
         on_route: ModelRouteSink | None = None,
     ) -> ModelTurn:
-        if step_context is None:
-            step_context = ModelStepContext(
-                run_id="local-run",
-                user_id="local-user",
-                thread_id="local-thread",
-                turn_id="local-turn",
-                step_index=0,
-                message_count=len(messages),
-                observation_count=0,
-                tool_result_count=0,
-                available_roles=tuple(self.providers),
-            )
-        else:
-            step_context = ModelStepContext(
-                run_id=step_context.run_id,
-                user_id=step_context.user_id,
-                thread_id=step_context.thread_id,
-                turn_id=step_context.turn_id,
-                step_index=step_context.step_index,
-                message_count=step_context.message_count,
-                observation_count=step_context.observation_count,
-                tool_result_count=step_context.tool_result_count,
-                available_roles=tuple(self.providers),
-                observation_sources=step_context.observation_sources,
-                tool_result_names=step_context.tool_result_names,
-                model_policy=step_context.model_policy,
-                skill_activation=step_context.skill_activation,
-                policy_phase=step_context.policy_phase,
-                forced_tool_name=step_context.forced_tool_name,
-                governance_scope=step_context.governance_scope,
-                deadline_monotonic=step_context.deadline_monotonic,
-                operational_run_id=step_context.operational_run_id,
-            )
+        step_context = _normalized_step_context(
+            step_context,
+            message_count=len(messages),
+            available_roles=tuple(self.providers),
+        )
         requires_image_input = any(
             any(part.type == "image" for part in message.content_parts) for message in messages
+        )
+        token_estimator = ConservativeTokenEstimator()
+        step_context = await self._routing_context(
+            step_context,
+            messages=messages,
+            tools=tools,
+            requires_image_input=requires_image_input,
+            token_estimator=token_estimator,
         )
         primary_route = self.router.route(step_context)
         failure_policy = _model_failure_policy(step_context.model_policy)
@@ -223,7 +204,6 @@ class RoutedModelGateway:
             if not attempts:
                 raise RuntimeError("no configured model provider declares image input support")
         previous_failure: dict[str, Any] = {}
-        token_estimator = ConservativeTokenEstimator()
         budget_policy = BudgetPolicy.from_mapping(
             step_context.model_policy.get("budget")
             if isinstance(step_context.model_policy.get("budget"), dict)
@@ -562,6 +542,72 @@ class RoutedModelGateway:
 
         raise RuntimeError("model invocation attempts exhausted")
 
+    async def _routing_context(
+        self,
+        context: ModelStepContext,
+        *,
+        messages: list[AgentMessage],
+        tools: list[dict[str, Any]],
+        requires_image_input: bool,
+        token_estimator: ConservativeTokenEstimator,
+    ) -> ModelStepContext:
+        configured_profiles = as_dict(context.model_policy.get("role_profiles"))
+        profiles: dict[str, dict[str, Any]] = {}
+        for role, provider in self.providers.items():
+            health_provider_id = _health_provider_id(provider.info.provider_id, context)
+            health = await run_sync_adapter(
+                self.model_health_store.snapshot,
+                health_provider_id,
+                provider.info.model_id,
+            )
+            configured = as_dict(configured_profiles.get(role))
+            declared_capabilities = getattr(
+                provider.info,
+                "capabilities",
+                ModelCapabilities(source="adapter_unknown"),
+            )
+            capabilities = declared_capabilities.model_dump(mode="json")
+            capabilities["supports_native_tools"] = bool(
+                getattr(provider.info, "supports_native_tools", True)
+            )
+            capabilities["supports_streaming"] = bool(
+                getattr(provider.info, "supports_streaming", True)
+            )
+            provider_metadata = as_dict(getattr(provider.info, "metadata", {}))
+            profiles[role] = {
+                "provider_id": provider.info.provider_id,
+                "model_id": provider.info.model_id,
+                "health": health.as_dict(),
+                "capabilities": capabilities,
+                "latency_tier": str(
+                    configured.get("latency_tier")
+                    or provider_metadata.get("latency_tier")
+                    or "unknown"
+                ),
+                "cost_tier": str(
+                    configured.get("cost_tier")
+                    or provider_metadata.get("cost_tier")
+                    or "unknown"
+                ),
+            }
+        budget = await run_sync_adapter(
+            self.budget_ledger.snapshot,
+            context.accounting_run_id,
+        )
+        return replace(
+            context,
+            estimated_input_tokens=token_estimator.estimate(
+                {
+                    "messages": [message.model_dump(mode="json") for message in messages],
+                    "tools": tools,
+                }
+            ),
+            requires_native_tools=bool(tools or context.forced_tool_name),
+            requires_image_input=requires_image_input,
+            provider_profiles=profiles,
+            budget_snapshot=budget.as_dict(),
+        )
+
     def _attempts(
         self,
         primary_route: ModelRouteDecision,
@@ -635,3 +681,24 @@ class RoutedModelGateway:
             )
         )
         return result
+
+
+def _normalized_step_context(
+    context: ModelStepContext | None,
+    *,
+    message_count: int,
+    available_roles: tuple[str, ...],
+) -> ModelStepContext:
+    if context is None:
+        return ModelStepContext(
+            run_id="local-run",
+            user_id="local-user",
+            thread_id="local-thread",
+            turn_id="local-turn",
+            step_index=0,
+            message_count=message_count,
+            observation_count=0,
+            tool_result_count=0,
+            available_roles=available_roles,
+        )
+    return replace(context, available_roles=available_roles)
