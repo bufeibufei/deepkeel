@@ -41,6 +41,8 @@ CRITICAL_COMPLEXITY_FILES = tuple(CRITICAL_COVERAGE) + (
     "src/deepkeel/subagents/batch_coordinator.py",
     "src/deepkeel/subagents/bounded_execution.py",
     "src/deepkeel/subagents/bounded_coordinator.py",
+    "src/deepkeel/subagents/executor.py",
+    "src/deepkeel/subagents/task_execution.py",
 )
 MAX_CYCLOMATIC_COMPLEXITY = 25
 MAX_FUNCTION_LINES = 180

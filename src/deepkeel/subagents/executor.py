@@ -1,15 +1,10 @@
 from __future__ import annotations
 
-import json
 import time
-from typing import Any, Literal
+from typing import Any
 
-from deepkeel.contracts import AgentMessage, ToolCall
-from deepkeel.deadlines import ensure_time_remaining, remaining_timeout_ceiling
 from deepkeel.failures import RunCanceledError
-from deepkeel.model import NativeChatProviderAdapter, model_tools_from_registry
 from deepkeel.model_capabilities import InMemoryModelCapabilityRegistry
-from deepkeel.model_routing import ModelStepContext
 from deepkeel.skills import DelegationPolicy
 from deepkeel.subagents.batch_execution import SubAgentBatchExecutionMixin
 from deepkeel.subagents.bounded_execution import SubAgentBoundedExecutionMixin
@@ -17,9 +12,6 @@ from deepkeel.subagents.contracts import (
     SUBAGENT_EVENT_SCHEMA_VERSION,
     DelegationRequest,
     DelegationTask,
-    SubAgentArtifactRef,
-    SubAgentContextRef,
-    SubAgentInputRequest,
     SubAgentResult,
     SubAgentSpec,
 )
@@ -27,39 +19,13 @@ from deepkeel.subagents.execution_types import (
     DelegationPreflightError,
     EventSink,
     SubAgentCanceledError,
-    SubAgentEmptyResponseError,
-    SubAgentOutputError,
     _DelegationQuota,
 )
-from deepkeel.subagents.execution_support import (
-    _child_tool_context,
-    _consume_model_budget,
-    _default_system_prompt,
-    _emit_subagent_model_retry,
-    _emit_subagent_tools,
-    _execution_checkpoint,
-    _invoke_provider,
-    _is_empty_model_response_error,
-    _minimum_optional,
-    _repair_prompt,
-    _resolve_role,
-    _restored_messages,
-    _task_prompt,
-    _valid_resume_state,
-)
-from deepkeel.subagents.output_validation import (
-    _confidence,
-    _dict_list,
-    _fallback_subagent_output,
-    _output_schema,
-    _string_list,
-    _validate_input,
-    _validated_json,
-)
+from deepkeel.subagents.output_validation import _validate_input
 from deepkeel.subagents.registry import SubAgentRegistry
 from deepkeel.subagents.store import SubAgentRunStore
+from deepkeel.subagents.task_execution import SubAgentTaskExecution
 from deepkeel.tools import ToolExecutionContext, ToolExecutor
-from deepkeel.type_narrowing import as_dict
 
 
 class SubAgentExecutor(SubAgentBatchExecutionMixin, SubAgentBoundedExecutionMixin):
@@ -135,274 +101,20 @@ class SubAgentExecutor(SubAgentBatchExecutionMixin, SubAgentBoundedExecutionMixi
         model_call_limit: float | None = None,
         quota: _DelegationQuota | None = None,
     ) -> SubAgentResult:
-        started_at = time.perf_counter()
-        try:
-            self._raise_if_canceled(
-                child_run_id,
-                parent_run_id,
-                context=context,
-                task=task,
-            )
-        except SubAgentCanceledError:
-            return SubAgentResult(
-                task_id=task.id,
-                agent_id=task.agent_id,
-                child_run_id=child_run_id,
-                status="canceled",
-                idempotency_key=task.effective_idempotency_key,
-                lineage=task.lineage,
-                error="parent agent run is terminal",
-                metadata={"late_result_discarded": True},
-            )
-        _validate_input(task.input_data, spec.input_contract)
-        role = _resolve_role(task.model_role, spec.model_role, providers)
-        provider = providers.get(role)
-        if provider is None:
-            raise RuntimeError(f"subagent model provider is unavailable for role {role}")
-        prompt = _task_prompt(task, spec)
-        system_prompt = spec.system_prompt or _default_system_prompt(spec)
-        schema = _output_schema(spec)
-        resume_state = self._load_child_checkpoint(child_run_id)
-        child_deadline_monotonic = self._task_deadline_monotonic(
-            context,
-            task,
-            spec,
-        )
-        task_quota = _DelegationQuota(
-            max_model_calls=_minimum_optional(
-                spec.max_model_calls,
-                task.budget.max_model_calls,
-            ),
-            max_tool_calls=_minimum_optional(
-                spec.max_tool_calls,
-                task.budget.max_tool_calls,
-            ),
-            model_calls=int((resume_state or {}).get("model_calls") or 0),
-            tool_calls=int((resume_state or {}).get("tool_calls") or 0),
-        )
-        effective_model_call_limit = _minimum_optional(
-            model_call_limit,
-            spec.max_model_calls,
-            task.budget.max_model_calls,
-        )
-        raw, tool_trace, model_calls, structured_output = self._run_bounded_agent(
+        return SubAgentTaskExecution(
+            self,
             task,
             spec=spec,
-            provider=provider,
             child_run_id=child_run_id,
+            providers=providers,
+            root_run_id=root_run_id,
+            parent_run_id=parent_run_id,
             context=context,
             event_sink=event_sink,
-            system_prompt=system_prompt,
-            prompt=prompt,
-            output_schema=schema,
-            root_run_id=root_run_id,
             budget_ledger=budget_ledger,
-            model_call_limit=effective_model_call_limit,
-            parent_run_id=parent_run_id,
-            resume_state=resume_state,
+            model_call_limit=model_call_limit,
             quota=quota,
-            task_quota=task_quota,
-            deadline_monotonic=child_deadline_monotonic,
-        )
-        self._raise_if_canceled(
-            child_run_id,
-            parent_run_id,
-            context=context,
-            task=task,
-        )
-        output_outcome: Literal["completed", "degraded"] = "completed"
-        output_diagnostics: dict[str, Any] = {}
-        try:
-            parsed = _validated_json(raw, schema)
-        except RuntimeError as first_error:
-            if str((resume_state or {}).get("phase") or "") == "repair_completed":
-                fallback = _fallback_subagent_output(raw)
-                if fallback is None:
-                    raise SubAgentOutputError(
-                        "subagent returned invalid JSON after schema repair",
-                        raw_text=raw,
-                        diagnostics={
-                            "repair_error": str(first_error),
-                            "tool_trace": tool_trace,
-                            "model_calls": model_calls,
-                            "recovered_from_checkpoint": True,
-                        },
-                    ) from first_error
-                parsed = fallback
-                output_outcome = "degraded"
-                output_diagnostics = {
-                    "reason_code": "structured_output_recovered_from_text",
-                    "repair_error": str(first_error),
-                    "recovered_from_checkpoint": True,
-                }
-            else:
-                self._raise_if_canceled(
-                    child_run_id,
-                    parent_run_id,
-                    context=context,
-                    task=task,
-                )
-                _consume_model_budget(
-                    budget_ledger,
-                    root_run_id=root_run_id,
-                    child_run_id=child_run_id,
-                    task=task,
-                    model_call_limit=model_call_limit,
-                    step_index=model_calls,
-                    quota=quota,
-                    task_quota=task_quota,
-                )
-                repair_prompt = _repair_prompt(prompt, raw, schema, str(first_error), tool_trace)
-                repair_invocation = _invoke_provider(
-                    provider,
-                    system_prompt,
-                    repair_prompt,
-                    timeout_seconds=remaining_timeout_ceiling(
-                        child_deadline_monotonic,
-                        maximum=self._task_timeout_seconds(task, spec),
-                    ),
-                    max_tokens=self._task_max_tokens(task, spec),
-                    output_schema=schema,
-                    capability_registry=self.model_capabilities,
-                )
-                repaired = repair_invocation.text
-                structured_output["repair"] = repair_invocation.diagnostics()
-                self._raise_if_canceled(
-                    child_run_id,
-                    parent_run_id,
-                    context=context,
-                    task=task,
-                )
-                ensure_time_remaining(child_deadline_monotonic)
-                model_calls += 1
-                self._checkpoint_child(
-                    child_run_id,
-                    phase="repair_completed",
-                    state={
-                        "schema_version": "subagent-execution-v1",
-                        "task_id": task.id,
-                        "idempotency_key": task.effective_idempotency_key,
-                        "lineage": task.lineage.model_dump(mode="json"),
-                        "spec_version": spec.version,
-                        "phase": "repair_completed",
-                        "raw_text": repaired,
-                        "tool_trace": tool_trace,
-                        "model_calls": model_calls,
-                        "tool_calls": len(tool_trace),
-                        "structured_output": structured_output,
-                    },
-                )
-                try:
-                    parsed = _validated_json(repaired, schema)
-                    raw = repaired
-                except RuntimeError as repair_error:
-                    fallback = _fallback_subagent_output(repaired or raw)
-                    if fallback is None:
-                        raise SubAgentOutputError(
-                            "subagent returned invalid JSON after schema repair",
-                            raw_text=repaired or raw,
-                            diagnostics={
-                                "initial_error": str(first_error),
-                                "repair_error": str(repair_error),
-                                "tool_trace": tool_trace,
-                                "model_calls": model_calls,
-                            },
-                        ) from repair_error
-                    parsed = fallback
-                    raw = repaired or raw
-                    output_outcome = "degraded"
-                    output_diagnostics = {
-                        "reason_code": "structured_output_recovered_from_text",
-                        "initial_error": str(first_error),
-                        "repair_error": str(repair_error),
-                    }
-        conclusion = str(parsed.get("conclusion") or parsed.get("summary") or raw).strip()
-        if str(parsed.get("status") or "") == "needs_input":
-            request_payload = parsed.get("input_request")
-            request_payload = request_payload if isinstance(request_payload, dict) else {}
-            prompt = str(request_payload.get("prompt") or conclusion).strip()
-            input_request = SubAgentInputRequest.model_validate(
-                {
-                    **request_payload,
-                    "prompt": prompt,
-                }
-            )
-            return SubAgentResult(
-                task_id=task.id,
-                agent_id=task.agent_id,
-                child_run_id=child_run_id,
-                status="needs_input",
-                outcome="needs_input",
-                conclusion=conclusion,
-                input_request=input_request,
-                context_refs=list(task.context_refs),
-                artifact_refs=list(task.artifact_refs),
-                idempotency_key=task.effective_idempotency_key,
-                lineage=task.lineage,
-                output=parsed,
-                model_role=role,
-                model_id=str(getattr(provider, "model", "") or ""),
-                duration_ms=round((time.perf_counter() - started_at) * 1000),
-                raw_text=raw,
-                metadata={
-                    "spec_version": spec.version,
-                    "model_calls": model_calls,
-                    "tool_trace": tool_trace,
-                    "structured_output": structured_output,
-                },
-            )
-        if not conclusion:
-            raise RuntimeError("subagent returned an empty conclusion")
-        artifact_refs = list(task.artifact_refs)
-        artifact_refs.extend(
-            SubAgentArtifactRef.model_validate(item)
-            for trace in tool_trace
-            for item in _dict_list(trace.get("artifact_refs"))
-        )
-        artifact_refs.extend(
-            SubAgentArtifactRef.model_validate(item)
-            for item in _dict_list(parsed.get("artifact_refs"))
-        )
-        context_refs = list(task.context_refs)
-        context_refs.extend(
-            SubAgentContextRef.model_validate(item)
-            for item in _dict_list(parsed.get("context_refs"))
-        )
-        return SubAgentResult(
-            task_id=task.id,
-            agent_id=task.agent_id,
-            child_run_id=child_run_id,
-            status="completed",
-            outcome=output_outcome,
-            conclusion=conclusion,
-            evidence=_string_list(parsed.get("evidence")),
-            evidence_refs=_dict_list(parsed.get("evidence_refs")),
-            context_refs=context_refs,
-            artifact_refs=artifact_refs,
-            risks=_string_list(parsed.get("risks")),
-            recommendations=_string_list(parsed.get("recommendations")),
-            claims=_dict_list(parsed.get("claims")),
-            warnings=_string_list(parsed.get("warnings")),
-            confidence=_confidence(parsed.get("confidence")),
-            abstained=bool(parsed.get("abstained", False)),
-            idempotency_key=task.effective_idempotency_key,
-            lineage=task.lineage,
-            output=parsed,
-            model_role=role,
-            model_id=str(getattr(provider, "model", "") or ""),
-            duration_ms=round((time.perf_counter() - started_at) * 1000),
-            raw_text=raw,
-            metadata={
-                "spec_version": spec.version,
-                "output_contract": dict(spec.output_contract),
-                "read_only": spec.read_only,
-                "tool_trace": tool_trace,
-                "model_calls": model_calls,
-                "structured_output": structured_output,
-                "output_outcome": output_outcome,
-                "output_diagnostics": output_diagnostics,
-            },
-        )
+        ).run()
 
     def _create_child_run(
         self,
