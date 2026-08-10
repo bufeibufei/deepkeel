@@ -9,10 +9,10 @@ DeepKeel 负责模型与工具的单循环执行、类型化运行契约、中�
 SubAgent 编排。它不负责产品 API、业务数据库模型、领域提示词、宿主工具
 或前端页面。
 
-当前稳定版本为 `4.0.0`，安装命令如下：
+当前候选版本为 `4.1.0rc1`，安装命令如下：
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0-rc.1"
 python examples/quickstart/main.py
 ```
 
@@ -247,7 +247,7 @@ Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生
 - `deepkeel.orchestration_sdk`：有界 SubAgent 编排。
 - `deepkeel.mcp_sdk`：MCP Client、传输和工具映射。
 
-当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.0.0`。
+当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.1.0rc1`。
 公开符号清单位于 `deepkeel.public_api`，测试会冻结 API 指纹；任何变更都需要显式
 兼容性审阅。
 

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 4.1.0rc1 - 2026-08-10
+
 - Project each uninterrupted run segment as one hierarchical OpenTelemetry
   trace, with operation child spans, lifecycle events, replay deduplication,
   delta aggregation, and links between resumed segments.
@@ -13,6 +15,11 @@
   preserving strict user-selected single-model semantics.
 - Split model-node execution and RuntimeResult projection into typed phases,
   and move trace/diagnostic projection behind independently ratcheted modules.
+- Split routed model attempts, SubAgent batch/bounded/task execution and the
+  claimed runtime turn into typed lifecycle coordinators with strict size and
+  complexity ratchets.
+- Define non-overlapping persistence authority for canonical product state,
+  portable recovery checkpoints and LangGraph continuation checkpoints.
 - Isolate runtime events, leases, tool/model idempotency, checkpoints and
   operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
   migration and cross-tenant contract tests.
