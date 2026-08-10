@@ -26,12 +26,19 @@ otel = OpenTelemetryTelemetry()
 builder.configure_ports(telemetry=otel)
 ```
 
-Each durable `TelemetryRecord` becomes a short internal span while retaining
-the DeepKeel trace identity and runtime operation metadata. Ephemeral stream
-deltas and user identifiers are excluded by default. Prompt text, tool
+Durable records for one uninterrupted run segment are projected into one trace:
+`deepkeel.run.segment` is the root, model/tool/MCP/SubAgent operations become
+child spans, and lifecycle or routing decisions become root-span events. A
+settled segment is closed immediately; a later resume starts a new trace linked
+to the previous segment. Replayed records are deduplicated by event identity.
+Ephemeral stream deltas are aggregated into the root-span delta count instead
+of creating one span per token. User identifiers are excluded by default. Prompt text, tool
 arguments, model output and arbitrary nested values are never promoted to span
 attributes. Set `include_ephemeral=True` or `include_user_id=True` only under an
 explicit sampling and privacy policy.
+
+Call `otel.shutdown()` before shutting down the Host's SDK provider so any
+unfinished segments are exported with `deepkeel.segment.closed_reason=shutdown`.
 
 The adapter also records `deepkeel.runtime.events`,
 `deepkeel.runtime.failures`, `deepkeel.operation.duration`, and
