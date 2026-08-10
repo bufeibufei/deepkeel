@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Any, cast
 from uuid import uuid4
 
@@ -26,7 +27,12 @@ from deepkeel.contracts import (
 )
 from deepkeel.context import build_context_snapshot, build_initial_messages
 from deepkeel.failures import RuntimeFailure, classify_runtime_failure
-from deepkeel.references import DefaultReferenceProjector, ReferenceProjector
+from deepkeel.references import EvidenceBundle, DefaultReferenceProjector, ReferenceProjector
+from deepkeel.runtime_diagnostics import (
+    project_observation as _project_observation,
+    runtime_diagnostics as _runtime_diagnostics,
+    trace_from_events as _trace_from_events,
+)
 from deepkeel.runtime_api import (
     RuntimeActiveTask,
     RuntimeErrorPayload,
@@ -40,6 +46,33 @@ from deepkeel.tool_registry import ToolRegistry
 from deepkeel.type_narrowing import as_dict, as_dict_list, as_list, as_optional_dict
 from deepkeel.ui import project_run_ui_state
 from deepkeel.version import DEEPKEEL_CONTRACT_VERSION, DEEPKEEL_VERSION
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectionInputs:
+    graph_status: str
+    runtime_status: str
+    stop_reason: str
+    state_error: dict[str, Any] | None
+    skill: dict[str, Any]
+    typed_tool_results: list[dict[str, Any]]
+    checkpoint_pending_action: dict[str, Any] | None
+    checkpoint_pending_async: dict[str, Any] | None
+    pending_action: dict[str, Any] | None
+    final_answer: dict[str, Any]
+    references: list[RuntimeReference]
+    evidence: list[RuntimeReference]
+    evidence_bundle: EvidenceBundle
+    checkpoint_observations: list[dict[str, Any]]
+    projected_observations: list[dict[str, Any]]
+
+
+@dataclass(frozen=True, slots=True)
+class _ProjectionEnvelope:
+    checkpoint: dict[str, Any]
+    runtime: dict[str, Any]
+    context_snapshot: dict[str, Any]
+    active_task: RuntimeActiveTask | None
 
 def project_harness_result(
     state: dict[str, Any],
@@ -58,6 +91,44 @@ def project_harness_result(
     capability_manifest: dict[str, Any] | None = None,
     reference_projector: ReferenceProjector | None = None,
 ) -> RuntimeResult:
+    inputs = _prepare_projection_inputs(
+        state,
+        skill_activation=skill_activation,
+        observation_kinds=observation_kinds or {},
+        reference_projector=reference_projector,
+    )
+    envelope = _build_projection_envelope(
+        state,
+        inputs,
+        question=question,
+        context_bundle=context_bundle,
+        short_context=short_context,
+        streamed_events=streamed_events,
+        answer_delta_streamed=answer_delta_streamed,
+        observation_kinds=observation_kinds or {},
+        task_kinds=task_kinds or {},
+        max_steps=max_steps,
+        previous_diagnostics=previous_diagnostics,
+        capability_manifest=capability_manifest,
+    )
+    return _assemble_runtime_result(
+        state,
+        inputs,
+        envelope,
+        question=question,
+        user_id=user_id,
+        streamed_events=streamed_events,
+        answer_delta_streamed=answer_delta_streamed,
+    )
+
+
+def _prepare_projection_inputs(
+    state: dict[str, Any],
+    *,
+    skill_activation: dict[str, Any],
+    observation_kinds: dict[str, str],
+    reference_projector: ReferenceProjector | None,
+) -> _ProjectionInputs:
     graph_status = str(state.get("status") or "failed")
     state_error = (
         (state.get("metadata") or {}).get("runtime_error")
@@ -111,8 +182,42 @@ def project_harness_result(
         item for item in state.get("observations", []) if isinstance(item, dict)
     ]
     projected_observations = [
-        _project_observation(item, observation_kinds or {}) for item in checkpoint_observations
+        _project_observation(item, observation_kinds) for item in checkpoint_observations
     ]
+    return _ProjectionInputs(
+        graph_status=graph_status,
+        runtime_status=runtime_status,
+        stop_reason=stop_reason,
+        state_error=state_error if isinstance(state_error, dict) else None,
+        skill=skill,
+        typed_tool_results=typed_tool_results,
+        checkpoint_pending_action=checkpoint_pending_action,
+        checkpoint_pending_async=checkpoint_pending_async,
+        pending_action=pending_action,
+        final_answer=final_answer,
+        references=cast(list[RuntimeReference], references),
+        evidence=cast(list[RuntimeReference], evidence),
+        evidence_bundle=evidence_bundle,
+        checkpoint_observations=checkpoint_observations,
+        projected_observations=projected_observations,
+    )
+
+
+def _build_projection_envelope(
+    state: dict[str, Any],
+    inputs: _ProjectionInputs,
+    *,
+    question: str,
+    context_bundle: dict[str, Any],
+    short_context: dict[str, Any],
+    streamed_events: list[dict[str, Any]],
+    answer_delta_streamed: bool,
+    observation_kinds: dict[str, str],
+    task_kinds: dict[str, str],
+    max_steps: int,
+    previous_diagnostics: dict[str, Any] | None,
+    capability_manifest: dict[str, Any] | None,
+) -> _ProjectionEnvelope:
     run_id = str(
         state.get("run_id")
         or context_bundle.get("agent_session_id")
@@ -136,10 +241,10 @@ def project_harness_result(
         "graph_thread_id": graph_thread_id,
         "turn_id": turn_id,
         "messages": [item for item in state.get("messages", []) if isinstance(item, dict)],
-        "observations": checkpoint_observations,
+        "observations": inputs.checkpoint_observations,
         "artifacts": [item for item in state.get("artifacts", []) if isinstance(item, dict)],
-        "pending_action": checkpoint_pending_action,
-        "pending_async": checkpoint_pending_async,
+        "pending_action": inputs.checkpoint_pending_action,
+        "pending_async": inputs.checkpoint_pending_async,
         "pending_tool_calls": [
             item for item in state.get("pending_tool_calls", []) if isinstance(item, dict)
         ],
@@ -147,23 +252,23 @@ def project_harness_result(
         if isinstance(state.get("budget_state"), dict)
         else {},
         "step_count": int(state.get("step_count") or 0),
-        "status": graph_status,
+        "status": inputs.graph_status,
         "metadata": state.get("metadata") if isinstance(state.get("metadata"), dict) else {},
     }
-    trace = _trace_from_events(streamed_events, observation_kinds=observation_kinds or {})
-    context_snapshot = build_context_snapshot(question, context_bundle, short_context, skill)
+    trace = _trace_from_events(streamed_events, observation_kinds=observation_kinds)
+    context_snapshot = build_context_snapshot(question, context_bundle, short_context, inputs.skill)
     runtime = {
         "schema_version": "harness-runtime-v2",
         "core_contract_version": DEEPKEEL_CONTRACT_VERSION,
         "core_version": DEEPKEEL_VERSION,
         "loop_engine": "langgraph_native_tools",
         "mode": "react_loop",
-        "status": runtime_status,
-        "stop_reason": stop_reason,
+        "status": inputs.runtime_status,
+        "stop_reason": inputs.stop_reason,
         "step_count": int(state.get("step_count") or 0),
-        "observations": projected_observations,
+        "observations": inputs.projected_observations,
         "artifacts": checkpoint["artifacts"],
-        "pending_action": pending_action,
+        "pending_action": inputs.pending_action,
         "checkpoint": checkpoint,
         "trace": trace,
         "answer_delta_streamed": answer_delta_streamed,
@@ -184,26 +289,48 @@ def project_harness_result(
         runtime,
         streamed_events,
         context_snapshot=context_snapshot,
-        skill_activation=skill,
+        skill_activation=inputs.skill,
         max_steps=max_steps,
         previous_diagnostics=previous_diagnostics,
         capability_manifest=capability_manifest,
     )
     active_task = cast(
         RuntimeActiveTask | None,
-        _active_task(typed_tool_results, task_kinds or {}),
+        _active_task(inputs.typed_tool_results, task_kinds),
     )
     if active_task:
         runtime["active_task"] = active_task
     runtime["ui_state"] = project_run_ui_state(
-        runtime_status,
-        pending_action=pending_action,
+        inputs.runtime_status,
+        pending_action=inputs.pending_action,
         active_task=dict(active_task) if active_task else None,
     )
+    return _ProjectionEnvelope(
+        checkpoint=checkpoint,
+        runtime=runtime,
+        context_snapshot=context_snapshot,
+        active_task=active_task,
+    )
+
+
+def _assemble_runtime_result(
+    state: dict[str, Any],
+    inputs: _ProjectionInputs,
+    envelope: _ProjectionEnvelope,
+    *,
+    question: str,
+    user_id: str,
+    streamed_events: list[dict[str, Any]],
+    answer_delta_streamed: bool,
+) -> RuntimeResult:
+    checkpoint = envelope.checkpoint
+    runtime = envelope.runtime
+    final_answer = dict(inputs.final_answer)
     if answer_delta_streamed:
         final_answer["answer_delta_streamed"] = True
     error: RuntimeErrorPayload | None = None
-    if isinstance(state_error, dict):
+    if inputs.state_error is not None:
+        state_error = inputs.state_error
         error = {
             "type": str(state_error.get("type") or "RuntimeFailure"),
             "code": str(state_error.get("code") or "RUNTIME_INTERNAL_ERROR"),
@@ -232,15 +359,15 @@ def project_harness_result(
     }
     answer_values["status"] = (
         "completed"
-        if runtime_status == "completed"
+        if inputs.runtime_status == "completed"
         else "failed"
-        if runtime_status == "failed"
+        if inputs.runtime_status == "failed"
         else "interrupted"
     )
-    answer_values.setdefault("stop_reason", stop_reason)
+    answer_values.setdefault("stop_reason", inputs.stop_reason)
     typed_pending_action = (
-        PendingAction.model_validate(checkpoint_pending_action)
-        if isinstance(checkpoint_pending_action, dict)
+        PendingAction.model_validate(inputs.checkpoint_pending_action)
+        if isinstance(inputs.checkpoint_pending_action, dict)
         else None
     )
     typed_run_context = RunContext(
@@ -254,22 +381,22 @@ def project_harness_result(
             "waiting_async": RunStatus.WAITING_ASYNC,
             "failed": RunStatus.FAILED,
             "canceled": RunStatus.CANCELED,
-        }.get(graph_status, RunStatus.REASONING),
+        }.get(inputs.graph_status, RunStatus.REASONING),
         messages=[
             AgentMessage.model_validate(item) for item in checkpoint["messages"]
         ],
         observations=[
-            Observation.model_validate(item) for item in checkpoint_observations
+            Observation.model_validate(item) for item in inputs.checkpoint_observations
         ],
         pending_tool_calls=[
             ToolCall.model_validate(item) for item in checkpoint["pending_tool_calls"]
         ],
         pending_action=typed_pending_action,
-        pending_async=checkpoint_pending_async,
+        pending_async=inputs.checkpoint_pending_async,
         artifacts=[
             Artifact.model_validate(item) for item in checkpoint["artifacts"]
         ],
-        skill_activation=skill,
+        skill_activation=inputs.skill,
         model_policy=as_dict(state.get("model_policy")),
         budget_state=dict(checkpoint["budget_state"]),
         metadata=dict(checkpoint["metadata"]),
@@ -278,7 +405,7 @@ def project_harness_result(
     typed_artifacts = [
         Artifact.model_validate(item) for item in checkpoint["artifacts"]
     ]
-    output_contract = as_dict(skill.get("output_contract"))
+    output_contract = as_dict(inputs.skill.get("output_contract"))
     artifact_presentation = output_contract.get("artifact_presentation")
     artifact_views = project_artifact_views(
         typed_artifacts,
@@ -290,8 +417,8 @@ def project_harness_result(
         thread_id=runtime["identity"]["thread_id"],
         graph_thread_id=checkpoint["graph_thread_id"],
         turn_id=checkpoint["turn_id"],
-        status=RuntimeResultStatus(runtime_status),
-        stop_reason=stop_reason,
+        status=RuntimeResultStatus(inputs.runtime_status),
+        stop_reason=inputs.stop_reason,
         schema_version=str(runtime["schema_version"]),
         core_contract_version=str(runtime["core_contract_version"]),
         core_version=str(runtime["core_version"]),
@@ -301,24 +428,24 @@ def project_harness_result(
         final_answer=FinalAnswer(**answer_values, metadata=answer_metadata),
         run_context=typed_run_context,
         observations=[
-            Observation.model_validate(item) for item in checkpoint_observations
+            Observation.model_validate(item) for item in inputs.checkpoint_observations
         ],
-        tool_results=[ToolResult.model_validate(item) for item in typed_tool_results],
+        tool_results=[ToolResult.model_validate(item) for item in inputs.typed_tool_results],
         pending_action=typed_pending_action,
         artifacts=typed_artifacts,
         artifact_views=artifact_views,
         events=[RuntimeStreamEvent.model_validate(item) for item in streamed_events],
         checkpoint=checkpoint,
-        trace=trace,
+        trace=runtime["trace"],
         diagnostics=dict(runtime.get("diagnostics") or {}),
-        context_snapshot=context_snapshot,
-        skill_activation=skill,
-        active_task=active_task or None,
+        context_snapshot=envelope.context_snapshot,
+        skill_activation=inputs.skill,
+        active_task=envelope.active_task or None,
         ui_state=cast(RuntimeUIState, as_dict(runtime.get("ui_state"))),
-        references=cast(list[RuntimeReference], references),
-        evidence=cast(list[RuntimeReference], evidence),
-        evidence_bundle=evidence_bundle,
-        needs_user_input=runtime_status in {"waiting_user_action", "waiting_user_input"},
+        references=inputs.references,
+        evidence=inputs.evidence,
+        evidence_bundle=inputs.evidence_bundle,
+        needs_user_input=inputs.runtime_status in {"waiting_user_action", "waiting_user_input"},
         answer_delta_streamed=answer_delta_streamed,
         error=error,
     )
@@ -526,25 +653,6 @@ def _project_pending_action(
     return projected
 
 
-def _project_observation(
-    value: dict[str, Any],
-    observation_kinds: dict[str, str],
-) -> dict[str, Any]:
-    projected = dict(value)
-    source = str(projected.get("source") or projected.get("tool_name") or "")
-    data = as_dict(projected.get("data"))
-    kind = str(
-        observation_kinds.get(source)
-        or data.get("kind")
-        or data.get("observation_kind")
-        or (source.split(".", 1)[0] if "." in source else source)
-        or "tool"
-    )
-    projected.setdefault("tool_name", source)
-    projected.setdefault("kind", kind)
-    return projected
-
-
 def _project_final_answer(
     state: dict[str, Any],
     runtime_status: str,
@@ -606,289 +714,3 @@ def _active_task(
         }
     return {}
 
-
-def _trace_from_events(
-    events: list[dict[str, Any]],
-    *,
-    observation_kinds: dict[str, str],
-) -> list[dict[str, Any]]:
-    trace = []
-    for index, event in enumerate(events):
-        if event.get("event_type") == "answer.delta":
-            continue
-        payload = as_dict(event.get("payload"))
-        action = str(event.get("event_type") or "")
-        item = {
-            "index": int(event.get("sequence") or index + 1),
-            "action": action,
-            "summary": str(event.get("summary") or ""),
-            "created_at": str(event.get("created_at") or ""),
-        }
-        if action in {"model.completed", "model.failed"}:
-            item.update(
-                {
-                    "model_role": str(payload.get("model_role") or ""),
-                    "model_id": str(payload.get("model_id") or ""),
-                    "status": "failed" if action == "model.failed" else "completed",
-                    "latency_ms": int(payload.get("latency_ms") or 0),
-                    "answer_stream": {
-                        "first_token_latency_ms": payload.get("first_token_latency_ms"),
-                        "latency_ms": int(payload.get("latency_ms") or 0),
-                        "delta_count": int(payload.get("delta_count") or 0),
-                        "delta_chars": int(payload.get("delta_chars") or 0),
-                    },
-                    "route_reason": str(payload.get("route_reason") or ""),
-                    "router_id": str(payload.get("router_id") or ""),
-                    "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else {},
-                    "budget": payload.get("budget") if isinstance(payload.get("budget"), dict) else {},
-                    "invocation": (
-                        payload.get("invocation")
-                        if isinstance(payload.get("invocation"), dict)
-                        else {}
-                    ),
-                }
-            )
-        if action == "model.route.selected":
-            item.update(
-                {
-                    "model_role": str(payload.get("role") or ""),
-                    "model_id": str(payload.get("model_id") or ""),
-                    "route_reason": str(payload.get("reason") or ""),
-                    "router_id": str(payload.get("router_id") or ""),
-                    "policy": payload.get("policy") if isinstance(payload.get("policy"), dict) else {},
-                    "budget": payload.get("budget") if isinstance(payload.get("budget"), dict) else {},
-                    "invocation": (
-                        payload.get("invocation")
-                        if isinstance(payload.get("invocation"), dict)
-                        else {}
-                    ),
-                }
-            )
-        if (action.startswith("tool.call.") and action != "tool.call.started") or action == "run.waiting_async":
-            tool_result = as_dict(payload.get("tool_result"))
-            metadata = as_dict(tool_result.get("metadata"))
-            metrics = as_dict(
-                tool_result.get("runtime_metrics") or metadata.get("runtime_metrics")
-            )
-            governance = as_dict(metadata.get("governance"))
-            tool_call = as_dict(payload.get("tool_call"))
-            item.update(
-                {
-                    "latency_ms": int(metrics.get("latency_ms") or payload.get("latency_ms") or 0),
-                    "status": str(tool_result.get("status") or ""),
-                    "outcome": str(tool_result.get("outcome") or ""),
-                    "diagnostics": (
-                        tool_result.get("diagnostics")
-                        if isinstance(tool_result.get("diagnostics"), dict)
-                        else {}
-                    ),
-                    "tool_calls": [{"tool_name": str(tool_result.get("name") or tool_call.get("name") or "")}],
-                    "observations": [
-                        _project_observation(tool_result["observation"], observation_kinds)
-                    ]
-                    if isinstance(tool_result.get("observation"), dict)
-                    else [],
-                    "policy": governance.get("policy") if isinstance(governance.get("policy"), dict) else {},
-                    "budget": governance.get("budget") if isinstance(governance.get("budget"), dict) else {},
-                    "artifact_types": sorted(
-                        {
-                            str(artifact.get("artifact_type") or "")
-                            for artifact in tool_result.get("artifacts") or []
-                            if isinstance(artifact, dict)
-                            and str(artifact.get("artifact_type") or "")
-                        }
-                    ),
-                    "artifact_contract_failed": bool(
-                        metadata.get("artifact_contract_failed")
-                    ),
-                }
-            )
-        trace.append(item)
-    return trace
-
-
-def _runtime_diagnostics(
-    state: dict[str, Any],
-    runtime: dict[str, Any],
-    events: list[dict[str, Any]],
-    *,
-    context_snapshot: dict[str, Any],
-    skill_activation: dict[str, Any],
-    max_steps: int,
-    previous_diagnostics: dict[str, Any] | None = None,
-    capability_manifest: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    previous = as_dict(previous_diagnostics)
-    previous_counts = as_dict(previous.get("counts"))
-    previous_timings = as_dict(previous.get("timings"))
-    previous_skill = as_dict(previous.get("skill"))
-    previous_recovery = as_dict(previous.get("recovery"))
-    previous_governance = as_dict(previous.get("governance"))
-    trace = as_dict_list(runtime.get("trace"))
-    model_rows = [item for item in trace if item.get("action") in {"model.completed", "model.failed"}]
-    route_rows = [item for item in trace if item.get("action") == "model.route.selected"]
-    tool_rows = [
-        item
-        for item in trace
-        if (
-            str(item.get("action") or "").startswith("tool.call.")
-            and item.get("action") != "tool.call.started"
-        )
-        or item.get("action") == "run.waiting_async"
-    ]
-    confirmation_rows = [
-        item for item in trace if str(item.get("action") or "").startswith("policy.")
-    ]
-    completed_tools = {
-        str((item.get("tool_calls") or [{}])[0].get("tool_name") or "")
-        for item in tool_rows
-        if str(item.get("status") or "") in {"ok", "succeeded", "completed"}
-    }
-    completed_tools.update(
-        str(name)
-        for name in previous_skill.get("completed_tools", [])
-        if str(name)
-    )
-    completed_tools.update(
-        str(name)
-        for name in state.get("completed_tools", [])
-        if str(name)
-    )
-    state_skill = as_dict(state.get("skill_activation"))
-    completed_tools.update(
-        str(name)
-        for name in state_skill.get("completed_tools", [])
-        if str(name)
-    )
-    context_selection = as_dict(context_snapshot.get("context_selection"))
-    state_model_policy = as_dict(state.get("model_policy"))
-    state_budget_policy = as_dict(state_model_policy.get("budget"))
-    skill = dict(skill_activation)
-    if skill:
-        skill["completed_tools"] = sorted(name for name in completed_tools if name)
-        skill["completion_outcome"] = str(runtime.get("status") or "")
-        skill["policy_violation_count"] = len(skill.get("policy_violations") or [])
-        skill["policy_phase"] = str(state.get("policy_phase") or skill.get("policy_phase") or "")
-        missing = as_dict(state.get("missing_requirements"))
-        skill["missing_requirements"] = {
-            "tools": list(missing.get("tools") or []),
-            "artifacts": list(missing.get("artifacts") or []),
-        }
-        skill["repair_count"] = int(
-            state.get("repair_count") or skill.get("repair_count") or 0
-        )
-        output_contract = as_dict(skill.get("output_contract"))
-        skill["required_artifact"] = str(output_contract.get("requires_artifact") or skill.get("required_artifact") or "")
-    return {
-        "schema_version": "harness-runtime-diagnostics-v1",
-        "context": {
-            "context_version": str(context_snapshot.get("schema_version") or ""),
-            "selection_strategy": str(context_selection.get("strategy") or "harness_context_v1"),
-        },
-        "capabilities": dict(capability_manifest or {}),
-        "loop": {
-            "status": str(runtime.get("status") or ""),
-            "stop_reason": str(runtime.get("stop_reason") or ""),
-            "step_count": int(runtime.get("step_count") or 0),
-            "max_steps": int(max_steps),
-            "max_tool_calls_per_step": 0,
-            "max_elapsed_seconds": float(state_budget_policy.get("max_elapsed_seconds") or 0),
-        },
-        "counts": {
-            "trace_steps": int(previous_counts.get("trace_steps") or 0) + len(trace),
-            "model_calls": int(previous_counts.get("model_calls") or 0) + len(model_rows),
-            "tool_calls": int(previous_counts.get("tool_calls") or 0) + len(tool_rows),
-            "degraded_tool_results": int(previous_counts.get("degraded_tool_results") or 0)
-            + sum(str(item.get("outcome") or "") == "degraded" for item in tool_rows),
-            "skipped_tool_results": int(previous_counts.get("skipped_tool_results") or 0)
-            + sum(str(item.get("outcome") or "") == "skipped" for item in tool_rows),
-            "tool_results": max(
-                int(previous_counts.get("tool_results") or 0),
-                len(state.get("tool_results") or []),
-            ),
-            "observations": max(
-                int(previous_counts.get("observations") or 0),
-                len(state.get("observations") or []),
-            ),
-            "events": int(previous_counts.get("events") or 0) + len(events),
-        },
-        "recovery": {
-            **previous_recovery,
-            "resume_mode": str(as_dict(runtime.get("pending_action")).get("resume_mode") or ""),
-            "pending_action": runtime.get("pending_action") or {},
-        },
-        "governance": {
-            "model_routes": as_list(previous_governance.get("model_routes"))
-            + [
-                {
-                    "step": item.get("index"),
-                    "role": str(item.get("model_role") or ""),
-                    "model_id": str(item.get("model_id") or ""),
-                    "reason": str(item.get("route_reason") or ""),
-                    "router_id": str(item.get("router_id") or ""),
-                    "policy": item.get("policy") if isinstance(item.get("policy"), dict) else {},
-                    "budget": item.get("budget") if isinstance(item.get("budget"), dict) else {},
-                    "budget_metrics": (
-                        item.get("budget_metrics")
-                        if isinstance(item.get("budget_metrics"), dict)
-                        else {}
-                    ),
-                    "usage": item.get("usage") if isinstance(item.get("usage"), dict) else {},
-                    "max_output_tokens": item.get("max_output_tokens"),
-                }
-                for item in route_rows
-            ],
-            "budget": state.get("budget_state")
-            if isinstance(state.get("budget_state"), dict)
-            else {},
-            "tool_policies": as_list(previous_governance.get("tool_policies"))
-            + [
-                {
-                    "step": item.get("index"),
-                    "tool_name": str((item.get("tool_calls") or [{}])[0].get("tool_name") or ""),
-                    "status": str(item.get("status") or ""),
-                    "outcome": str(item.get("outcome") or ""),
-                    "policy": item.get("policy") if isinstance(item.get("policy"), dict) else {},
-                    "budget": item.get("budget") if isinstance(item.get("budget"), dict) else {},
-                }
-                for item in tool_rows
-                if item.get("policy") or item.get("budget")
-            ],
-            "confirmations": as_list(previous_governance.get("confirmations"))
-            + [
-                {
-                    "step": item.get("index"),
-                    "action": str(item.get("action") or ""),
-                    "summary": str(item.get("summary") or ""),
-                }
-                for item in confirmation_rows
-            ],
-        },
-        "skill": skill,
-        "replay": {"prompt_hashes": [], "model_output_hashes": []},
-        "timings": {
-            "model_calls": as_list(previous_timings.get("model_calls"))
-            + [
-                {
-                    "step": item.get("index"),
-                    "role": str(item.get("model_role") or ""),
-                    "model_id": str(item.get("model_id") or ""),
-                    "status": "failed" if item.get("action") == "model.failed" else "completed",
-                    "latency_ms": int(item.get("latency_ms") or 0),
-                    "answer_stream": item.get("answer_stream") if isinstance(item.get("answer_stream"), dict) else {},
-                    "error": str(item.get("summary") or "") if item.get("action") == "model.failed" else "",
-                }
-                for item in model_rows
-            ],
-            "tool_calls": as_list(previous_timings.get("tool_calls"))
-            + [
-                {
-                    "tool_name": str((item.get("tool_calls") or [{}])[0].get("tool_name") or ""),
-                    "status": str(item.get("status") or ""),
-                    "latency_ms": int(item.get("latency_ms") or 0),
-                    "error": str(item.get("summary") or "") if item.get("action") == "tool.call.failed" else "",
-                }
-                for item in tool_rows
-            ],
-        },
-    }

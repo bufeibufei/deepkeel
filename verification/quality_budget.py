@@ -30,7 +30,10 @@ CRITICAL_COVERAGE = {
     "src/deepkeel/tool_executor.py": 70.0,
 }
 
-CRITICAL_COMPLEXITY_FILES = tuple(CRITICAL_COVERAGE)
+CRITICAL_COMPLEXITY_FILES = tuple(CRITICAL_COVERAGE) + (
+    "src/deepkeel/runtime_results.py",
+    "src/deepkeel/runtime_diagnostics.py",
+)
 MAX_CYCLOMATIC_COMPLEXITY = 25
 MAX_FUNCTION_LINES = 180
 FUNCTION_BUDGET_OVERRIDES = {

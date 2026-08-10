@@ -245,7 +245,8 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
     ("path", "maximum_lines"),
     [
         ("src/deepkeel/runtime.py", 875),
-        ("src/deepkeel/runtime_results.py", 900),
+        ("src/deepkeel/runtime_results.py", 750),
+        ("src/deepkeel/runtime_diagnostics.py", 400),
         ("src/deepkeel/graph_state.py", 800),
         ("src/deepkeel/composition.py", 800),
         ("src/deepkeel/model.py", 250),
