@@ -220,6 +220,12 @@ def test_graph_model_step_helpers_preserve_context_metrics_and_disclosure() -> N
             30,
         ),
         ("src/deepkeel/subagents/executor.py", "SubAgentExecutor", "_execute_one", 300),
+        (
+            "src/deepkeel/subagents/bounded_execution.py",
+            "SubAgentBoundedExecutionMixin",
+            "_run_bounded_agent",
+            50,
+        ),
     ],
 )
 def test_central_execution_methods_stay_within_ratcheted_size_budget(
@@ -262,7 +268,8 @@ def test_central_execution_methods_stay_within_ratcheted_size_budget(
         ("src/deepkeel/tool_executor.py", 700),
         ("src/deepkeel/graph_model_node.py", 50),
         ("src/deepkeel/graph_model_execution.py", 800),
-        ("src/deepkeel/subagents/bounded_execution.py", 750),
+        ("src/deepkeel/subagents/bounded_execution.py", 75),
+        ("src/deepkeel/subagents/bounded_coordinator.py", 575),
     ],
 )
 def test_execution_modules_stay_within_ratcheted_size_budget(
