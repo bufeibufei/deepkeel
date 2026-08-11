@@ -115,7 +115,7 @@ class RoutedModelTurnExecution:
         attempts = self._candidate_attempts(primary, failure_policy)
         previous_failure: dict[str, Any] = {}
         budget_policy = BudgetPolicy.from_mapping(as_dict(self.context.model_policy.get("budget")))
-        for candidate in attempts:
+        for offset, candidate in enumerate(attempts):
             if await self._skip_open_circuit(candidate):
                 previous_failure = {
                     "fallback_from": candidate.route.role,
@@ -132,6 +132,9 @@ class RoutedModelTurnExecution:
             turn, previous_failure = await self._execute_attempt(
                 prepared,
                 total_attempts=len(attempts),
+                next_candidate=(
+                    attempts[offset + 1] if offset + 1 < len(attempts) else None
+                ),
             )
             if turn is not None:
                 return turn
@@ -468,6 +471,7 @@ class RoutedModelTurnExecution:
         prepared: _PreparedAttempt,
         *,
         total_attempts: int,
+        next_candidate: _AttemptCandidate | None,
     ) -> tuple[ModelTurn | None, dict[str, Any]]:
         candidate = prepared.candidate
         try:
@@ -498,6 +502,7 @@ class RoutedModelTurnExecution:
                 prepared,
                 error,
                 total_attempts=total_attempts,
+                next_candidate=next_candidate,
             )
         return await self._settle_success(prepared, outcome.turn), {}
 
@@ -507,6 +512,7 @@ class RoutedModelTurnExecution:
         error: ModelAttemptExecutionError,
         *,
         total_attempts: int,
+        next_candidate: _AttemptCandidate | None,
     ) -> tuple[None, dict[str, Any]]:
         candidate = prepared.candidate
         cause = error.cause
@@ -535,7 +541,10 @@ class RoutedModelTurnExecution:
                 prepared.health_provider_id,
                 candidate.provider.info.model_id,
                 category=failure.category,
-                immediate=failure.category == "rate_limited",
+                immediate=failure.category in {
+                    "rate_limited",
+                    "provider_capability_unsupported",
+                },
                 retry_after_seconds=failure.retry_after_seconds,
             )
             prepared.route_payload["health"] = health.as_dict()
@@ -543,6 +552,10 @@ class RoutedModelTurnExecution:
             failure.retryable
             and not error.visible_delta_emitted
             and candidate.index < total_attempts
+            and (
+                not failure.fallback_only
+                or _is_distinct_candidate(candidate, next_candidate)
+            )
         )
         self._emit_route(prepared.route_payload)
         if not can_retry:
@@ -600,6 +613,23 @@ class RoutedModelTurnExecution:
 def _supports_image_input(provider: Provider) -> bool:
     capabilities = getattr(provider.info, "capabilities", None)
     return getattr(capabilities, "supports_image_input", None) is True
+
+
+def _is_distinct_candidate(
+    current: _AttemptCandidate,
+    candidate: _AttemptCandidate | None,
+) -> bool:
+    if candidate is None:
+        return False
+    current_info = current.provider.info
+    candidate_info = candidate.provider.info
+    return (
+        current_info.provider_id,
+        current_info.model_id,
+    ) != (
+        candidate_info.provider_id,
+        candidate_info.model_id,
+    )
 
 
 def _repair_strategy(previous_failure: dict[str, Any]) -> str:
