@@ -44,7 +44,7 @@ otel = [
   "opentelemetry-api>=1.30.0,<2.0.0",
 ]
 test = [
-  "mypy>=1.15.0,<2.0.0",
+  "mypy>=1.15.0,<3.0.0",
   "opentelemetry-sdk>=1.30.0,<2.0.0",
   "pytest>=8.3.0",
   "pytest-cov>=6.0.0,<8.0.0",
