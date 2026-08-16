@@ -5,6 +5,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from deepkeel.async_ports import run_sync_adapter
+from deepkeel.entrypoints import (
+    _compose_entrypoint_prompt,
+    _entrypoint_identity,
+    _entrypoint_resolved_event,
+    _validate_entrypoint_skill,
+)
 from deepkeel.events import AgentEventPersistenceError
 from deepkeel.failures import classify_runtime_failure
 from deepkeel.graph import create_harness_graph
@@ -101,7 +107,10 @@ class RuntimeTurnCoordinator:
         identity = await self._prepare_identity(prepared)
         if isinstance(identity, RuntimeResult):
             return identity
-        state = await self._initialize_state(prepared, identity)
+        try:
+            state = await self._initialize_state(prepared, identity)
+        except Exception as exc:
+            return await self._context_failure(exc, short=prepared.short, bundle=prepared.bundle)
         lifecycle_failure = await self._run_lifecycle(state)
         if lifecycle_failure is not None:
             return lifecycle_failure
@@ -155,6 +164,7 @@ class RuntimeTurnCoordinator:
             explicit=self.request.skill_activation,
         )
         skill = SkillPolicy.from_snapshot(resolved_skill).runtime_snapshot()
+        _validate_entrypoint_skill(prepared.capability_view, str(skill.get("skill_id") or ""))
         emitter = RuntimeEventEmitter(
             run_id=identity.run_id,
             thread_id=identity.conversation_thread_id,
@@ -185,11 +195,9 @@ class RuntimeTurnCoordinator:
             context_window_diagnostics=dict(prepared.context_window_diagnostics),
             deadline_monotonic=self._deadline(prepared.resolved_model_policy),
             emitter=emitter,
-            package_ids=tuple(
-                contribution.package_id
-                for contribution in self.runtime.capability_contributions
-            ),
+            package_ids=prepared.capability_view.package_ids,
         )
+        state.emitter(_entrypoint_resolved_event(prepared.capability_view))
         self._emit_memory_recall(state)
         return state
 
@@ -270,9 +278,13 @@ class RuntimeTurnCoordinator:
         )
         graph = self._resolve_graph(state, gateway)
         tool_context = self._tool_context(state, gateway)
+        system_prompt = _compose_entrypoint_prompt(
+            self.runtime.system_prompt_factory(state.skill),
+            state.inputs.capability_view,
+        )
         turn_context = TurnExecutionContext(
             model=gateway,
-            system_prompt=self.runtime.system_prompt_factory(state.skill),
+            system_prompt=system_prompt,
             tool_context=tool_context,
             event_sink=state.emitter,
             deadline_monotonic=state.deadline_monotonic,
@@ -325,6 +337,8 @@ class RuntimeTurnCoordinator:
                 "event_sink": state.emitter,
                 "budget_ledger": self.runtime.budget_ledger,
                 "capability_package_ids": list(state.package_ids),
+                "agent_entrypoint": _entrypoint_identity(state.inputs.capability_view),
+                "capability_view": state.inputs.capability_view.as_dict(),
             },
             budget_limits=_budget_limits(state.model_policy),
             deadline_monotonic=state.deadline_monotonic,

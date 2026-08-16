@@ -70,7 +70,7 @@ from deepkeel.public_api import (
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "4.1.0rc1"
+    assert PUBLIC_API_VERSION == "4.1.0rc2"
     assert tuple(deepkeel.__all__) == (
         "DEEPKEEL_CONTRACT_VERSION",
         "DEEPKEEL_VERSION",

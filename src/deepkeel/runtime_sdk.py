@@ -42,6 +42,11 @@ from deepkeel.evaluation import (
     evaluate_runtime_result,
 )
 from deepkeel.events import AgentEventPersistenceError, normalize_runtime_event
+from deepkeel.entrypoints import (
+    CapabilityView,
+    narrow_capability_view,
+    resolve_capability_view,
+)
 from deepkeel.failures import (
     FailureDiagnosis,
     RunCanceledError,
@@ -115,6 +120,7 @@ RUNTIME_SDK_API = (
     "ArtifactViewAction",
     "ArtifactViewField",
     "CancellableRunControl",
+    "CapabilityView",
     "DurableCheckpointStore",
     "EvalCase",
     "EvalCaseResult",
@@ -191,11 +197,13 @@ RUNTIME_SDK_API = (
     "normalize_agent_context_snapshot",
     "normalize_runtime_event",
     "normalize_runtime_status",
+    "narrow_capability_view",
     "project_run_ui_state",
     "project_artifact_view",
     "project_artifact_views",
     "task_lifecycle",
     "resolve_runtime_scope",
+    "resolve_capability_view",
     "workflow_projection",
 )
 

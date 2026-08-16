@@ -17,6 +17,8 @@ from deepkeel.contracts import (
     ToolCall,
     ToolResult,
 )
+from deepkeel.entrypoints import _restrict_tool_names
+from deepkeel.graph_tool_scope import _skill_tool_parameter_overrides
 from deepkeel.model import ModelGateway
 from deepkeel.planning import PLAN_TOOL_NAME, PlanningPolicy
 from deepkeel.skills import DelegationPolicy, SkillPolicy
@@ -232,7 +234,10 @@ def _allowed_tool_names(
         else:
             names.discard(PLAN_TOOL_NAME)
         names.difference_update(disabled)
-        return names
+        return _restrict_tool_names(
+            as_dict(as_dict(state.get("metadata")).get("capability_view")),
+            names,
+        )
     default_tools = {
         spec.name
         for spec in registry.list_tools()
@@ -249,7 +254,10 @@ def _allowed_tool_names(
     else:
         default_tools.discard(PLAN_TOOL_NAME)
     default_tools.difference_update(disabled)
-    return default_tools
+    return _restrict_tool_names(
+        as_dict(as_dict(state.get("metadata")).get("capability_view")),
+        default_tools,
+    )
 
 
 def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
@@ -316,46 +324,6 @@ def _forced_workflow_tool_name(
         (str(name) for name in missing_tools or [] if str(name) and str(name) in available),
         "",
     )
-
-
-def _skill_tool_parameter_overrides(
-    state: dict[str, Any],
-    registry: ToolRegistry,
-) -> dict[str, dict[str, Any]]:
-    skill = as_dict(state.get("skill_activation"))
-    policy = DelegationPolicy.from_snapshot(skill)
-    if not policy.enabled:
-        return {}
-    try:
-        spec = registry.get("agent.delegate")
-    except KeyError:
-        return {}
-    formal_schema = getattr(spec, "formal_parameters_schema", None)
-    schema = formal_schema() if callable(formal_schema) else {}
-    if (
-        not isinstance(schema, dict)
-        or schema.get("type") != "object"
-        or not isinstance(schema.get("properties"), dict)
-    ):
-        return {}
-    schema = deepcopy(schema)
-    properties = as_dict(schema.get("properties"))
-    concurrency = properties.get("max_concurrency")
-    if isinstance(concurrency, dict):
-        concurrency["maximum"] = policy.max_concurrency
-        concurrency["default"] = min(
-            int(concurrency.get("default") or policy.max_concurrency),
-            policy.max_concurrency,
-        )
-    tasks = properties.get("tasks")
-    if isinstance(tasks, dict):
-        tasks["maxItems"] = policy.max_tasks
-        items = as_dict(tasks.get("items"))
-        task_properties = as_dict(items.get("properties"))
-        agent_id = task_properties.get("agent_id")
-        if isinstance(agent_id, dict) and policy.allowed_agents:
-            agent_id["enum"] = sorted(policy.allowed_agents)
-    return {"agent.delegate": schema}
 
 
 def _hydrate_call(raw: dict[str, Any], registry: ToolRegistry, run_id: str) -> ToolCall:

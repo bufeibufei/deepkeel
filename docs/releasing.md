@@ -34,7 +34,7 @@ On Windows, the package-owned gate is:
 ```powershell
 $env:DEEPKEEL_TEST_POSTGRES_DSN = "postgresql://..."
 ./scripts/verify.ps1
-uv run python -m verification.release_contract --tag v4.1.0-rc.1
+uv run python -m verification.release_contract --tag v4.1.0-rc.2
 uv run python -m verification.readme_contract
 ```
 

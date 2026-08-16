@@ -86,6 +86,8 @@ class RuntimeRequest(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
+    agent_entrypoint_id: str = ""
+    agent_entrypoint_version: str = ""
     short_context: dict[str, Any] = Field(default_factory=dict)
     context_bundle: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)

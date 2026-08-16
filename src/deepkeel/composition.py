@@ -25,6 +25,7 @@ from deepkeel.capability_manifest import (
     RuntimeGeneration,
     RuntimeGenerationManager,
 )
+from deepkeel.entrypoints import resolve_capability_view
 from deepkeel.control import RunControl
 from deepkeel.event_journal import RuntimeEventJournal
 from deepkeel.context_window import ContextWindowManager
@@ -462,6 +463,14 @@ class HarnessRuntimeBuilder:
                 self._runtime_generation,
                 tuple(self._capability_manifests.values()),
             )
+        for entrypoint_id in self._capability_catalog.agent_entrypoints:
+            resolve_capability_view(
+                entrypoint_id=entrypoint_id,
+                runtime_generation=runtime_generation,
+                contributions=self._installed_contributions,
+                catalog=self._capability_catalog,
+                installed_tool_names=(spec.name for spec in self._registry.list_tools()),
+            )
         self._built = True
         return HarnessRuntime(
             self._registry,
@@ -571,6 +580,7 @@ class HarnessRuntimeBuilder:
             context_contributors=_catalog_delta(
                 catalog_before, catalog_after, "context_contributors"
             ),
+            agent_entrypoints=_catalog_delta(catalog_before, catalog_after, "agent_entrypoints"),
             resources=_catalog_delta(catalog_before, catalog_after, "resources"),
             metadata=metadata,
         )
@@ -665,6 +675,7 @@ def _manifest_from_pack(
         handoffs=spec.declared_handoffs,
         hooks=spec.declared_hooks,
         context_contributors=spec.declared_context_contributors,
+        agent_entrypoints=spec.declared_agent_entrypoints,
         mcp_servers=spec.declared_tool_providers,
         resources=spec.declared_resources,
         permissions=spec.required_scopes,
@@ -698,6 +709,10 @@ def _validate_pack_manifest(
         "context_contributors": (
             set(spec.declared_context_contributors),
             set(manifest.context_contributors),
+        ),
+        "agent_entrypoints": (
+            set(spec.declared_agent_entrypoints),
+            set(manifest.agent_entrypoints),
         ),
         "resources": (set(spec.declared_resources), set(manifest.resources)),
     }

@@ -552,6 +552,8 @@ def _new_context(
                 if str(name).strip()
             ],
             "memory_recall": as_dict(context_bundle.get("memory_recall")),
+            "agent_entrypoint": as_dict(context_bundle.get("agent_entrypoint")),
+            "capability_view": as_dict(context_bundle.get("_capability_view")),
             "operational_run_id": str(context_bundle.get("operational_run_id") or ""),
             "governance_scope": {
                 "tenant_id": str(context_bundle.get("tenant_id") or ""),

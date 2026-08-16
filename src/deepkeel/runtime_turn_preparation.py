@@ -5,6 +5,12 @@ from typing import Any
 from uuid import uuid4
 
 from deepkeel.checkpoint_authority import CheckpointAuthority
+from deepkeel.entrypoints import (
+    CapabilityView,
+    _entrypoint_identity,
+    merge_model_policy,
+    resolve_capability_view,
+)
 from deepkeel.persistence import CheckpointCompatibilityError
 from deepkeel.runtime_api import RuntimeRequest
 from deepkeel.runtime_execution_support import optional_int
@@ -25,6 +31,7 @@ class PreparedTurnInputs:
     model_context_profile: Any
     configured_input_limit: int
     context_window_diagnostics: dict[str, Any]
+    capability_view: CapabilityView
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +58,18 @@ async def prepare_turn_inputs(
     short = request.short_context if isinstance(request.short_context, dict) else {}
     bundle = dict(request.context_bundle) if isinstance(request.context_bundle, dict) else {}
     scope = request.runtime_scope
+    capability_view = resolve_capability_view(
+        entrypoint_id=request.agent_entrypoint_id,
+        entrypoint_version=request.agent_entrypoint_version,
+        runtime_generation=runtime.runtime_generation,
+        contributions=runtime.capability_contributions,
+        catalog=runtime.capability_catalog,
+        installed_tool_names=(spec.name for spec in runtime.tool_registry.list_tools()),
+    )
+    bundle["_capability_view"] = capability_view.as_dict()
+    bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
+    bundle["governance_scopes"] = list(capability_view.permission_scopes)
+    bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
     for key, value in (
         ("run_id", request.run_id),
         ("thread_id", request.thread_id),
@@ -63,7 +82,7 @@ async def prepare_turn_inputs(
         bundle["skill_activation"] = dict(request.skill_activation)
 
     resolved_model_policy = _resolved_model_policy(
-        request.model_policy,
+        merge_model_policy(capability_view.model_policy, request.model_policy),
         provider=provider,
         providers=providers,
         max_steps=runtime.max_steps,
@@ -84,11 +103,20 @@ async def prepare_turn_inputs(
         bundle = runtime.context_builder(request.question, short, bundle)
         if not isinstance(bundle, dict):
             raise TypeError("context builder must return a mapping")
+    allowed_contributors = set(capability_view.context_contributor_ids)
     for contributor_id, contributor in runtime.capability_catalog.context_contributors.items():
+        if contributor_id not in allowed_contributors:
+            continue
         contributed = contributor(dict(bundle))
         if not isinstance(contributed, dict):
             raise TypeError(f"context contributor {contributor_id} must return a mapping")
         bundle = contributed
+    # Capability packs may enrich or replace context, but they cannot replace the
+    # runtime-authoritative scope that guards tool, memory, and permission access.
+    bundle["_capability_view"] = capability_view.as_dict()
+    bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
+    bundle["governance_scopes"] = list(capability_view.permission_scopes)
+    bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
     bundle["_model_context_profile"] = model_context_profile.as_dict()
     bundle["_configured_input_limit"] = configured_input_limit
     prepared_context = runtime.context_window_manager.prepare(
@@ -104,6 +132,7 @@ async def prepare_turn_inputs(
         model_context_profile=model_context_profile,
         configured_input_limit=configured_input_limit,
         context_window_diagnostics=dict(prepared_context.diagnostics),
+        capability_view=capability_view,
     )
 
 

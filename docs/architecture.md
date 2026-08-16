@@ -18,6 +18,23 @@ Host application
 Capability Packages -> versioned contributions -> RuntimeGeneration
 ```
 
+A Host may expose multiple user-facing root Agents from one immutable
+`RuntimeGeneration`. A Capability Package declares an `AgentEntrypointSpec`,
+and each conversation resolves it to an immutable `CapabilityView`:
+
+```text
+installed RuntimeGeneration
+  intersect AgentEntrypointSpec package/dependency scope
+  intersect active Skill policy
+  intersect progressive tool disclosure
+  intersect runtime Policy and Budget decisions
+  -> effective per-conversation CapabilityView
+```
+
+The entrypoint selects a scoped view of the same compiled graph; it does not
+build a second runtime. Internal SubAgents remain bounded child tasks and may
+only narrow their parent's effective scope.
+
 LangGraph is an internal execution adapter for graph state and checkpoint-aware
 control flow. DeepKeel's public contracts do not expose LangGraph types, so a
 Host or Capability Package is not coupled to graph construction details.

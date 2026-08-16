@@ -15,6 +15,9 @@ from deepkeel.clarifications import (
     clarification_from_validation_error,
     clarification_tool_result,
 )
+from deepkeel.entrypoints import (
+    AgentEntrypointSpec,
+)
 from deepkeel.conformance import (
     CapabilityLifecycleConformanceReport,
     CapabilityPackageCertificationReport,
@@ -105,6 +108,7 @@ from deepkeel.async_ports import (
 )
 
 EXTENSION_SDK_API = (
+    "AgentEntrypointSpec",
     "AsyncToolExecutionStore",
     "AsyncToolExecutionStoreAdapter",
     "ArtifactPresentationActionSpec",

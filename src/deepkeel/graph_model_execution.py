@@ -567,10 +567,27 @@ class ModelNodeExecution:
         if decision is None:
             return calls, None
         activation = dict(decision.skill_activation)
-        if not str(activation.get("skill_id") or "").strip():
+        activated_skill_id = str(activation.get("skill_id") or "").strip()
+        if not activated_skill_id:
             return calls, _finish_failed(
                 self.current,
                 "Entry-tool Skill activation returned an invalid snapshot.",
+                self.config,
+            )
+        capability_view = as_dict(as_dict(self.current.get("metadata")).get("capability_view"))
+        scoped_skills = {
+            str(skill_id).strip()
+            for skill_id in capability_view.get("skill_ids", [])
+            if str(skill_id).strip()
+        }
+        if (
+            capability_view
+            and bool(capability_view.get("restricted"))
+            and activated_skill_id not in scoped_skills
+        ):
+            return calls, _finish_failed(
+                self.current,
+                f"Skill {activated_skill_id!r} is outside the active Agent entrypoint.",
                 self.config,
             )
         replacements = list(decision.tool_calls or tuple(calls))

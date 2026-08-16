@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Add versioned user-facing Agent entrypoints and immutable per-conversation
+  Capability Views. Direct specialist Agents now reuse the canonical compiled
+  graph while narrowing packages, Skills, tools, SubAgents, context, Memory,
+  permissions, prompts and model policy without creating a second runtime.
 - Add optional bounded Plan & Execute orchestration inside the canonical ReAct
   graph, including validated DAGs, safe parallel reads, serialized side effects,
   bounded revisions, typed progress events, and portable interruption recovery.
