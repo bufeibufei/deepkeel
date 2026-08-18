@@ -66,9 +66,10 @@ async def prepare_turn_inputs(
         catalog=runtime.capability_catalog,
         installed_tool_names=(spec.name for spec in runtime.tool_registry.list_tools()),
     )
+    governance_scopes = _effective_governance_scopes(bundle, capability_view)
     bundle["_capability_view"] = capability_view.as_dict()
     bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
-    bundle["governance_scopes"] = list(capability_view.permission_scopes)
+    bundle["governance_scopes"] = governance_scopes
     bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
     for key, value in (
         ("run_id", request.run_id),
@@ -115,7 +116,7 @@ async def prepare_turn_inputs(
     # runtime-authoritative scope that guards tool, memory, and permission access.
     bundle["_capability_view"] = capability_view.as_dict()
     bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
-    bundle["governance_scopes"] = list(capability_view.permission_scopes)
+    bundle["governance_scopes"] = governance_scopes
     bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
     bundle["_model_context_profile"] = model_context_profile.as_dict()
     bundle["_configured_input_limit"] = configured_input_limit
@@ -133,6 +134,29 @@ async def prepare_turn_inputs(
         configured_input_limit=configured_input_limit,
         context_window_diagnostics=dict(prepared_context.diagnostics),
         capability_view=capability_view,
+    )
+
+
+def _effective_governance_scopes(
+    bundle: dict[str, Any],
+    capability_view: CapabilityView,
+) -> list[str]:
+    declared = {
+        str(scope).strip()
+        for scope in capability_view.permission_scopes
+        if str(scope).strip()
+    }
+    if declared:
+        return sorted(declared)
+    # Lightweight packs may intentionally omit a manifest. In that case the
+    # trusted Host grant remains authoritative instead of being erased by an
+    # otherwise unrestricted default CapabilityView.
+    return sorted(
+        {
+            str(scope).strip()
+            for scope in bundle.get("governance_scopes", [])
+            if str(scope).strip()
+        }
     )
 
 

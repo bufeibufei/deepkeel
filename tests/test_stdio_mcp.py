@@ -78,6 +78,27 @@ def test_stdio_timeout_does_not_poison_later_calls() -> None:
     assert recovered.structured_content["results"][0]["title"] == "Result for recovered"
 
 
+def test_stdio_discovery_timeout_relaunches_before_legacy_fallback() -> None:
+    client = StdioMcpClient(
+        _server(
+            protocol_version="",
+            request_timeout_seconds=0.01,
+            environment={
+                "MCP_FAKE_SECRET": "private-value",
+                "MCP_DISCOVERY_DELAY": "0.05",
+            },
+        )
+    )
+    try:
+        with pytest.raises(McpTimeoutError):
+            client.start(timeout_seconds=0.01)
+        recovered = client.call_tool("lookup", {"query": "recovered"}, timeout_seconds=1)
+    finally:
+        client.close()
+
+    assert recovered.structured_content["results"][0]["title"] == "Result for recovered"
+
+
 def test_stdio_timeout_isolated_from_concurrent_request() -> None:
     client = StdioMcpClient(_server())
     completed: list[str] = []

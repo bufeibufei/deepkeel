@@ -51,6 +51,10 @@ for line in sys.stdin:
     request_id = request["id"]
     method = request.get("method")
     params = request.get("params") if isinstance(request.get("params"), dict) else {}
+    if method == "server/discover":
+        delay = float(os.getenv("MCP_DISCOVERY_DELAY", "0") or 0)
+        if delay > 0:
+            time.sleep(delay)
     if method == "initialize":
         result = {
             "protocolVersion": request.get("params", {}).get("protocolVersion"),

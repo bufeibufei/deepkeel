@@ -19,6 +19,7 @@ from deepkeel.runtime_sdk import (
     EvalCase,
     EvalExpectation,
     RuntimeRequest,
+    ToolResult,
 )
 from deepkeel.capability_manifest import version_satisfies
 from deepkeel.composition import HarnessRuntimeBuilder
@@ -162,6 +163,55 @@ class InventoryProvider:
         if on_text_delta and turn.content:
             on_text_delta(turn.content)
         return turn
+
+
+@dataclass
+class LightweightInventoryPack:
+    """A Pack that relies on an explicit Host grant without a full manifest."""
+
+    spec = CapabilityPackSpec(
+        package_id="example.lightweight-inventory",
+        declared_tools=("inventory.lookup",),
+    )
+
+    def install(self, context: CapabilityInstallContext) -> CapabilityContribution:
+        context.register_tool(
+            ToolSpec(
+                name="inventory.lookup",
+                read_only=True,
+                parameters_schema={
+                    "type": "object",
+                    "properties": {"item": {"type": "string"}},
+                    "required": ["item"],
+                },
+                runtime_policy={"required_scopes": ["inventory.read"]},
+            ),
+            lambda call, _context: ToolResult(
+                call=call,
+                status="succeeded",
+                summary="There are 12 pens in stock.",
+                data={"quantity": 12},
+            ),
+        )
+        return CapabilityContribution(
+            package_id=self.spec.package_id,
+            tools=("inventory.lookup",),
+        )
+
+
+def test_lightweight_pack_preserves_explicit_host_governance_grants() -> None:
+    runtime = HarnessRuntimeBuilder().add_capability_pack(LightweightInventoryPack()).build()
+
+    result = runtime.run(
+        RuntimeRequest(
+            question="How many pens are available?",
+            context_bundle={"governance_scopes": ["inventory.read"]},
+        ),
+        provider=InventoryProvider(),
+    )
+
+    assert result.status == "completed"
+    assert result.tool_results[0].status == "succeeded"
 
 
 def test_certification_covers_lifecycle_governance_and_behavior() -> None:

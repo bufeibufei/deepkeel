@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Relaunch stdio MCP servers before legacy negotiation when modern discovery
+  times out, preventing a reset transport from breaking the fallback request.
+- Preserve explicit trusted Host governance scopes for lightweight Capability
+  Packs that intentionally omit a manifest, while keeping manifest-declared
+  permissions authoritative for governed packages.
 
 ## 4.1.0 - 2026-08-18
 

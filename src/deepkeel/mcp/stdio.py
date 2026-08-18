@@ -93,6 +93,11 @@ class StdioMcpClient:
                     except (McpProtocolError, McpTimeoutError) as exc:
                         if not self._can_fallback_to_legacy(exc):
                             raise
+                        # A discovery timeout resets the stdio transport so a
+                        # late response cannot poison later requests. Relaunch
+                        # before negotiating the legacy protocol in that case.
+                        if self._process is None or self._process.poll() is not None:
+                            self._launch_locked()
                         self._start_legacy(
                             LEGACY_MCP_PROTOCOL_VERSION,
                             timeout_seconds=startup_timeout,
