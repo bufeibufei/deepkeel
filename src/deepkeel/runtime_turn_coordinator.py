@@ -13,7 +13,7 @@ from deepkeel.entrypoints import (
 )
 from deepkeel.events import AgentEventPersistenceError
 from deepkeel.failures import classify_runtime_failure
-from deepkeel.graph import create_harness_graph
+from deepkeel.execution_engine import TurnExecutionEngine, create_langgraph_execution_engine
 from deepkeel.guardrails import GuardrailAudit
 from deepkeel.hooks import HookAudit
 from deepkeel.langgraph_adapter import checkpointer_supports_async, compiler_checkpointer
@@ -70,7 +70,7 @@ class _TurnState:
 
 @dataclass(slots=True)
 class _GraphRuntime:
-    graph: Any
+    engine: TurnExecutionEngine
     model_gateway: Any
     tool_context: ToolExecutionContext
     turn_context: TurnExecutionContext
@@ -275,7 +275,7 @@ class RuntimeTurnCoordinator:
             model_health_store=self.runtime.model_health_store,
             context_compactor=getattr(self.runtime.context_window_manager, "compactor", None),
         )
-        graph = self._resolve_graph(state, gateway)
+        engine = self._resolve_execution_engine(state, gateway)
         tool_context = self._tool_context(state, gateway)
         system_prompt = _compose_entrypoint_prompt(
             self.runtime.system_prompt_factory(state.skill),
@@ -292,12 +292,12 @@ class RuntimeTurnCoordinator:
             guardrail_runner=self.runtime.guardrail_runner,
             entry_tool_skill_activator=self.runtime.entry_tool_skill_activator,
         )
-        return _GraphRuntime(graph, gateway, tool_context, turn_context)
+        return _GraphRuntime(engine, gateway, tool_context, turn_context)
 
-    def _resolve_graph(self, state: _TurnState, gateway: Any) -> Any:
+    def _resolve_execution_engine(self, state: _TurnState, gateway: Any) -> TurnExecutionEngine:
         if self.runtime.reuse_compiled_graph:
-            return self.runtime._shared_compiled_graph()
-        return create_harness_graph(
+            return self.runtime._shared_execution_engine()
+        return create_langgraph_execution_engine(
             model=gateway,
             tool_executor=self.runtime.tool_executor,
             tool_registry=self.runtime.tool_registry,
@@ -358,7 +358,7 @@ class RuntimeTurnCoordinator:
         )
         try:
             outcome = await execute_graph_turn(
-                graph=graph_runtime.graph,
+                engine=graph_runtime.engine,
                 question=self.request.question,
                 run_id=state.identity.run_id,
                 graph_thread_id=state.identity.graph_thread_id,

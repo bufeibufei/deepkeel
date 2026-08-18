@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 from importlib import metadata
 import json
 import os
 import platform
 import re
 import sys
+from pathlib import Path
 from typing import Any, Sequence
 
 from deepkeel.public_api import PUBLIC_API_VERSION
@@ -71,6 +73,34 @@ def _parser() -> argparse.ArgumentParser:
             )
             command.add_argument("--target-version", type=int)
         command.set_defaults(handler=handler)
+
+    pack = commands.add_parser("pack", help="scaffold and validate Capability Packages")
+    pack_commands = pack.add_subparsers(dest="pack_command")
+
+    pack_init = pack_commands.add_parser("init", help="create a minimal package skeleton")
+    pack_init.add_argument("path")
+    pack_init.add_argument("--package-id", required=True)
+    pack_init.add_argument("--force", action="store_true")
+    pack_init.set_defaults(handler=_pack_init)
+
+    pack_inspect = pack_commands.add_parser("inspect", help="inspect a package manifest")
+    pack_inspect.add_argument("manifest")
+    pack_inspect.set_defaults(handler=_pack_inspect)
+
+    pack_validate = pack_commands.add_parser(
+        "validate",
+        help="validate a manifest and optionally its executable pack",
+    )
+    pack_validate.add_argument("manifest")
+    pack_validate.add_argument("--factory", help="Python reference in module:attribute form")
+    pack_validate.set_defaults(handler=_pack_validate)
+
+    pack_digest = pack_commands.add_parser(
+        "digest",
+        help="compute a deterministic SHA-256 digest for package source files",
+    )
+    pack_digest.add_argument("paths", nargs="+")
+    pack_digest.set_defaults(handler=_pack_digest)
     return parser
 
 
@@ -161,6 +191,131 @@ def _postgres_database(args: argparse.Namespace) -> Any:
             f"PostgreSQL DSN environment variable is not set: {variable}",
         )
     return PostgresDatabase(dsn, schema=args.schema)
+
+
+def _pack_init(args: argparse.Namespace) -> int:
+    from deepkeel.version import DEEPKEEL_CONTRACT_VERSION, DEEPKEEL_VERSION
+
+    destination = Path(args.path).resolve()
+    manifest_path = destination / "manifest.json"
+    package_path = destination / "package.py"
+    readme_path = destination / "README.md"
+    existing = [path for path in (manifest_path, package_path, readme_path) if path.exists()]
+    if existing and not args.force:
+        raise CliError(
+            "CAPABILITY_PACK_EXISTS",
+            "capability package files already exist; pass --force to replace them",
+        )
+    destination.mkdir(parents=True, exist_ok=True)
+    package_id = str(args.package_id).strip()
+    if not package_id:
+        raise CliError("CAPABILITY_PACKAGE_ID_REQUIRED", "--package-id must not be blank")
+    class_name = "".join(part.title() for part in re.split(r"[^A-Za-z0-9]+", package_id))
+    class_name = f"{class_name or 'Example'}Pack"
+    manifest = {
+        "schema_version": "harness-capability-manifest-v1",
+        "id": package_id,
+        "version": "0.1.0",
+        "core_contract": DEEPKEEL_CONTRACT_VERSION,
+        "core_version": f">={DEEPKEEL_VERSION},<5.0.0",
+        "entrypoint": f"package:{class_name}",
+        "skills": [],
+        "tools": [],
+        "artifact_types": [],
+        "permissions": [],
+    }
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    package_path.write_text(_pack_template(class_name, package_id), encoding="utf-8")
+    readme_path.write_text(
+        f"# {package_id}\n\nValidate with `deepkeel pack validate manifest.json "
+        f"--factory package:{class_name}`.\n",
+        encoding="utf-8",
+    )
+    _emit(
+        {
+            "ok": True,
+            "package_id": package_id,
+            "path": str(destination),
+            "files": ["manifest.json", "package.py", "README.md"],
+        }
+    )
+    return 0
+
+
+def _pack_inspect(args: argparse.Namespace) -> int:
+    from deepkeel.capability_manifest import load_capability_manifest
+
+    manifest = load_capability_manifest(args.manifest)
+    _emit({"ok": True, "manifest": manifest.model_dump(mode="json")})
+    return 0
+
+
+def _pack_validate(args: argparse.Namespace) -> int:
+    from deepkeel.capability_manifest import load_capability_manifest
+    from deepkeel.conformance import validate_capability_pack
+
+    manifest = load_capability_manifest(args.manifest)
+    if not args.factory:
+        _emit({"ok": True, "manifest": manifest.model_dump(mode="json")})
+        return 0
+    pack = _load_pack_factory(args.factory)
+    report = validate_capability_pack(pack, manifest=manifest)
+    _emit({"ok": report.passed, "report": report.model_dump(mode="json")})
+    return 0 if report.passed else 1
+
+
+def _pack_digest(args: argparse.Namespace) -> int:
+    from deepkeel.capability_trust import capability_source_digest
+
+    digest = capability_source_digest(*(Path(path) for path in args.paths))
+    _emit({"ok": True, "sha256": digest, "files": sorted(args.paths)})
+    return 0
+
+
+def _load_pack_factory(reference: str) -> Any:
+    module_name, separator, attribute_name = str(reference).partition(":")
+    if not separator or not module_name or not attribute_name:
+        raise CliError(
+            "CAPABILITY_FACTORY_INVALID",
+            "--factory must use module:attribute syntax",
+        )
+    module = importlib.import_module(module_name)
+    value = getattr(module, attribute_name)
+    if isinstance(value, type):
+        return value()
+    if hasattr(value, "spec"):
+        return value
+    if callable(value):
+        return value()
+    raise CliError("CAPABILITY_FACTORY_INVALID", "factory did not return a capability pack")
+
+
+def _pack_template(class_name: str, package_id: str) -> str:
+    return f'''from dataclasses import dataclass
+
+from deepkeel.extension_sdk import (
+    CapabilityContribution,
+    CapabilityInstallContext,
+    CapabilityPackSpec,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class {class_name}:
+    spec = CapabilityPackSpec(
+        package_id={package_id!r},
+        package_version="0.1.0",
+    )
+
+    def install(
+        self,
+        context: CapabilityInstallContext,
+    ) -> CapabilityContribution:
+        return CapabilityContribution(package_id=self.spec.package_id)
+'''
 
 
 def _status_payload(status: Any) -> dict[str, Any]:

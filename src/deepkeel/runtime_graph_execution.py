@@ -6,6 +6,7 @@ from uuid import uuid4
 
 from deepkeel.context import build_initial_messages
 from deepkeel.events import AgentEventPersistenceError
+from deepkeel.execution_engine import TurnExecutionEngine
 from deepkeel.persistence import (
     checkpoint_from_durable_state,
     checkpoint_from_runtime,
@@ -28,7 +29,7 @@ class GraphExecutionOutcome:
 
 async def execute_graph_turn(
     *,
-    graph: Any,
+    engine: TurnExecutionEngine,
     question: str,
     run_id: str,
     graph_thread_id: str,
@@ -53,7 +54,7 @@ async def execute_graph_turn(
     if short_context.get("recover_interrupted"):
         if has_graph_checkpoint(graph_thread_id):
             state = dict(
-                await graph.arecover(
+                await engine.arecover(
                     graph_thread_id,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -78,7 +79,7 @@ async def execute_graph_turn(
                 input_parts=input_parts,
             )
             state = dict(
-                await graph.ainvoke(
+                await engine.ainvoke(
                     context,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -90,7 +91,7 @@ async def execute_graph_turn(
         resume_payload = resume_payload_from_context(short_context)
         try:
             state = dict(
-                await graph.aresume(
+                await engine.aresume(
                     graph_thread_id,
                     resume_payload,
                     tool_context=tool_context,
@@ -180,7 +181,7 @@ async def execute_graph_turn(
                 ]
             active_graph_thread_id = recovered_thread_id
             state = dict(
-                await graph.ainvoke(
+                await engine.ainvoke(
                     recovered,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -208,7 +209,7 @@ async def execute_graph_turn(
             pending_tool_calls=precondition_calls,
         )
         state = dict(
-            await graph.ainvoke(
+            await engine.ainvoke(
                 context,
                 tool_context=tool_context,
                 event_sink=emit,

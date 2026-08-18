@@ -10,8 +10,13 @@ from typing import Iterable
 
 CRITICAL_COVERAGE = {
     "src/deepkeel/async_ports.py": 60.0,
+    "src/deepkeel/capability_trust.py": 95.0,
+    "src/deepkeel/contrib/a2a/client.py": 70.0,
     "src/deepkeel/event_journal.py": 90.0,
+    "src/deepkeel/event_projection.py": 100.0,
     "src/deepkeel/events.py": 95.0,
+    "src/deepkeel/execution_engine.py": 95.0,
+    "src/deepkeel/graph_workflow.py": 68.0,
     "src/deepkeel/leases.py": 80.0,
     "src/deepkeel/mcp/contracts.py": 80.0,
     "src/deepkeel/mcp/provider.py": 70.0,
@@ -19,6 +24,7 @@ CRITICAL_COVERAGE = {
     "src/deepkeel/model_invocations.py": 85.0,
     "src/deepkeel/model_step_execution.py": 80.0,
     "src/deepkeel/operations.py": 85.0,
+    "src/deepkeel/planning/runtime.py": 75.0,
     "src/deepkeel/production.py": 90.0,
     "src/deepkeel/runtime.py": 70.0,
     "src/deepkeel/runtime_events.py": 75.0,
@@ -26,7 +32,11 @@ CRITICAL_COVERAGE = {
     "src/deepkeel/runtime_settlement.py": 90.0,
     "src/deepkeel/runtime_turn_execution.py": 85.0,
     "src/deepkeel/scope.py": 90.0,
+    "src/deepkeel/subagents/bounded_coordinator.py": 50.0,
+    "src/deepkeel/subagents/execution_support.py": 54.0,
+    "src/deepkeel/subagents/output_validation.py": 56.0,
     "src/deepkeel/tool_execution.py": 80.0,
+    "src/deepkeel/tool_execution_support.py": 60.0,
     "src/deepkeel/tool_executor.py": 70.0,
 }
 

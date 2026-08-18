@@ -6,10 +6,11 @@ from threading import Lock
 from typing import Any, Callable
 
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
+from deepkeel.event_projection import project_telemetry_record
 from deepkeel.runtime_api import RuntimeStreamEvent
 from deepkeel.scope import scoped_adapter_operation
 from deepkeel.scope import RuntimeScope
-from deepkeel.telemetry import TelemetryPort, TelemetryRecord
+from deepkeel.telemetry import TelemetryPort
 from deepkeel.type_narrowing import as_dict
 
 
@@ -99,7 +100,7 @@ class RuntimeEventEmitter:
             if not projected.get("ephemeral"):
                 self.events.append(projected)
         if self.async_event_journal is None:
-            self._record_telemetry(projected)
+            self._record_telemetry(envelope)
         if self.async_event_journal is not None:
             self._schedule_async_delivery(
                 envelope if not envelope.ephemeral else None,
@@ -123,29 +124,18 @@ class RuntimeEventEmitter:
             await self._acheck_cancelled(force=True)
         self._raise_async_delivery_error()
 
-    def _record_telemetry(self, projected: dict[str, Any]) -> None:
+    def _record_telemetry(self, envelope: RuntimeStreamEvent) -> None:
         try:
-            self.telemetry.record(
-                TelemetryRecord.from_runtime_event(
-                    projected,
-                    run_id=self.run_id,
-                    thread_id=self.thread_id,
-                    turn_id=self.turn_id,
-                )
-            )
+            self.telemetry.record(project_telemetry_record(envelope))
         except Exception as exc:
             self.record_telemetry_error(exc)
 
     async def _arecord_telemetry(self, projected: dict[str, Any]) -> None:
         try:
+            envelope = RuntimeStreamEvent.model_validate(projected)
             await asyncio.to_thread(
                 self.telemetry.record,
-                TelemetryRecord.from_runtime_event(
-                    projected,
-                    run_id=self.run_id,
-                    thread_id=self.thread_id,
-                    turn_id=self.turn_id,
-                ),
+                project_telemetry_record(envelope),
             )
         except Exception as exc:
             self.record_telemetry_error(exc)

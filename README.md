@@ -37,12 +37,14 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Capability Packages](docs/capability-package-v1.md)
 - [Context management](docs/context-management.md)
 - [Security and trust](docs/security-and-trust.md)
+- [Capability Package trust](docs/capability-trust.md)
 - [MCP and A2A interoperability](docs/interoperability.md)
 - [Durable execution](docs/durable-execution.md)
 - [Execution planning](docs/execution-planning.md)
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
+- [Downstream Host compatibility](docs/host-compatibility.md)
 - [PostgreSQL adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
 - [Migrating to 4.1](docs/migrating-to-4.1.md)
@@ -55,6 +57,8 @@ tools and artifacts. The [durable approval example](examples/durable_approval)
 demonstrates suspension and resume. The
 [production worker](examples/production_worker) composes the production profile,
 packaged PostgreSQL ports, migrations and optional OpenTelemetry export.
+The [reference Host](examples/reference_host) adds HTTP, SSE, run inspection and
+cancellation while keeping those product concerns outside Core.
 
 Production deployments should follow
 [`docs/production-readiness.md`](docs/production-readiness.md), replace every

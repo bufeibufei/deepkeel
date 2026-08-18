@@ -1,5 +1,11 @@
 # API stability
 
+`RuntimeResultSummary` and `RuntimeResult.to_summary()` are additive v4.1
+projections. The full `RuntimeResult` remains canonical for recovery and
+diagnostics, so existing Hosts do not need to migrate. New product read paths
+should prefer the summary projection and fetch traces or checkpoints from their
+dedicated operational interfaces only when needed.
+
 Stable and candidate releases are installable from immutable Git tags and
 GitHub release artifacts. PyPI publication is enabled only after this
 repository's Trusted Publisher has been configured.

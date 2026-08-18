@@ -36,9 +36,17 @@ The entrypoint selects a scoped view of the same compiled graph; it does not
 build a second runtime. Internal SubAgents remain bounded child tasks and may
 only narrow their parent's effective scope.
 
-LangGraph is an internal execution adapter for graph state and checkpoint-aware
-control flow. DeepKeel's public contracts do not expose LangGraph types, so a
-Host or Capability Package is not coupled to graph construction details.
+LangGraph is the built-in execution adapter for graph state and checkpoint-aware
+control flow. The turn coordinator talks to the internal `TurnExecutionEngine`
+contract; `LangGraphExecutionEngine` owns invoke, resume and recovery mapping.
+DeepKeel's public contracts do not expose LangGraph types, so a Host or
+Capability Package is not coupled to graph construction details.
+
+The canonical `RuntimeEventEnvelope` is the event fact consumed by durability,
+streaming and observability. Telemetry and compact trace rows are projections
+of that envelope rather than independently generated records. `RuntimeResult`
+retains full recovery and diagnostics for compatibility, while
+`RuntimeResult.to_summary()` returns the smaller product-facing result shape.
 
 The integration layers are `runtime_sdk`, `extension_sdk`, `adapter_sdk`,
 `memory_sdk`, `mcp_sdk`, `orchestration_sdk`, and experimental `a2a_sdk`.

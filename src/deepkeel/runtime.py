@@ -43,11 +43,8 @@ from deepkeel.control import NoopRunControl, RunControl
 from deepkeel.event_journal import RuntimeEventJournal
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
 from deepkeel.failures import RuntimeFailure, classify_runtime_failure
-from deepkeel.graph import (
-    GraphDurability,
-    HarnessGraph,
-    create_harness_graph,
-)
+from deepkeel.graph import GraphDurability
+from deepkeel.execution_engine import TurnExecutionEngine, create_langgraph_execution_engine
 from deepkeel.hooks import HookAudit, HookRunner
 from deepkeel.guardrails import GuardrailRunner
 from deepkeel.langgraph_adapter import (
@@ -279,7 +276,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
             )
         if self.planning_enabled:
             install_execution_planning(self.tool_registry, self.tool_executor)
-        self._compiled_graph: HarnessGraph | None = None
+        self._compiled_engine: TurnExecutionEngine | None = None
         self._graph_compile_count = 0
         self._graph_compile_lock = Lock()
         self.tool_executor.policy_engine = self.policy_engine
@@ -311,14 +308,14 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
     def _hook_audit_payload(audit: HookAudit) -> dict[str, Any]:
         return hook_audit_dict(audit)
 
-    def _shared_compiled_graph(self) -> HarnessGraph:
-        graph = self._compiled_graph
-        if graph is not None:
-            return graph
+    def _shared_execution_engine(self) -> TurnExecutionEngine:
+        engine = self._compiled_engine
+        if engine is not None:
+            return engine
         with self._graph_compile_lock:
-            graph = self._compiled_graph
-            if graph is None:
-                graph = create_harness_graph(
+            engine = self._compiled_engine
+            if engine is None:
+                engine = create_langgraph_execution_engine(
                     tool_executor=self.tool_executor,
                     tool_registry=self.tool_registry,
                     max_steps=self.max_steps,
@@ -328,9 +325,9 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     run_control=self.run_control,
                     durability=self.graph_durability,
                 )
-                self._compiled_graph = graph
+                self._compiled_engine = engine
                 self._graph_compile_count += 1
-        return graph
+        return engine
 
     def close(self) -> None:
         self.capability_catalog.close()

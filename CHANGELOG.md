@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Add an internal execution-engine seam around LangGraph, a compact
+  `RuntimeResultSummary`, and typed event-to-telemetry projections without
+  removing the v4 RuntimeResult or event contracts.
+- Add Capability Pack scaffolding and validation CLI commands, an explicit
+  in-process versus isolated package trust policy, a runnable HTTP/SSE reference
+  Host, and a reusable downstream Host compatibility workflow.
 - Relaunch stdio MCP servers before legacy negotiation when modern discovery
   times out, preventing a reset transport from breaking the fallback request.
 - Preserve explicit trusted Host governance scopes for lightweight Capability

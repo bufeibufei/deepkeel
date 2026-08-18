@@ -1,0 +1,81 @@
+name: Downstream Host Compatibility
+
+on:
+  workflow_call:
+    inputs:
+      host_repository:
+        description: owner/repository of the downstream Host
+        required: true
+        type: string
+      host_ref:
+        description: downstream Host ref
+        required: false
+        default: main
+        type: string
+      python_version:
+        required: false
+        default: "3.12"
+        type: string
+      host_install_command:
+        required: false
+        default: uv sync --frozen
+        type: string
+      host_test_command:
+        description: downstream contract test command
+        required: true
+        type: string
+  workflow_dispatch:
+    inputs:
+      host_repository:
+        description: owner/repository of the downstream Host
+        required: true
+        type: string
+      host_ref:
+        required: false
+        default: main
+        type: string
+      python_version:
+        required: false
+        default: "3.12"
+        type: string
+      host_install_command:
+        required: false
+        default: uv sync --frozen
+        type: string
+      host_test_command:
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  downstream-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out DeepKeel candidate
+        uses: actions/checkout@v4
+        with:
+          path: deepkeel
+      - name: Check out downstream Host
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.host_repository }}
+          ref: ${{ inputs.host_ref }}
+          path: host
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: ${{ inputs.python_version }}
+          enable-cache: true
+      - name: Install Host dependencies
+        working-directory: host
+        run: ${{ inputs.host_install_command }}
+      - name: Install DeepKeel candidate over the Host lock
+        working-directory: host
+        run: uv pip install --python .venv ../deepkeel
+      - name: Run downstream compatibility contracts
+        working-directory: host
+        env:
+          DEEPKEEL_HOST_COMPATIBILITY: "1"
+        run: ${{ inputs.host_test_command }}

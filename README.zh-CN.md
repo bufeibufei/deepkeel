@@ -29,12 +29,14 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 - [Capability Package](docs/capability-package-v1.md)
 - [上下文管理](docs/context-management.md)
 - [安全与信任边界](docs/security-and-trust.md)
+- [Capability Package 信任模型](docs/capability-trust.md)
 - [MCP 与 A2A 互操作](docs/interoperability.md)
 - [持久化执行](docs/durable-execution.md)
 - [执行计划](docs/execution-planning.md)
 - [模型 Provider](docs/model-provider.md)
 - [可观测性](docs/observability.md)
 - [生产就绪](docs/production-readiness.md)
+- [下游 Host 兼容门禁](docs/host-compatibility.md)
 - [PostgreSQL 参考适配](docs/postgresql-reference.md)
 - [API 稳定性](docs/api-stability.md)
 - [迁移到 4.1](docs/migrating-to-4.1.md)
@@ -46,6 +48,8 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 [durable_approval](examples/durable_approval) 展示中断、人工确认与恢复；
 [production_worker](examples/production_worker) 展示生产 Profile、PostgreSQL
 端口、迁移与可选 OpenTelemetry 导出的完整装配。
+[reference_host](examples/reference_host) 展示 HTTP、SSE、运行查询和取消接口，
+同时保持这些产品职责位于 Core 之外。
 
 ## 架构边界
 
