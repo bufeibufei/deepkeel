@@ -47,6 +47,22 @@ question, argument, content, result and token fields and drops oversized string
 values. These metrics are operational signals, not a substitute for the
 authoritative event journal or runtime state store.
 
+Model spans follow the OpenTelemetry GenAI semantic attribute vocabulary for
+provider, requested model, response model, operation name, token usage, finish
+reason, and error type. DeepKeel keeps its own stable `deepkeel.*` attributes in
+parallel so dashboards do not depend on an experimental semantic-convention
+revision. Prompt and completion bodies are not exported by default.
+
 Use `CompositeTelemetry` when PostgreSQL remains the authoritative diagnostic
 trace and OpenTelemetry is an external projection. Export failure must not
 change run semantics; alert on exporter health independently.
+
+## Online evaluation
+
+`OnlineEvalPort` receives a deterministic, privacy-bounded sample only after a
+run settles. `OnlineEvalPolicy` controls status filters, sampling rate, and
+whether answer content is omitted, hashed, or included. The reference
+`OnlineEvalPipeline` is in-process and intended for development; production
+Hosts should enqueue samples durably and evaluate them outside the request
+path. Evaluation failures are telemetry signals and never rewrite the
+authoritative `RuntimeResult`.

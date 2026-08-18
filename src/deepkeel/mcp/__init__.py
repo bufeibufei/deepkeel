@@ -1,8 +1,10 @@
 from deepkeel.mcp.contracts import (
     McpCallResult,
     McpClient,
+    McpInputRequest,
     McpRemoteTool,
     McpServerSpec,
+    McpTask,
 )
 from deepkeel.mcp.provider import (
     McpClientPool,
@@ -11,7 +13,11 @@ from deepkeel.mcp.provider import (
     McpToolProvider,
 )
 from deepkeel.mcp.protocol import (
+    MCP_PROTOCOL_VERSION,
+    MCP_TASKS_EXTENSION,
+    SUPPORTED_MCP_PROTOCOL_VERSIONS,
     McpProtocolError,
+    McpRemoteError,
     McpTimeoutError,
     McpTransportError,
 )
@@ -24,14 +30,20 @@ __all__ = [
     "McpCallResult",
     "McpClient",
     "McpClientPool",
+    "McpInputRequest",
     "McpNormalizedResult",
     "McpProtocolError",
+    "McpRemoteError",
     "McpRemoteTool",
     "McpServerSpec",
+    "McpTask",
     "McpTimeoutError",
     "McpToolBinding",
     "McpToolProvider",
     "McpTransportError",
+    "MCP_PROTOCOL_VERSION",
+    "MCP_TASKS_EXTENSION",
+    "SUPPORTED_MCP_PROTOCOL_VERSIONS",
     "StdioMcpClient",
     "StreamableHttpMcpClient",
 ]

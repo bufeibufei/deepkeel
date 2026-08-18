@@ -27,6 +27,7 @@ def _server(**updates) -> McpServerSpec:
         "environment": {"MCP_FAKE_SECRET": "private-value"},
         "startup_timeout_seconds": 5,
         "request_timeout_seconds": 2,
+        "protocol_version": "2025-03-26",
     }
     values.update(updates)
     return McpServerSpec(**values)

@@ -8,7 +8,13 @@ from deepkeel.adapter_sdk import (
     HarnessRuntimeBuilder,
     ProductionConfigurationError,
     RuntimePorts,
+    GuardrailRunner,
+    InMemoryOnlineEvalStore,
+    LocalWorkspacePort,
+    NoopSandboxPort,
+    OnlineEvalPipeline,
 )
+from deepkeel.guardrails import GuardrailDecision, GuardrailSpec, GuardrailStage
 from deepkeel.extension_sdk import AsyncToolExecutionStoreAdapter
 from deepkeel.state_store import InMemoryRuntimeStateStore
 from deepkeel.tools import InMemoryToolExecutionStore
@@ -164,3 +170,39 @@ def test_production_rejects_adapter_that_disclaims_process_sharing() -> None:
         and issue.port == "event_journal"
         for issue in report.errors
     )
+
+
+def test_production_rejects_explicit_noop_sandbox() -> None:
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(sandbox_port=NoopSandboxPort())
+    ).production_readiness()
+
+    assert any(
+        issue.code == "SANDBOX_NOT_ENFORCED" and issue.port == "sandbox_port"
+        for issue in report.errors
+    )
+
+
+def test_production_warns_for_process_local_optional_adapters(tmp_path) -> None:
+    runner = GuardrailRunner()
+    runner.register(
+        GuardrailSpec(
+            id="input-policy",
+            stage=GuardrailStage.INPUT,
+            handler=lambda _request: GuardrailDecision(),
+        )
+    )
+    report = HarnessRuntimeBuilder().with_ports(
+        _production_ports(
+            guardrail_runner=runner,
+            workspace_port=LocalWorkspacePort(tmp_path),
+            online_eval_port=OnlineEvalPipeline(store=InMemoryOnlineEvalStore()),
+        )
+    ).production_readiness()
+
+    assert report.ready is True
+    assert {issue.code for issue in report.warnings} >= {
+        "PROCESS_LOCAL_GUARDRAIL_REPLAY",
+        "PROCESS_LOCAL_ONLINE_EVAL",
+        "PROCESS_LOCAL_WORKSPACE",
+    }

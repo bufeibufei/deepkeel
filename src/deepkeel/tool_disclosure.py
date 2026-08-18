@@ -59,9 +59,21 @@ class ToolView:
 
 
 class ToolDiscoveryPort(Protocol):
-    """Host-replaceable semantic or hybrid ranking boundary."""
+    """Host-replaceable broad-recall boundary."""
 
     def discover(
+        self,
+        *,
+        query: str,
+        candidates: tuple[ToolDescriptor, ...],
+        limit: int,
+    ) -> tuple[ToolDescriptor, ...]: ...
+
+
+class ToolRerankerPort(Protocol):
+    """Optional second-stage ranker applied only to permission-filtered candidates."""
+
+    def rerank(
         self,
         *,
         query: str,
@@ -100,7 +112,28 @@ class LexicalToolDiscovery:
             if score > 0:
                 ranked.append((score, descriptor.name, descriptor))
         ranked.sort(key=lambda item: (-item[0], item[1]))
-        return tuple(item[2] for item in ranked[: max(1, min(int(limit), 5))])
+        return tuple(item[2] for item in ranked[: max(1, min(int(limit), 20))])
+
+
+class LexicalToolReranker:
+    """Deterministic final-stage fallback for portable deployments."""
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: tuple[ToolDescriptor, ...],
+        limit: int,
+    ) -> tuple[ToolDescriptor, ...]:
+        ranked = LexicalToolDiscovery().discover(
+            query=query,
+            candidates=candidates,
+            limit=max(1, min(int(limit), 5)),
+        )
+        selected = {item.name for item in ranked}
+        ordered = list(ranked)
+        ordered.extend(item for item in candidates if item.name not in selected)
+        return tuple(ordered[: max(1, min(int(limit), 5))])
 
 
 def resolve_tool_view(
@@ -203,6 +236,7 @@ def install_tool_discovery(
     executor: ToolExecutor,
     *,
     discovery_port: ToolDiscoveryPort | None = None,
+    reranker_port: ToolRerankerPort | None = None,
 ) -> None:
     """Install the portable discovery entrypoint without coupling it to a product pack."""
 
@@ -221,6 +255,7 @@ def install_tool_discovery(
             limit=limit,
             allowed_names=_context_allowed_names(registry, context),
             discovery_port=discovery_port,
+            reranker_port=reranker_port,
         )
         names = [item.name for item in descriptors]
         summary = (
@@ -274,8 +309,10 @@ def discover_tools(
     limit: int = 5,
     allowed_names: set[str] | None = None,
     discovery_port: ToolDiscoveryPort | None = None,
+    reranker_port: ToolRerankerPort | None = None,
+    recall_limit: int = 20,
 ) -> tuple[ToolDescriptor, ...]:
-    """Rank discoverable tools through a host adapter or the lexical fallback."""
+    """Recall broadly, then rerank a bounded permission-filtered tool view."""
 
     candidates: list[ToolDescriptor] = []
     for spec in registry.list_tools():
@@ -289,19 +326,32 @@ def discover_tools(
             continue
         candidates.append(descriptor)
     port = discovery_port or LexicalToolDiscovery()
-    discovered = port.discover(
+    recalled = port.discover(
         query=query,
         candidates=tuple(candidates),
-        limit=max(1, min(int(limit), 5)),
+        limit=max(1, min(max(int(recall_limit), int(limit)), 20)),
     )
     candidate_names = {item.name for item in candidates}
-    unique: dict[str, ToolDescriptor] = {}
-    for descriptor in discovered:
-        if descriptor.name in candidate_names and descriptor.name not in unique:
-            unique[descriptor.name] = descriptor
-        if len(unique) >= 5:
+    recalled_unique: dict[str, ToolDescriptor] = {}
+    for descriptor in recalled:
+        if descriptor.name in candidate_names and descriptor.name not in recalled_unique:
+            recalled_unique[descriptor.name] = descriptor
+        if len(recalled_unique) >= 20:
             break
-    return tuple(unique.values())
+    reranker = reranker_port or LexicalToolReranker()
+    reranked = reranker.rerank(
+        query=query,
+        candidates=tuple(recalled_unique.values()),
+        limit=max(1, min(int(limit), 5)),
+    )
+    allowed_recalled = set(recalled_unique)
+    final: dict[str, ToolDescriptor] = {}
+    for descriptor in reranked:
+        if descriptor.name in allowed_recalled and descriptor.name not in final:
+            final[descriptor.name] = descriptor
+        if len(final) >= max(1, min(int(limit), 5)):
+            break
+    return tuple(final.values())
 
 
 def _context_allowed_names(
@@ -332,9 +382,11 @@ def _search_tokens(value: str) -> set[str]:
 
 __all__ = [
     "LexicalToolDiscovery",
+    "LexicalToolReranker",
     "TOOL_DISCOVERY_NAME",
     "ToolDescriptor",
     "ToolDiscoveryPort",
+    "ToolRerankerPort",
     "ToolView",
     "discover_tools",
     "install_tool_discovery",

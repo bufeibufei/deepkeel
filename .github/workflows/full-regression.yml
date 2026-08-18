@@ -69,6 +69,7 @@ jobs:
           enable-cache: true
       - run: uv sync --frozen --extra test
       - run: uv build --clear
+      - run: uv run twine check dist/*
       - run: uv run python verification/verify_distributions.py dist
 
   postgres-reference:

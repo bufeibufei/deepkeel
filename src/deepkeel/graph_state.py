@@ -227,7 +227,7 @@ def _allowed_tool_names(
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
             names.remove("agent.delegate")
-        if names and _tool_discovery_available(state):
+        if names and _catalog_discovery_available(state, "runtime.discover_tools"):
             names.add("runtime.discover_tools")
         if plan_available and planning_policy.enabled:
             names.add(PLAN_TOOL_NAME)
@@ -247,8 +247,10 @@ def _allowed_tool_names(
         default_tools.update(skill_policy.required_tools)
         for group in skill_policy.required_tool_groups:
             default_tools.update(group)
-    if not _tool_discovery_available(state):
+    if not _catalog_discovery_available(state, "runtime.discover_tools"):
         default_tools.discard("runtime.discover_tools")
+    if not _catalog_discovery_available(state, "runtime.discover_skills"):
+        default_tools.discard("runtime.discover_skills")
     if plan_available and planning_policy.enabled:
         default_tools.add(PLAN_TOOL_NAME)
     else:
@@ -261,6 +263,10 @@ def _allowed_tool_names(
 
 
 def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
+    return _catalog_discovery_available(state, "runtime.discover_tools")
+
+
+def _catalog_discovery_available(state: Mapping[str, Any], tool_name: str) -> bool:
     metadata = as_dict(state.get("metadata"))
     try:
         limit = int(metadata.get("tool_discovery_attempt_limit") or 2)
@@ -271,7 +277,7 @@ def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
         1
         for result in as_list(state.get("tool_results"))
         if isinstance(result, Mapping)
-        and str(result.get("name") or result.get("tool_name") or "") == "runtime.discover_tools"
+        and str(result.get("name") or result.get("tool_name") or "") == tool_name
     )
     return attempts < limit
 
@@ -453,10 +459,28 @@ def _apply_tool_result(
     result: ToolResult,
     config: Mapping[str, Any],
 ) -> None:
-    if result.name == "runtime.discover_tools" and result.status == "succeeded":
+    if result.name in {"runtime.discover_tools", "runtime.discover_skills"} and result.status == "succeeded":
         metadata = current.setdefault("metadata", {})
-        metadata["tool_discovery_attempts"] = int(metadata.get("tool_discovery_attempts") or 0) + 1
+        attempt_key = (
+            "tool_discovery_attempts"
+            if result.name == "runtime.discover_tools"
+            else "skill_discovery_attempts"
+        )
+        metadata[attempt_key] = int(metadata.get(attempt_key) or 0) + 1
         discovered = result.data.get("discovered_names")
+        if result.name == "runtime.discover_skills":
+            discovered = result.data.get("discovered_tool_names")
+            skill_ids = result.data.get("discovered_skill_ids")
+            if isinstance(skill_ids, list):
+                existing_skills = {
+                    str(skill_id)
+                    for skill_id in metadata.get("discovered_skill_ids", [])
+                    if str(skill_id).strip()
+                }
+                existing_skills.update(
+                    str(skill_id) for skill_id in skill_ids if str(skill_id).strip()
+                )
+                metadata["discovered_skill_ids"] = sorted(existing_skills)
         if isinstance(discovered, list):
             existing = {
                 str(name) for name in metadata.get("discovered_tool_names", []) if str(name).strip()

@@ -160,6 +160,7 @@ def test_streamable_http_transport_negotiates_session_and_redacts_secrets() -> N
             url=url,
             allow_insecure_http=True,
             allow_private_network=True,
+            protocol_version="2025-03-26",
             secret_headers={"Authorization": "remote-search-token"},
             required_scopes=["search.read"],
         )
@@ -213,6 +214,7 @@ def test_streamable_http_transport_recovers_an_expired_session_once() -> None:
                     url=f"{url}?access_token=must-not-leak",
                     allow_insecure_http=True,
                     allow_private_network=True,
+                    protocol_version="2025-03-26",
                 )
             ]
         )
@@ -277,6 +279,7 @@ def test_streamable_http_enforces_request_and_response_size_limits() -> None:
                     url=url,
                     allow_insecure_http=True,
                     allow_private_network=True,
+                    protocol_version="2025-03-26",
                     max_request_bytes=32,
                 )
             ]
@@ -293,6 +296,7 @@ def test_streamable_http_enforces_request_and_response_size_limits() -> None:
                     url=url,
                     allow_insecure_http=True,
                     allow_private_network=True,
+                    protocol_version="2025-03-26",
                     max_response_bytes=32,
                 )
             ]

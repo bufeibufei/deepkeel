@@ -183,7 +183,7 @@ def resolve_capability_view(
     tool_names.update(
         name
         for name in installed_tools
-        if name in {"runtime.discover_tools", "runtime.create_plan"}
+        if name in {"runtime.discover_tools", "runtime.discover_skills", "runtime.create_plan"}
     )
     if spec is not None:
         skill_ids = _apply_allowlist("skills", spec.skill_allowlist, skill_ids, normalized_id)

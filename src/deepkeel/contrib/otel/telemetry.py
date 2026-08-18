@@ -45,6 +45,16 @@ class OpenTelemetryTelemetry:
             unit="{run}",
             description="Active DeepKeel runs observed by this exporter",
         )
+        self._gen_ai_duration = self._meter.create_histogram(
+            "gen_ai.client.operation.duration",
+            unit="s",
+            description="GenAI model operation latency",
+        )
+        self._gen_ai_token_usage = self._meter.create_histogram(
+            "gen_ai.client.token.usage",
+            unit="{token}",
+            description="GenAI input and output token usage",
+        )
         self._include_ephemeral = include_ephemeral
         self._include_user_id = include_user_id
         self._segments = RuntimeTraceSegments(self._tracer)
@@ -103,6 +113,20 @@ class OpenTelemetryTelemetry:
         duration_ms = _duration_ms(event.attributes)
         if duration_ms is not None:
             self._duration_histogram.record(duration_ms, metric_attributes)
+        if event.component == "model":
+            gen_ai_attributes = _gen_ai_metric_attributes(event)
+            if duration_ms is not None:
+                self._gen_ai_duration.record(duration_ms / 1000.0, gen_ai_attributes)
+            for token_type, key in (
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+            ):
+                value = event.attributes.get(key)
+                if isinstance(value, (int, float)) and value >= 0:
+                    self._gen_ai_token_usage.record(
+                        int(value),
+                        {**gen_ai_attributes, "gen_ai.token.type": token_type},
+                    )
 
 
 def _trace_api() -> Any:
@@ -160,7 +184,60 @@ def _span_attributes(
         normalized = _attribute_value(value)
         if normalized is not None:
             attributes[f"deepkeel.attr.{key}"] = normalized
+    attributes.update(_gen_ai_span_attributes(event))
     return {key: value for key, value in attributes.items() if value not in (None, "")}
+
+
+def _gen_ai_span_attributes(event: TelemetryRecord) -> dict[str, Any]:
+    component = str(event.component or "runtime")
+    attributes: dict[str, Any] = {}
+    if component == "model":
+        attributes["gen_ai.operation.name"] = "chat"
+        attributes["gen_ai.request.model"] = str(event.attributes.get("model_id") or "")
+        attributes["gen_ai.response.model"] = str(event.attributes.get("model_id") or "")
+        attributes["gen_ai.provider.name"] = str(event.attributes.get("provider_id") or "")
+        finish_reason = str(event.attributes.get("finish_reason") or "")
+        if finish_reason:
+            attributes["gen_ai.response.finish_reasons"] = (finish_reason,)
+        for source, target in (
+            ("input_tokens", "gen_ai.usage.input_tokens"),
+            ("output_tokens", "gen_ai.usage.output_tokens"),
+            ("reasoning_output_tokens", "gen_ai.usage.reasoning.output_tokens"),
+        ):
+            value = event.attributes.get(source)
+            if isinstance(value, (int, float)) and value >= 0:
+                attributes[target] = int(value)
+    elif component in {"tool", "mcp"}:
+        attributes["gen_ai.operation.name"] = "execute_tool"
+        attributes["gen_ai.tool.name"] = str(event.attributes.get("tool_name") or "")
+        attributes["gen_ai.tool.call.id"] = str(event.attributes.get("tool_call_id") or "")
+        attributes["gen_ai.tool.type"] = "extension"
+    elif component == "subagent":
+        attributes["gen_ai.operation.name"] = "invoke_agent"
+    elif component in {"agent", "run", "runtime", "workflow"}:
+        attributes["gen_ai.operation.name"] = (
+            "invoke_workflow" if component == "workflow" else "invoke_agent"
+        )
+        attributes["gen_ai.agent.name"] = "DeepKeel"
+        attributes["gen_ai.agent.id"] = str(event.attributes.get("skill_id") or "deepkeel")
+    return attributes
+
+
+def _gen_ai_metric_attributes(event: TelemetryRecord) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": str(event.attributes.get("model_id") or ""),
+            "gen_ai.provider.name": str(event.attributes.get("provider_id") or ""),
+            "error.type": (
+                str(event.attributes.get("error_type") or event.status or "")
+                if _is_error(event)
+                else ""
+            ),
+        }.items()
+        if value
+    }
 
 
 def _attribute_value(value: Any) -> Any:

@@ -44,6 +44,10 @@ class TelemetryRecord(BaseModel):
 
     @model_validator(mode="after")
     def populate_identity(self) -> "TelemetryRecord":
+        if self.component == "runtime":
+            inferred_component = _event_component(self.event_name)
+            if inferred_component != "runtime":
+                self.component = inferred_component
         if not self.telemetry_id:
             identity = self.event_id or (
                 f"{self.run_id}:{self.turn_id}:{self.sequence}:"
@@ -95,6 +99,7 @@ class TelemetryRecord(BaseModel):
             **_safe_runtime_attributes(payload),
         }
         attributes.update(_nested_tool_attributes(payload))
+        attributes.update(_nested_model_attributes(payload))
         return cls(
             telemetry_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
             event_id=event_id,
@@ -247,6 +252,8 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "budget_remaining",
     "checkpoint_source",
     "duration_ms",
+    "latency_ms",
+    "first_token_latency_ms",
     "deployment_commit",
     "error_code",
     "error_type",
@@ -255,6 +262,9 @@ _SAFE_RUNTIME_ATTRIBUTE_KEYS = {
     "finish_reason",
     "model_id",
     "model_role",
+    "input_tokens",
+    "output_tokens",
+    "reasoning_output_tokens",
     "invocation_id",
     "operation_id",
     "parent_operation_id",
@@ -299,6 +309,26 @@ def _nested_tool_attributes(payload: dict[str, Any]) -> dict[str, Any]:
     if isinstance(arguments, dict):
         encoded = json.dumps(arguments, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
         projected["argument_digest"] = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+    runtime_metrics = as_dict(tool.get("runtime_metrics"))
+    latency = runtime_metrics.get("latency_ms")
+    if isinstance(latency, (int, float)) and latency >= 0:
+        projected["duration_ms"] = latency
+    return projected
+
+
+def _nested_model_attributes(payload: dict[str, Any]) -> dict[str, Any]:
+    usage = as_dict(payload.get("usage"))
+    projected: dict[str, Any] = {}
+    for key in ("input_tokens", "output_tokens", "reasoning_output_tokens"):
+        value = usage.get(key)
+        if isinstance(value, (int, float)) and value >= 0:
+            projected[key] = int(value)
+    latency = payload.get("latency_ms")
+    if isinstance(latency, (int, float)) and latency >= 0:
+        projected["duration_ms"] = latency
+    first_token = payload.get("first_token_latency_ms")
+    if isinstance(first_token, (int, float)) and first_token >= 0:
+        projected["first_token_latency_ms"] = first_token
     return projected
 
 
@@ -332,7 +362,26 @@ def _event_occurred_at(value: Any) -> datetime:
 
 def _event_component(event_name: str) -> str:
     prefix = str(event_name or "runtime").split(".", 1)[0]
-    return prefix if prefix in {"agent", "answer", "budget", "model", "run", "tool"} else "runtime"
+    return (
+        prefix
+        if prefix
+        in {
+            "agent",
+            "answer",
+            "budget",
+            "context",
+            "eval",
+            "guardrail",
+            "mcp",
+            "model",
+            "run",
+            "skill",
+            "subagent",
+            "tool",
+            "workflow",
+        }
+        else "runtime"
+    )
 
 
 def _trace_matches(event: TelemetryRecord, query: TraceQuery) -> bool:

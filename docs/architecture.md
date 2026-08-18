@@ -4,7 +4,8 @@ DeepKeel is a product-neutral runtime kernel. A Host owns transport, identity,
 durable databases, model credentials, product policy and user experience.
 Capability Packages contribute versioned Skills, tools, artifacts, handoffs,
 context contributors, MCP servers and SubAgents through the public Extension
-SDK.
+SDK. Optional MCP and A2A adapters remain at the interoperability edge and are
+projected into the same governed ToolProvider or SubAgent contracts.
 
 ```text
 Host application
@@ -39,8 +40,8 @@ LangGraph is an internal execution adapter for graph state and checkpoint-aware
 control flow. DeepKeel's public contracts do not expose LangGraph types, so a
 Host or Capability Package is not coupled to graph construction details.
 
-The stable integration layers are `runtime_sdk`, `extension_sdk`,
-`adapter_sdk`, `memory_sdk`, `mcp_sdk`, and `orchestration_sdk`.
+The integration layers are `runtime_sdk`, `extension_sdk`, `adapter_sdk`,
+`memory_sdk`, `mcp_sdk`, `orchestration_sdk`, and experimental `a2a_sdk`.
 Internal modules may change without compatibility guarantees.
 
 Each public symbol has exactly one owner:
@@ -50,7 +51,8 @@ Each public symbol has exactly one owner:
 - `adapter_sdk`: Host infrastructure ports, conformance suites, and composition;
 - `memory_sdk`: product-neutral memory records and memory ports;
 - `mcp_sdk`: governed MCP server and transport integration;
-- `orchestration_sdk`: bounded execution-plan, SubAgent, and deliberation contracts.
+- `orchestration_sdk`: bounded execution-plan, SubAgent, and deliberation contracts;
+- `a2a_sdk`: experimental A2A 1.0 remote-specialist interoperability.
 
 `RuntimePorts` remains a flat compatibility contract, while infrastructure
 authors can compose it from four cohesive bundles:

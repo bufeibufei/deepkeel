@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
 from typing import Any
 from uuid import uuid4
 
@@ -46,6 +45,10 @@ from deepkeel.graph_workflow import (
 )
 from deepkeel.hooks import HookAction, HookPoint
 from deepkeel.model import ModelGateway, ModelTurn, model_tools_from_registry
+from deepkeel.model_execution_safety import (
+    ModelGuardrailCoordinator,
+    ModelInvocationTelemetry,
+)
 from deepkeel.model_failures import ModelToolContractError
 from deepkeel.planning.runtime import complete_plan_for_answer
 from deepkeel.skill_activation import EntryToolActivationRequest
@@ -55,16 +58,6 @@ from deepkeel.tool_registry import ToolRegistry
 from deepkeel.turn_context import TurnExecutionContext
 from deepkeel.type_narrowing import as_dict
 from deepkeel.workflow_policy import evaluate_workflow_completion
-
-
-@dataclass(slots=True)
-class _InvocationTelemetry:
-    started_at: float = field(default_factory=time.perf_counter)
-    first_delta_at: float | None = None
-    delta_index: int = 0
-    delta_chars: int = 0
-    route_payload: dict[str, Any] = field(default_factory=dict)
-    routed_attempts: set[tuple[int, str]] = field(default_factory=set)
 
 
 class ModelNodeExecution:
@@ -94,6 +87,11 @@ class ModelNodeExecution:
         )
         owner.ensure_active(normalized, config, force=True)
         self.current = _copy_state(normalized)
+        self.guardrails = ModelGuardrailCoordinator(
+            self.current,
+            self.config,
+            self.turn_context,
+        )
         self.skill_policy = SkillPolicy.from_snapshot(self.current.get("skill_activation"))
         self.workflow_is_finalizing = False
         self.tool_view: ToolView | None = None
@@ -107,8 +105,19 @@ class ModelNodeExecution:
         terminal = await self._before_model_hook()
         if terminal is not None:
             return terminal
+        guarded = await self.guardrails.guard_input(self.prompt, self.tools)
+        self.prompt, self.tools = guarded.prompt, guarded.tools
+        if guarded.terminal is not None:
+            return guarded.terminal
         turn, telemetry = await self._invoke_model()
         await self._after_model_hook(turn)
+        turn, terminal = await self.guardrails.guard_output(turn)
+        if terminal is not None:
+            return terminal
+        self.guardrails.release_buffered_stream(
+            turn,
+            buffered=telemetry.guardrail_buffered,
+        )
         model_metrics, tool_calls = self._record_model_turn(turn, telemetry)
         tool_calls, terminal = self._activate_entry_tool_skill(tool_calls)
         if terminal is not None:
@@ -278,14 +287,22 @@ class ModelNodeExecution:
         )
         return self.current
 
-    async def _invoke_model(self) -> tuple[ModelTurn, _InvocationTelemetry]:
-        telemetry = _InvocationTelemetry()
+    async def _invoke_model(self) -> tuple[ModelTurn, ModelInvocationTelemetry]:
+        telemetry = ModelInvocationTelemetry(
+            guardrail_buffered=self.guardrails.buffers_model_output
+        )
 
         def on_route(payload: dict[str, Any]) -> None:
             self._on_route(telemetry, payload)
 
         def on_delta(delta: str) -> None:
-            self._on_delta(telemetry, delta)
+            telemetry.record_delta(
+                owner=self.owner,
+                state=self.current,
+                config=self.config,
+                delta=delta,
+                emit=not telemetry.guardrail_buffered,
+            )
 
         try:
             step_context = build_model_step_context(
@@ -355,7 +372,7 @@ class ModelNodeExecution:
             )
             return recovered
 
-    def _on_route(self, telemetry: _InvocationTelemetry, payload: dict[str, Any]) -> None:
+    def _on_route(self, telemetry: ModelInvocationTelemetry, payload: dict[str, Any]) -> None:
         telemetry.route_payload.update(payload)
         route_key = (
             int(payload.get("attempt_index") or 1),
@@ -388,29 +405,9 @@ class ModelNodeExecution:
             {**payload, "visible": False},
         )
 
-    def _on_delta(self, telemetry: _InvocationTelemetry, delta: str) -> None:
-        self.owner.ensure_active(self.current, self.config)
-        if telemetry.first_delta_at is None:
-            telemetry.first_delta_at = time.perf_counter()
-        telemetry.delta_chars += len(delta)
-        _emit(
-            self.current,
-            self.config,
-            "model.delta",
-            "",
-            "",
-            {
-                "delta": delta,
-                "index": telemetry.delta_index,
-                "stream_mode": "provider_stream",
-            },
-            ephemeral=True,
-        )
-        telemetry.delta_index += 1
-
     def _record_model_failure(
         self,
-        telemetry: _InvocationTelemetry,
+        telemetry: ModelInvocationTelemetry,
         exc: Exception,
     ) -> None:
         self.current["budget_state"] = self.ledger.snapshot(self._operational_run_id()).as_dict()
@@ -473,7 +470,7 @@ class ModelNodeExecution:
     def _record_model_turn(
         self,
         turn: ModelTurn,
-        telemetry: _InvocationTelemetry,
+        telemetry: ModelInvocationTelemetry,
     ) -> tuple[dict[str, Any], list[ToolCall]]:
         self.current["budget_state"] = self.ledger.snapshot(self._operational_run_id()).as_dict()
         metrics = build_model_metrics(
@@ -546,24 +543,7 @@ class ModelNodeExecution:
         activator = context.entry_tool_skill_activator if context is not None else None
         if activator is None or context is None:
             return calls, None
-        request = EntryToolActivationRequest(
-            tool_calls=tuple(calls),
-            current_activation=dict(self.current.get("skill_activation") or {}),
-            run_id=str(self.current.get("run_id") or ""),
-            user_id=str(self.current.get("user_id") or ""),
-            thread_id=str(self.current.get("thread_id") or ""),
-            turn_id=str(self.current.get("turn_id") or ""),
-            question=_latest_user_question(self.current.get("messages") or []),
-            messages=tuple(
-                item for item in self.current.get("messages") or [] if isinstance(item, dict)
-            ),
-            context_bundle=dict(
-                context.tool_context.context_bundle
-                if isinstance(context.tool_context.context_bundle, dict)
-                else {}
-            ),
-        )
-        decision = activator.activate(request)
+        decision = activator.activate(self._entry_tool_activation_request(calls))
         if decision is None:
             return calls, None
         activation = dict(decision.skill_activation)
@@ -601,6 +581,30 @@ class ModelNodeExecution:
             )
         self._record_entry_skill_activation(activation, decision.reason, replacements)
         return replacements, None
+
+    def _entry_tool_activation_request(
+        self,
+        calls: list[ToolCall],
+    ) -> EntryToolActivationRequest:
+        context = self.turn_context
+        assert context is not None
+        return EntryToolActivationRequest(
+            tool_calls=tuple(calls),
+            current_activation=dict(self.current.get("skill_activation") or {}),
+            run_id=str(self.current.get("run_id") or ""),
+            user_id=str(self.current.get("user_id") or ""),
+            thread_id=str(self.current.get("thread_id") or ""),
+            turn_id=str(self.current.get("turn_id") or ""),
+            question=_latest_user_question(self.current.get("messages") or []),
+            messages=tuple(
+                item for item in self.current.get("messages") or [] if isinstance(item, dict)
+            ),
+            context_bundle=dict(
+                context.tool_context.context_bundle
+                if isinstance(context.tool_context.context_bundle, dict)
+                else {}
+            ),
+        )
 
     def _record_entry_skill_activation(
         self,
@@ -716,6 +720,9 @@ class ModelNodeExecution:
             _set_policy_state(self.current, phase="completed", decision=completion)
         content = _complete_continued_answer(self.current.setdefault("metadata", {}), turn.content)
         content, terminal = await self._before_answer_hook(turn, content)
+        if terminal is not None:
+            return terminal
+        content, terminal = await self.guardrails.guard_final_answer(turn, content)
         if terminal is not None:
             return terminal
         complete_plan_for_answer(

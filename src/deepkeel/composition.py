@@ -20,21 +20,19 @@ from deepkeel.capabilities import (
     capability_pack_spec,
     assert_capability_contribution,
 )
-from deepkeel.capability_manifest import (
-    CapabilityManifest,
-    RuntimeGeneration,
-    RuntimeGenerationManager,
-)
+from deepkeel.capability_manifest import CapabilityManifest, RuntimeGeneration, RuntimeGenerationManager
 from deepkeel.entrypoints import resolve_capability_view
 from deepkeel.control import RunControl
 from deepkeel.event_journal import RuntimeEventJournal
 from deepkeel.context_window import ContextWindowManager
 from deepkeel.governance import GovernanceBundle, SecretProvider
 from deepkeel.graph import GraphDurability
+from deepkeel.guardrails import GuardrailRunner
 from deepkeel.hooks import HookRunner
 from deepkeel.model_routing import ModelRouter
 from deepkeel.model import ModelInvocationRecorder, ModelInvocationStore
 from deepkeel.model_health import ModelHealthStore
+from deepkeel.online_evaluation import OnlineEvalPolicy, OnlineEvalPort
 from deepkeel.leases import RunLeaseStore
 from deepkeel.migrations import StateMigrationRegistry
 from deepkeel.memory_recall import MemoryRecallCoordinator
@@ -44,10 +42,12 @@ from deepkeel.policy import PolicyEngine
 from deepkeel.production import ProductionReadinessReport, assess_production_readiness
 from deepkeel.references import ReferenceProjector
 from deepkeel.runtime import HarnessRuntime, SystemPromptFactory
+from deepkeel.sandbox import SandboxPort, WorkspacePort
 from deepkeel.state_store import RuntimeStateStore
 from deepkeel.telemetry import TelemetryPort
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
-from deepkeel.tool_disclosure import ToolDiscoveryPort
+from deepkeel.skill_disclosure import SkillDiscoveryPort, SkillRerankerPort
+from deepkeel.tool_disclosure import ToolDiscoveryPort, ToolRerankerPort
 from deepkeel.tools import ToolExecutionStore, ToolExecutor, ToolHandler, ToolPreflight
 from deepkeel.skill_activation import EntryToolSkillActivator
 from deepkeel.turn_context import ToolViewMode
@@ -103,6 +103,8 @@ class RuntimePortChanges(TypedDict, total=False):
     tool_preflight: ToolPreflight | None
     secret_provider: SecretProvider | None
     telemetry: TelemetryPort | None
+    online_eval_port: OnlineEvalPort | None
+    online_eval_policy: OnlineEvalPolicy | None
     context_builder: ContextBuilder | None
     memory_recall_coordinator: MemoryRecallCoordinator | None
     context_window_manager: ContextWindowManager | None
@@ -122,7 +124,13 @@ class RuntimePortChanges(TypedDict, total=False):
     graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
     hook_runner: HookRunner | None
+    guardrail_runner: GuardrailRunner | None
+    sandbox_port: SandboxPort | None
+    workspace_port: WorkspacePort | None
     tool_discovery_port: ToolDiscoveryPort | None
+    tool_reranker_port: ToolRerankerPort | None
+    skill_discovery_port: SkillDiscoveryPort | None
+    skill_reranker_port: SkillRerankerPort | None
     entry_tool_skill_activator: EntryToolSkillActivator | None
     planning_enabled: bool
     capability_services: Mapping[str, object]
@@ -143,6 +151,8 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     async_tool_execution_store: AsyncToolExecutionStore | None
     tool_preflight: ToolPreflight | None
     telemetry: TelemetryPort | None
+    online_eval_port: OnlineEvalPort | None
+    online_eval_policy: OnlineEvalPolicy | None
     context_builder: ContextBuilder | None
     memory_recall_coordinator: MemoryRecallCoordinator | None
     context_window_manager: ContextWindowManager | None
@@ -162,7 +172,13 @@ class GovernedRuntimePortChanges(TypedDict, total=False):
     graph_durability: GraphDurability
     tool_view_mode: ToolViewMode
     hook_runner: HookRunner | None
+    guardrail_runner: GuardrailRunner | None
+    sandbox_port: SandboxPort | None
+    workspace_port: WorkspacePort | None
     tool_discovery_port: ToolDiscoveryPort | None
+    tool_reranker_port: ToolRerankerPort | None
+    skill_discovery_port: SkillDiscoveryPort | None
+    skill_reranker_port: SkillRerankerPort | None
     entry_tool_skill_activator: EntryToolSkillActivator | None
     planning_enabled: bool
     capability_services: Mapping[str, object]
@@ -199,6 +215,8 @@ class RuntimeGovernancePorts:
     run_control: RunControl | None = None
     tool_preflight: ToolPreflight | None = None
     secret_provider: SecretProvider | None = None
+    guardrail_runner: GuardrailRunner | None = None
+    sandbox_port: SandboxPort | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +226,8 @@ class RuntimeObservabilityPorts:
     model_invocation_recorder: ModelInvocationRecorder | None = None
     telemetry: TelemetryPort | None = None
     reference_projector: ReferenceProjector | None = None
+    online_eval_port: OnlineEvalPort | None = None
+    online_eval_policy: OnlineEvalPolicy | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -226,7 +246,11 @@ class RuntimeExecutionPorts:
     graph_durability: GraphDurability = "exit"
     tool_view_mode: ToolViewMode = "legacy"
     hook_runner: HookRunner | None = None
+    workspace_port: WorkspacePort | None = None
     tool_discovery_port: ToolDiscoveryPort | None = None
+    tool_reranker_port: ToolRerankerPort | None = None
+    skill_discovery_port: SkillDiscoveryPort | None = None
+    skill_reranker_port: SkillRerankerPort | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
     planning_enabled: bool = False
     capability_services: Mapping[str, object] = field(default_factory=dict)
@@ -253,6 +277,8 @@ class RuntimePorts:
     tool_preflight: ToolPreflight | None = None
     secret_provider: SecretProvider | None = None
     telemetry: TelemetryPort | None = None
+    online_eval_port: OnlineEvalPort | None = None
+    online_eval_policy: OnlineEvalPolicy | None = None
     context_builder: ContextBuilder | None = None
     memory_recall_coordinator: MemoryRecallCoordinator | None = None
     context_window_manager: ContextWindowManager | None = None
@@ -272,7 +298,13 @@ class RuntimePorts:
     graph_durability: GraphDurability = "exit"
     tool_view_mode: ToolViewMode = "legacy"
     hook_runner: HookRunner | None = None
+    guardrail_runner: GuardrailRunner | None = None
+    sandbox_port: SandboxPort | None = None
+    workspace_port: WorkspacePort | None = None
     tool_discovery_port: ToolDiscoveryPort | None = None
+    tool_reranker_port: ToolRerankerPort | None = None
+    skill_discovery_port: SkillDiscoveryPort | None = None
+    skill_reranker_port: SkillRerankerPort | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
     planning_enabled: bool = False
     capability_services: Mapping[str, object] = field(default_factory=dict)
@@ -433,6 +465,7 @@ class HarnessRuntimeBuilder:
         self._ensure_mutable()
         if self._profile.require_production_readiness:
             self.production_readiness().require_ready()
+        guardrail_runner = self._ports.guardrail_runner or GuardrailRunner()
         executor = self._executor or ToolExecutor(
             self._registry,
             preflight=self._ports.tool_preflight,
@@ -441,6 +474,9 @@ class HarnessRuntimeBuilder:
             async_execution_store=self._ports.async_tool_execution_store,
             policy_engine=self._ports.policy_engine,
             budget_ledger=self._ports.budget_ledger,
+            guardrail_runner=guardrail_runner,
+            sandbox_port=self._ports.sandbox_port,
+            workspace_port=self._ports.workspace_port,
         )
         if executor.registry is not self._registry:
             raise ValueError("ToolExecutor registry changed during runtime composition")
@@ -453,6 +489,9 @@ class HarnessRuntimeBuilder:
         executor.configure_artifact_schemas(
             {name: spec.schema for name, spec in self._capability_catalog.artifact_types.items()}
         )
+        executor.guardrail_runner = guardrail_runner
+        executor.sandbox_port = self._ports.sandbox_port
+        executor.workspace_port = self._ports.workspace_port
         composed_generation = RuntimeGenerationManager().activate(
             tuple(self._capability_manifests.values()),
             catalog_version=self._registry.catalog_version(),
@@ -491,6 +530,8 @@ class HarnessRuntimeBuilder:
             capability_contributions=self._installed_contributions,
             capability_catalog=self._capability_catalog,
             telemetry=self._ports.telemetry,
+            online_eval_port=self._ports.online_eval_port,
+            online_eval_policy=self._ports.online_eval_policy,
             context_builder=self._ports.context_builder,
             memory_recall_coordinator=self._ports.memory_recall_coordinator,
             context_window_manager=self._ports.context_window_manager,
@@ -510,7 +551,11 @@ class HarnessRuntimeBuilder:
             graph_durability=self._ports.graph_durability,
             tool_view_mode=self._ports.tool_view_mode,
             hook_runner=hook_runner,
+            guardrail_runner=guardrail_runner,
             tool_discovery_port=self._ports.tool_discovery_port,
+            tool_reranker_port=self._ports.tool_reranker_port,
+            skill_discovery_port=self._ports.skill_discovery_port,
+            skill_reranker_port=self._ports.skill_reranker_port,
             entry_tool_skill_activator=self._ports.entry_tool_skill_activator,
             runtime_generation=runtime_generation,
             planning_enabled=self._ports.planning_enabled,

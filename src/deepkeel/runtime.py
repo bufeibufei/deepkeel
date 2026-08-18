@@ -49,6 +49,7 @@ from deepkeel.graph import (
     create_harness_graph,
 )
 from deepkeel.hooks import HookAudit, HookRunner
+from deepkeel.guardrails import GuardrailRunner
 from deepkeel.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     checkpointer_supports_async,
@@ -61,6 +62,7 @@ from deepkeel.model import (
 )
 from deepkeel.model_health import InMemoryModelHealthStore, ModelHealthStore
 from deepkeel.model_routing import AdaptiveStepModelRouter, ModelRouter
+from deepkeel.online_evaluation import OnlineEvalPolicy, OnlineEvalPort
 from deepkeel.leases import (
     AsyncRunLeaseGuard,
     ExecutionFence,
@@ -104,6 +106,7 @@ from deepkeel.runtime_persistence import (
 from deepkeel.runtime_async_stream import stream_runtime_async
 from deepkeel.skills import SkillPolicy
 from deepkeel.skill_activation import EntryToolSkillActivator
+from deepkeel.skill_disclosure import SkillDiscoveryPort, SkillRerankerPort
 from deepkeel.scope import (
     RuntimeScope,
     require_legacy_compatible_scope,
@@ -116,10 +119,11 @@ from deepkeel.state_store import (
 from deepkeel.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from deepkeel.type_narrowing import as_dict
 from deepkeel.tool_registry import ToolRegistry
-from deepkeel.tool_disclosure import ToolDiscoveryPort, install_tool_discovery
+from deepkeel.tool_disclosure import ToolDiscoveryPort, ToolRerankerPort
 from deepkeel.tools import ToolExecutionContext, ToolExecutor
 from deepkeel.turn_context import ToolViewMode, TurnExecutionContext
 from deepkeel.ui import project_run_ui_state
+from deepkeel.progressive_disclosure import install_progressive_disclosure
 from deepkeel.version import DEEPKEEL_CONTRACT_VERSION, DEEPKEEL_VERSION
 from deepkeel.runtime_policy import (
     _budget_limits,
@@ -175,6 +179,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         capability_contributions: tuple[CapabilityContribution, ...] = (),
         capability_catalog: CapabilityCatalog | None = None,
         telemetry: TelemetryPort | None = None,
+        online_eval_port: OnlineEvalPort | None = None,
+        online_eval_policy: OnlineEvalPolicy | None = None,
         context_builder: ContextBuilder | None = None,
         memory_recall_coordinator: MemoryRecallCoordinator | None = None,
         context_window_manager: ContextWindowManager | None = None,
@@ -194,7 +200,11 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         graph_durability: GraphDurability = "exit",
         tool_view_mode: ToolViewMode = "legacy",
         hook_runner: HookRunner | None = None,
+        guardrail_runner: GuardrailRunner | None = None,
         tool_discovery_port: ToolDiscoveryPort | None = None,
+        tool_reranker_port: ToolRerankerPort | None = None,
+        skill_discovery_port: SkillDiscoveryPort | None = None,
+        skill_reranker_port: SkillRerankerPort | None = None,
         entry_tool_skill_activator: EntryToolSkillActivator | None = None,
         runtime_generation: RuntimeGeneration | None = None,
         planning_enabled: bool = False,
@@ -233,6 +243,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.capability_contributions = capability_contributions
         self.capability_catalog = capability_catalog or CapabilityCatalog()
         self.telemetry = telemetry or NoopTelemetry()
+        self.online_eval_port = online_eval_port
+        self.online_eval_policy = online_eval_policy or OnlineEvalPolicy()
         self.context_builder = context_builder
         self.memory_recall_coordinator = memory_recall_coordinator
         self.context_window_manager = context_window_manager or DeterministicContextWindowManager()
@@ -252,13 +264,18 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.graph_durability = graph_durability
         self.tool_view_mode = tool_view_mode
         self.hook_runner = hook_runner or HookRunner()
+        self.guardrail_runner = guardrail_runner or GuardrailRunner()
         self.entry_tool_skill_activator = entry_tool_skill_activator
         self.runtime_generation = runtime_generation
         if self.tool_view_mode != "legacy":
-            install_tool_discovery(
+            install_progressive_disclosure(
+                self.capability_catalog,
                 self.tool_registry,
                 self.tool_executor,
-                discovery_port=tool_discovery_port,
+                tool_discovery=tool_discovery_port,
+                tool_reranker=tool_reranker_port,
+                skill_discovery=skill_discovery_port,
+                skill_reranker=skill_reranker_port,
             )
         if self.planning_enabled:
             install_execution_planning(self.tool_registry, self.tool_executor)
@@ -268,6 +285,7 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
         self.tool_executor.hook_runner = self.hook_runner
+        self.tool_executor.guardrail_runner = self.guardrail_runner
         self._validate_exclusive_io_ports()
 
     def _validate_exclusive_io_ports(self) -> None:

@@ -158,3 +158,49 @@ def test_adapter_groups_events_deduplicates_replay_and_links_resumed_segments() 
     assert roots[0].attributes["deepkeel.segment.delta_count"] == 3
     assert roots[1].attributes["deepkeel.segment.resumed"] is True
     assert roots[1].links[0].context.trace_id == roots[0].context.trace_id
+
+
+def test_adapter_projects_gen_ai_semantic_attributes_without_content() -> None:
+    adapter, exporter = _adapter()
+    adapter.record(
+        TelemetryRecord(
+            event_name="model.completed",
+            run_id="run-gen-ai",
+            turn_id="turn-1",
+            status="completed",
+            attributes={
+                "provider_id": "volcengine",
+                "model_id": "doubao-seed",
+                "finish_reason": "stop",
+                "input_tokens": 120,
+                "output_tokens": 32,
+                "duration_ms": 250,
+                "prompt": "must-not-leak",
+            },
+        )
+    )
+    adapter.record(
+        TelemetryRecord(
+            event_name="runtime.settled",
+            run_id="run-gen-ai",
+            turn_id="turn-1",
+            status="completed",
+        )
+    )
+
+    model_span = next(
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.model.completed"
+    )
+    root_span = next(
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.run.segment"
+    )
+    assert model_span.attributes["gen_ai.operation.name"] == "chat"
+    assert model_span.attributes["gen_ai.provider.name"] == "volcengine"
+    assert model_span.attributes["gen_ai.request.model"] == "doubao-seed"
+    assert model_span.attributes["gen_ai.usage.input_tokens"] == 120
+    assert model_span.attributes["gen_ai.usage.output_tokens"] == 32
+    assert "gen_ai.input.messages" not in model_span.attributes
+    assert "deepkeel.attr.prompt" not in model_span.attributes
+    assert root_span.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert root_span.attributes["gen_ai.agent.name"] == "DeepKeel"
+    assert "gen_ai.request.model" not in root_span.attributes

@@ -9,6 +9,7 @@ from deepkeel.graph import HARNESS_GRAPH_CONTRACT_VERSION
 from deepkeel.hooks import HookAudit
 from deepkeel.runtime_api import RuntimeResult
 from deepkeel.runtime_lifecycle import run_settlement_lifecycle_hooks
+from deepkeel.runtime_online_evaluation import submit_runtime_online_evaluation
 from deepkeel.runtime_policy import _budget_limits
 from deepkeel.runtime_results import project_harness_result
 from deepkeel.scope import RuntimeScope
@@ -149,6 +150,13 @@ async def project_and_settle_runtime_result(
     diagnostics["hooks"]["executions"] = [
         runtime._hook_audit_payload(audit) for audit in lifecycle_audits
     ]
+    online_eval_diagnostics = submit_runtime_online_evaluation(
+        runtime=runtime,
+        result=result,
+        runtime_scope=runtime_scope,
+    )
+    if online_eval_diagnostics is not None:
+        diagnostics["online_eval"] = online_eval_diagnostics
     try:
         runtime.telemetry.record(
             TelemetryRecord(

@@ -60,6 +60,7 @@ def build_model_metrics(
     return {
         "model_id": turn.model_id,
         "model_role": turn.model_role,
+        "provider_id": str(route_payload.get("provider_id") or ""),
         "finish_reason": turn.finish_reason,
         "latency_ms": latency_ms,
         "first_token_latency_ms": first_token_latency_ms,

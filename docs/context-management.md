@@ -12,6 +12,13 @@ When L2 is too large, DeepKeel keeps a recent raw suffix and creates a
 source-linked checkpoint; raw events remain authoritative. Subject-mismatched
 authoritative context is quarantined rather than silently mixed.
 
+Before invocation, `ContextQualityGate` can audit provenance, authority,
+subject alignment, duplicate content, empty items, and declared token estimates.
+`observe` mode records issues without changing input; `enforce` mode rejects
+critical L1/L2 defects while allowing replaceable policies to decide which L3
+quality findings are tolerable. The quality report is diagnostic evidence, not
+a new source of truth.
+
 ## Semantic checkpoints
 
 `DeterministicContextWindowManager` accepts an optional

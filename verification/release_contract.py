@@ -42,6 +42,9 @@ def verify_release_workflow(repo_root: Path) -> None:
         "needs: production-gate",
         "verification.postgres_multiworker",
         "verification/concurrency_benchmark.py",
+        "anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610",
+        "verification.release_manifest",
+        "twine check dist/*",
         "skip-existing: true",
     )
     missing = [fragment for fragment in required_fragments if fragment not in workflow]

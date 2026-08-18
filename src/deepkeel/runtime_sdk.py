@@ -10,6 +10,7 @@ from deepkeel.artifact_views import (
 from deepkeel.contracts import (
     AgentMessage,
     Artifact,
+    DataProvenance,
     FinalAnswer,
     MessageContentPart,
     Observation,
@@ -53,6 +54,7 @@ from deepkeel.failures import (
     diagnose_failure,
     failure_from_code,
 )
+from deepkeel.golden_path import AgentDefaults, AgentHarness
 from deepkeel.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from deepkeel.recovery import RecoveryOutcome, RecoveryState, classify_recovery_outcome
 from deepkeel.operations import (
@@ -113,9 +115,12 @@ from deepkeel.version import (
 from deepkeel.workflows import TERMINAL_WORKFLOW_STATES, workflow_projection
 
 RUNTIME_SDK_API = (
+    "AgentDefaults",
+    "AgentHarness",
     "AgentEventPersistenceError",
     "AgentMessage",
     "Artifact",
+    "DataProvenance",
     "ArtifactView",
     "ArtifactViewAction",
     "ArtifactViewField",

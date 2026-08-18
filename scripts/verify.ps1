@@ -24,6 +24,11 @@ try {
         throw "DeepKeel type contracts failed."
     }
 
+    & uv run python verification/readme_contract.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel synchronized documentation contract failed."
+    }
+
     & uv run pytest -q --cov=deepkeel --cov-report=term --cov-report=json:coverage.json --cov-fail-under=80
     if ($LASTEXITCODE -ne 0) {
         throw "DeepKeel package contract tests failed."
@@ -56,9 +61,22 @@ try {
         throw "DeepKeel distribution build failed."
     }
 
+    $distributionArtifacts = Get-ChildItem -Path $outputRoot -File |
+        Where-Object { $_.Name -match '\.(whl|tar\.gz)$' } |
+        Select-Object -ExpandProperty FullName
+    & uv run twine check $distributionArtifacts
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel package metadata validation failed."
+    }
+
     & uv run python verification/verify_distributions.py $outputRoot
     if ($LASTEXITCODE -ne 0) {
         throw "DeepKeel clean-install conformance failed."
+    }
+
+    & uv run python -m verification.release_manifest $outputRoot
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel release checksum manifest failed."
     }
 }
 finally {

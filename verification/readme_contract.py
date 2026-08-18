@@ -25,6 +25,10 @@ SHARED_CONTRACT_MARKERS = (
     "deepkeel.runtime_sdk",
     "deepkeel.extension_sdk",
     "deepkeel.adapter_sdk",
+    "deepkeel.a2a_sdk",
+    "docs/security-and-trust.md",
+    "docs/interoperability.md",
+    "docs/supply-chain.md",
 )
 
 

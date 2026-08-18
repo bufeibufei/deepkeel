@@ -11,17 +11,22 @@ from collections import deque
 from itertools import count
 from typing import Any
 
-from deepkeel.mcp.contracts import McpCallResult, McpRemoteTool, McpServerSpec
+from deepkeel.mcp.contracts import McpCallResult, McpRemoteTool, McpServerSpec, McpTask
 from deepkeel.mcp.protocol import (
+    LEGACY_MCP_PROTOCOL_VERSION,
+    LEGACY_MCP_PROTOCOL_VERSIONS,
     MAX_TOOL_LIST_PAGES,
     MCP_PROTOCOL_VERSION,
     SUPPORTED_MCP_PROTOCOL_VERSIONS,
     McpProtocolError,
+    McpRemoteError,
     McpTimeoutError,
     McpTransportError,
+    modern_request_metadata,
+    remote_error,
     safe_server_info,
-    structured_content_from_text,
 )
+from deepkeel.mcp.result_parsing import call_result, remote_tools, task_result
 from deepkeel.type_narrowing import as_dict, as_list
 
 
@@ -45,7 +50,12 @@ class StdioMcpClient:
         self._stderr_thread: threading.Thread | None = None
         self._stderr_tail: deque[str] = deque(maxlen=20)
         self._protocol_version = ""
+        self._protocol_era = ""
         self._server_info: dict[str, Any] = {}
+        self._server_capabilities: dict[str, Any] = {}
+        self._tool_cache: list[McpRemoteTool] = []
+        self._tool_cache_expires_at = 0.0
+        self._tool_cache_scope = "private"
         self._closed = False
         self._generation = 0
         self._timeout_count = 0
@@ -68,40 +78,89 @@ class StdioMcpClient:
             self._stop_locked()
             self._launch_locked()
             try:
-                initialized = self._request_started(
-                    "initialize",
-                    {
-                        "protocolVersion": MCP_PROTOCOL_VERSION,
-                        "capabilities": {},
-                        "clientInfo": {
-                            "name": self.spec.client_name,
-                            "version": self.spec.client_version,
-                        },
-                    },
-                    timeout_seconds=_bounded_timeout(
-                        timeout_seconds,
-                        self.spec.startup_timeout_seconds,
-                    ),
+                startup_timeout = _bounded_timeout(
+                    timeout_seconds,
+                    self.spec.startup_timeout_seconds,
                 )
-                negotiated_version = str(
-                    initialized.get("protocolVersion") or MCP_PROTOCOL_VERSION
-                )
-                if negotiated_version not in SUPPORTED_MCP_PROTOCOL_VERSIONS:
-                    raise McpProtocolError(
-                        f"unsupported MCP protocol version: {negotiated_version}"
+                if self.spec.protocol_version in LEGACY_MCP_PROTOCOL_VERSIONS:
+                    self._start_legacy(
+                        self.spec.protocol_version,
+                        timeout_seconds=startup_timeout,
                     )
-                self._protocol_version = negotiated_version
-                self._server_info = as_dict(initialized.get("serverInfo"))
-                self._write_message(
-                    {
-                        "jsonrpc": "2.0",
-                        "method": "notifications/initialized",
-                        "params": {},
-                    }
-                )
+                else:
+                    try:
+                        self._start_modern(timeout_seconds=startup_timeout)
+                    except (McpProtocolError, McpTimeoutError) as exc:
+                        if not self._can_fallback_to_legacy(exc):
+                            raise
+                        self._start_legacy(
+                            LEGACY_MCP_PROTOCOL_VERSION,
+                            timeout_seconds=startup_timeout,
+                        )
             except Exception:
                 self._stop_locked()
                 raise
+
+    def _start_modern(self, *, timeout_seconds: float) -> None:
+        discovered = self._request_started(
+            "server/discover",
+            {},
+            timeout_seconds=timeout_seconds,
+            modern=True,
+        )
+        supported = {
+            str(value)
+            for value in as_list(discovered.get("supportedVersions"))
+            if str(value) in SUPPORTED_MCP_PROTOCOL_VERSIONS
+        }
+        if MCP_PROTOCOL_VERSION not in supported:
+            raise McpProtocolError(
+                "MCP server does not advertise the modern protocol revision"
+            )
+        self._protocol_version = MCP_PROTOCOL_VERSION
+        self._protocol_era = "modern"
+        self._server_capabilities = as_dict(discovered.get("capabilities"))
+        self._server_info = _server_info_from_result(discovered)
+
+    def _start_legacy(self, version: str, *, timeout_seconds: float) -> None:
+        initialized = self._request_started(
+            "initialize",
+            {
+                "protocolVersion": version,
+                "capabilities": dict(self.spec.client_capabilities),
+                "clientInfo": {
+                    "name": self.spec.client_name,
+                    "version": self.spec.client_version,
+                },
+            },
+            timeout_seconds=timeout_seconds,
+        )
+        negotiated_version = str(initialized.get("protocolVersion") or version)
+        if negotiated_version not in LEGACY_MCP_PROTOCOL_VERSIONS:
+            raise McpProtocolError(
+                f"unsupported legacy MCP protocol version: {negotiated_version}"
+            )
+        self._protocol_version = negotiated_version
+        self._protocol_era = "legacy"
+        self._server_capabilities = as_dict(initialized.get("capabilities"))
+        self._server_info = as_dict(initialized.get("serverInfo"))
+        self._write_message(
+            {
+                "jsonrpc": "2.0",
+                "method": "notifications/initialized",
+                "params": {},
+            }
+        )
+
+    def _can_fallback_to_legacy(self, exc: BaseException) -> bool:
+        if self.spec.protocol_version or not self.spec.allow_legacy_fallback:
+            return False
+        if isinstance(exc, McpRemoteError) and exc.is_modern_version_error:
+            supported = {
+                str(value) for value in as_list(exc.data.get("supported"))
+            }
+            return bool(supported & LEGACY_MCP_PROTOCOL_VERSIONS)
+        return True
 
     def list_tools(
         self,
@@ -110,7 +169,10 @@ class StdioMcpClient:
     ) -> list[McpRemoteTool]:
         deadline = _deadline(timeout_seconds or self.spec.request_timeout_seconds)
         self.start(timeout_seconds=_remaining(deadline))
+        if self._tool_cache and time.monotonic() < self._tool_cache_expires_at:
+            return list(self._tool_cache)
         tools: list[McpRemoteTool] = []
+        ttl_seconds = self.spec.tool_cache_ttl_seconds
         cursor = ""
         seen_cursors: set[str] = set()
         for _page in range(MAX_TOOL_LIST_PAGES):
@@ -120,19 +182,14 @@ class StdioMcpClient:
                 params,
                 timeout_seconds=_remaining(deadline),
             )
-            for item in as_list(result.get("tools")):
-                if not isinstance(item, dict) or not str(item.get("name") or "").strip():
-                    continue
-                tools.append(
-                    McpRemoteTool(
-                        name=str(item["name"]),
-                        description=str(item.get("description") or ""),
-                        input_schema=as_dict(item.get("inputSchema")),
-                    )
-                )
+            tools.extend(remote_tools(result))
+            ttl_seconds = min(ttl_seconds, _cache_ttl_seconds(result, ttl_seconds))
+            self._tool_cache_scope = str(result.get("cacheScope") or "private")
             cursor = str(result.get("nextCursor") or "")
             if not cursor:
-                return tools
+                self._tool_cache = sorted(tools, key=lambda item: item.name)
+                self._tool_cache_expires_at = time.monotonic() + ttl_seconds
+                return list(self._tool_cache)
             if cursor in seen_cursors:
                 raise McpProtocolError("MCP tools/list returned a repeated cursor")
             seen_cursors.add(cursor)
@@ -147,30 +204,115 @@ class StdioMcpClient:
     ) -> McpCallResult:
         deadline = _deadline(timeout_seconds or self.spec.request_timeout_seconds)
         self.start(timeout_seconds=_remaining(deadline))
-        result = self._request_started(
-            "tools/call",
-            {"name": name, "arguments": dict(arguments)},
+        return self._call_tool(
+            name,
+            arguments,
             timeout_seconds=_remaining(deadline),
         )
-        content = self._redact_value(
-            [item for item in as_list(result.get("content")) if isinstance(item, dict)]
+
+    def continue_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        input_responses: dict[str, Any],
+        request_state: Any,
+        timeout_seconds: float | None = None,
+    ) -> McpCallResult:
+        self.start(timeout_seconds=timeout_seconds)
+        return self._call_tool(
+            name,
+            arguments,
+            input_responses=input_responses,
+            request_state=request_state,
+            timeout_seconds=timeout_seconds or self.spec.request_timeout_seconds,
         )
-        structured = (
-            self._redact_value(as_dict(result.get("structuredContent")))
-            if isinstance(result.get("structuredContent"), dict)
-            else structured_content_from_text(content)
+
+    def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        input_responses: dict[str, Any] | None = None,
+        request_state: Any = None,
+        timeout_seconds: float,
+    ) -> McpCallResult:
+        params: dict[str, Any] = {"name": name, "arguments": dict(arguments)}
+        if input_responses is not None:
+            params["inputResponses"] = dict(input_responses)
+            params["requestState"] = request_state
+        result = self._request_started(
+            "tools/call",
+            params,
+            timeout_seconds=timeout_seconds,
         )
-        return McpCallResult(
-            content=content,
-            structured_content=structured,
-            is_error=bool(result.get("isError")),
+        return call_result(
+            result,
+            redact=self._redact_value,
             metadata={
                 "server_id": self.server_id,
                 "transport": "stdio",
                 "protocol_version": self._protocol_version,
+                "protocol_era": self._protocol_era,
                 "server_info": safe_server_info(self._server_info),
             },
         )
+
+    def get_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask:
+        task = self._task_request("tasks/get", {"taskId": task_id}, timeout_seconds)
+        if task is None:
+            raise McpProtocolError("MCP tasks/get returned an empty result")
+        return task
+
+    def update_task(
+        self,
+        task_id: str,
+        input_responses: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None:
+        return self._task_request(
+            "tasks/update",
+            {"taskId": task_id, "inputResponses": dict(input_responses)},
+            timeout_seconds,
+            allow_empty=True,
+        )
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None:
+        return self._task_request(
+            "tasks/cancel",
+            {"taskId": task_id},
+            timeout_seconds,
+            allow_empty=True,
+        )
+
+    def _task_request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout_seconds: float | None,
+        *,
+        allow_empty: bool = False,
+    ) -> McpTask | None:
+        self.start(timeout_seconds=timeout_seconds)
+        result = self._request_started(
+            method,
+            params,
+            timeout_seconds=timeout_seconds or self.spec.request_timeout_seconds,
+        )
+        if allow_empty and not result:
+            return None
+        return task_result(result)
 
     def diagnostics(self) -> dict[str, Any]:
         process = self._process
@@ -180,7 +322,13 @@ class StdioMcpClient:
             **self.spec.public_snapshot(),
             "running": bool(process is not None and process.poll() is None),
             "protocol_version": self._protocol_version,
+            "protocol_era": self._protocol_era,
             "server_info": safe_server_info(self._server_info),
+            "server_capabilities": dict(self._server_capabilities),
+            "tool_cache_scope": self._tool_cache_scope,
+            "tool_cache_remaining_seconds": round(
+                max(0.0, self._tool_cache_expires_at - time.monotonic()), 3
+            ),
             "stderr_tail": list(self._stderr_tail),
             "generation": self._generation,
             "restart_count": max(0, self._generation - 1),
@@ -243,44 +391,48 @@ class StdioMcpClient:
         params: dict[str, Any],
         *,
         timeout_seconds: float | None = None,
+        modern: bool | None = None,
     ) -> dict[str, Any]:
         request_id = next(self._request_ids)
         response_queue: queue.Queue[dict[str, Any] | BaseException] = queue.Queue(maxsize=1)
         with self._pending_lock:
             self._pending[request_id] = response_queue
         try:
+            request_params = dict(params)
+            if modern is True or (modern is None and self._protocol_era == "modern"):
+                request_params = _modern_params(self.spec, request_params)
             self._write_message(
                 {
                     "jsonrpc": "2.0",
                     "id": request_id,
                     "method": method,
-                    "params": params,
+                    "params": request_params,
                 }
             )
             timeout = timeout_seconds or self.spec.request_timeout_seconds
             try:
                 response = response_queue.get(timeout=max(0.001, float(timeout)))
             except queue.Empty as exc:
-                error = McpTimeoutError(
+                timeout_error = McpTimeoutError(
                     f"MCP request timed out: {self.server_id}.{method}"
                 )
                 self._timeout_count += 1
-                self._last_transport_error = str(error)
-                self._cancel_request(request_id, str(error))
+                self._last_transport_error = str(timeout_error)
+                self._cancel_request(request_id, str(timeout_error))
                 self._reset_after_timeout(request_id)
-                raise error from exc
+                raise timeout_error from exc
             if isinstance(response, BaseException):
                 raise response
             if isinstance(response.get("error"), dict):
-                error = response["error"]
-                raise McpProtocolError(
-                    self._redact(
-                        f"MCP {method} failed ({error.get('code')}): {error.get('message')}"
-                    )
-                )
+                remote_exc = remote_error(method, response["error"])
+                remote_exc.args = (self._redact(str(remote_exc)),)
+                raise remote_exc
             result = response.get("result")
             if not isinstance(result, dict):
                 raise McpProtocolError(f"MCP {method} returned an invalid result")
+            server_info = _server_info_from_result(result)
+            if server_info:
+                self._server_info = server_info
             return result
         finally:
             with self._pending_lock:
@@ -435,7 +587,11 @@ class StdioMcpClient:
         self._reader_thread = None
         self._stderr_thread = None
         self._protocol_version = ""
+        self._protocol_era = ""
         self._server_info = {}
+        self._server_capabilities = {}
+        self._tool_cache = []
+        self._tool_cache_expires_at = 0.0
         if process is None:
             return
         if process.stdin is not None:
@@ -472,3 +628,32 @@ def _bounded_timeout(requested: float | None, maximum: float) -> float:
     if requested is None:
         return maximum
     return max(0.001, min(float(requested), maximum))
+
+
+def _modern_params(spec: McpServerSpec, params: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(params)
+    existing_meta = as_dict(merged.get("_meta"))
+    merged["_meta"] = {
+        **modern_request_metadata(
+            client_name=spec.client_name,
+            client_version=spec.client_version,
+            client_capabilities=spec.client_capabilities,
+        ),
+        **existing_meta,
+    }
+    return merged
+
+
+def _server_info_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    metadata = as_dict(result.get("_meta"))
+    return as_dict(metadata.get("io.modelcontextprotocol/serverInfo")) or as_dict(
+        result.get("serverInfo")
+    )
+
+
+def _cache_ttl_seconds(result: dict[str, Any], fallback: float) -> float:
+    raw_ttl = result.get("ttlMs")
+    try:
+        return max(0.0, float(str(raw_ttl)) / 1000.0)
+    except (TypeError, ValueError):
+        return fallback

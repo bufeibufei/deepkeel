@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from deepkeel.runtime_sdk import HarnessRuntimeBuilder, RuntimeRequest
+from deepkeel.runtime_sdk import AgentHarness
 
 
 class LocalProvider:
@@ -22,14 +22,11 @@ class LocalProvider:
 
 
 def run_quickstart() -> str:
-    runtime = HarnessRuntimeBuilder().build()
-    result = runtime.run(
-        RuntimeRequest(
-            question="Is the runtime ready?",
-            user_id="quickstart-user",
-            context_bundle={"agent_session_id": "quickstart-run"},
-        ),
-        provider=LocalProvider(),
+    harness = AgentHarness.create(provider=LocalProvider())
+    result = harness.run(
+        "Is the runtime ready?",
+        user_id="quickstart-user",
+        context_bundle={"agent_session_id": "quickstart-run"},
     )
     return result.final_answer.markdown
 

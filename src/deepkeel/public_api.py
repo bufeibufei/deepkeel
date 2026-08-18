@@ -6,6 +6,7 @@ import deepkeel.memory_sdk as memory_sdk
 import deepkeel.runtime_sdk as runtime_sdk
 
 from deepkeel.adapter_sdk import ADAPTER_SDK_API
+from deepkeel.a2a_sdk import A2A_SDK_API
 from deepkeel.api_stability import build_public_api_manifest, build_semantic_contract
 from deepkeel.extension_sdk import EXTENSION_SDK_API
 from deepkeel.mcp_sdk import MCP_SDK_API
@@ -19,6 +20,7 @@ PUBLIC_API_BY_LAYER = {
     "runtime": RUNTIME_SDK_API,
     "extension": EXTENSION_SDK_API,
     "orchestration": ORCHESTRATION_SDK_API,
+    "a2a": A2A_SDK_API,
     "mcp": MCP_SDK_API,
     "memory": MEMORY_SDK_API,
     "adapter": ADAPTER_SDK_API,

@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 import deepkeel
+import deepkeel.a2a_sdk as a2a_sdk
 import deepkeel.adapter_sdk as adapter_sdk
 import deepkeel.extension_sdk as extension_sdk
 import deepkeel.mcp_sdk as mcp_sdk
@@ -70,10 +71,11 @@ from deepkeel.public_api import (
 
 
 def test_package_root_only_exposes_versioned_sdk_entrypoints() -> None:
-    assert PUBLIC_API_VERSION == "4.1.0rc2"
+    assert PUBLIC_API_VERSION == "4.1.0"
     assert tuple(deepkeel.__all__) == (
         "DEEPKEEL_CONTRACT_VERSION",
         "DEEPKEEL_VERSION",
+        "a2a_sdk",
         "adapter_sdk",
         "extension_sdk",
         "mcp_sdk",
@@ -151,6 +153,7 @@ def test_public_api_has_one_canonical_layer_and_declared_stability() -> None:
         "runtime": "stable",
         "extension": "stable",
         "orchestration": "experimental",
+        "a2a": "experimental",
         "mcp": "advanced",
         "memory": "stable",
         "adapter": "advanced",
@@ -162,6 +165,7 @@ def test_public_api_has_one_canonical_layer_and_declared_stability() -> None:
         (runtime_sdk, "runtime"),
         (extension_sdk, "extension"),
         (orchestration_sdk, "orchestration"),
+        (a2a_sdk, "a2a"),
         (mcp_sdk, "mcp"),
         (memory_sdk, "memory"),
         (adapter_sdk, "adapter"),

@@ -60,6 +60,18 @@ class ProductionRuntimePorts(Protocol):
     @property
     def tool_view_mode(self) -> str: ...
 
+    @property
+    def guardrail_runner(self) -> Any: ...
+
+    @property
+    def sandbox_port(self) -> Any: ...
+
+    @property
+    def workspace_port(self) -> Any: ...
+
+    @property
+    def online_eval_port(self) -> Any: ...
+
 
 ReadinessSeverity = Literal["error", "warning"]
 
@@ -177,6 +189,7 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
         message="configure durable tool execution idempotency",
     )
     _reject_known_local_ports(issues, ports)
+    _validate_optional_safety_ports(issues, ports)
     _validate_declared_capabilities(issues, ports)
     _warn_blocking_async_ports(issues, ports)
     if ports.tool_view_mode != "enforced":
@@ -189,6 +202,69 @@ def assess_production_readiness(ports: ProductionRuntimePorts) -> ProductionRead
             )
         )
     return ProductionReadinessReport(tuple(issues))
+
+
+def _validate_optional_safety_ports(
+    issues: list[ProductionReadinessIssue],
+    ports: ProductionRuntimePorts,
+) -> None:
+    sandbox = ports.sandbox_port
+    if sandbox is not None and type(sandbox).__name__ == "NoopSandboxPort":
+        issues.append(
+            ProductionReadinessIssue(
+                code="SANDBOX_NOT_ENFORCED",
+                message="NoopSandboxPort cannot enforce isolation for production tools",
+                severity="error",
+                port="sandbox_port",
+            )
+        )
+
+    workspace = ports.workspace_port
+    if workspace is not None and type(workspace).__name__ == "LocalWorkspacePort":
+        issues.append(
+            ProductionReadinessIssue(
+                code="PROCESS_LOCAL_WORKSPACE",
+                message=(
+                    "LocalWorkspacePort is process-local; use it only for ephemeral work "
+                    "or replace it with a shared, policy-enforcing adapter"
+                ),
+                severity="warning",
+                port="workspace_port",
+            )
+        )
+
+    guardrails = ports.guardrail_runner
+    registered_guardrails = (
+        getattr(guardrails, "registered_guardrails", None)
+        if guardrails is not None
+        else None
+    )
+    if registered_guardrails:
+        store = getattr(guardrails, "execution_store", None)
+        if store is not None and type(store).__name__ == "InMemoryGuardrailExecutionStore":
+            issues.append(
+                ProductionReadinessIssue(
+                    code="PROCESS_LOCAL_GUARDRAIL_REPLAY",
+                    message=(
+                        "enabled guardrails use a process-local replay store; provide a "
+                        "durable store when decisions have external cost or side effects"
+                    ),
+                    severity="warning",
+                    port="guardrail_runner",
+                )
+            )
+
+    online_eval = ports.online_eval_port
+    eval_store = getattr(online_eval, "store", None)
+    if eval_store is not None and type(eval_store).__name__ == "InMemoryOnlineEvalStore":
+        issues.append(
+            ProductionReadinessIssue(
+                code="PROCESS_LOCAL_ONLINE_EVAL",
+                message="online evaluation records are process-local and may be lost on restart",
+                severity="warning",
+                port="online_eval_port",
+            )
+        )
 
 
 def _require_explicit(

@@ -170,14 +170,22 @@ class RuntimeTraceSegments:
     ) -> _OpenSegment:
         trace = _trace_api()
         links = [trace.Link(previous_context)] if previous_context is not None else None
+        root_attributes = {
+            key: value
+            for key, value in initial_attributes.items()
+            if not key.startswith("gen_ai.")
+        }
         attributes: dict[str, Any] = {
-            **initial_attributes,
+            **root_attributes,
             "deepkeel.run_id": event.run_id,
             "deepkeel.thread_id": event.thread_id,
             "deepkeel.turn_id": event.turn_id,
             "deepkeel.run_version": event.run_version,
             "deepkeel.segment.key": key,
             "deepkeel.runtime_trace_id": event.trace_id,
+            "gen_ai.operation.name": "invoke_agent",
+            "gen_ai.agent.name": "DeepKeel",
+            "gen_ai.agent.id": str(event.attributes.get("skill_id") or "deepkeel"),
         }
         if previous_context is not None:
             attributes["deepkeel.segment.resumed"] = True

@@ -2,23 +2,27 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**A durable, observable, capability-driven harness runtime for production-grade
-AI agents.**
+**A durable, observable Harness Agent runtime for governed root and specialist
+agents built from reusable Capability Packages.**
 
-DeepKeel owns the model/tool loop, typed runtime contracts, interruption,
-recovery, context engineering, governance ports, ToolProvider integration,
-Capability Pack composition, MCP adapters and bounded SubAgent orchestration.
+DeepKeel lets a Host expose a general assistant and directly addressable domain
+specialists from one immutable runtime generation. Each conversation receives a
+fail-closed capability view while sharing the same model/tool loop, durable
+lifecycle, persistence and observability contracts. DeepKeel also owns typed
+runtime contracts, interruption and recovery, context engineering, governance
+ports, ToolProvider integration, MCP adapters and bounded SubAgent orchestration.
 It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0-rc.2"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
 python examples/quickstart/main.py
 ```
 
 PyPI publication uses Trusted Publishing and is enabled independently after
-the publisher is configured for this repository. Git tags and GitHub release
-artifacts remain the source of truth for release candidates.
+the publisher is configured for this repository. Immutable Git tags, GitHub
+release artifacts, provenance attestations, and the release SBOM remain the
+source of truth for a release.
 
 DeepKeel is designed for Hosts that need more than a demo loop: durable run
 identity, resumable user handoffs, progressive tool disclosure, model routing,
@@ -28,9 +32,12 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 ## Start here
 
 - [Architecture](docs/architecture.md)
+- [Agent entrypoints](docs/agent-entrypoints.md)
 - [Runtime lifecycle](docs/runtime-lifecycle.md)
 - [Capability Packages](docs/capability-package-v1.md)
 - [Context management](docs/context-management.md)
+- [Security and trust](docs/security-and-trust.md)
+- [MCP and A2A interoperability](docs/interoperability.md)
 - [Durable execution](docs/durable-execution.md)
 - [Execution planning](docs/execution-planning.md)
 - [Model providers](docs/model-provider.md)
@@ -38,6 +45,8 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Production readiness](docs/production-readiness.md)
 - [PostgreSQL adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
+- [Migrating to 4.1](docs/migrating-to-4.1.md)
+- [Supply-chain controls](docs/supply-chain.md)
 - [Release process](docs/releasing.md)
 
 The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
@@ -133,6 +142,17 @@ The execution boundary is exclusively typed. Providers and sessions remain
 injected runtime ports, while request and result data are serializable Core
 contracts. Product hosts project `RuntimeResult` into their own API, event and
 persistence DTOs without passing those mappings back into Core.
+
+For a minimal embedding, use the Golden Path facade. It creates the same
+canonical runtime and does not introduce a second execution loop:
+
+```python
+from deepkeel.runtime_sdk import AgentHarness
+
+harness = AgentHarness.create(provider=model_provider)
+result = harness.run("Inspect this incident", user_id="operator-42")
+print(result.final_answer.markdown)
+```
 
 ```python
 from deepkeel.runtime_sdk import RuntimeRequest
@@ -438,10 +458,11 @@ source, and diagnostics include only counts for the installed Capability Pack
 inventory.
 
 MCP servers use the same governed tool gateway for local stdio and remote
-Streamable HTTP transports. Remote credentials are resolved through the
-runtime `SecretProvider`, diagnostics expose only header names and sanitized
-endpoints, and expired HTTP sessions are re-initialized once before surfacing a
-transport failure.
+Streamable HTTP transports. The modern protocol path supports stateless server
+discovery, tasks, safe parameter-header projection, and remote `outputSchema`
+validation. Remote credentials are resolved through the runtime
+`SecretProvider`, diagnostics expose only header names and sanitized endpoints,
+and legacy servers remain available through an explicitly bounded fallback.
 
 ```python
 from deepkeel.mcp_sdk import McpServerSpec
@@ -455,11 +476,17 @@ remote_search = McpServerSpec(
 )
 ```
 
+Remote specialist Agents can opt into the experimental A2A 1.0 adapter through
+`deepkeel.a2a_sdk`. A2A Tasks become ordinary bounded SubAgent work: the parent
+run owns permissions, budgets, checkpoints, cancellation, Artifacts, and the
+final answer. Capability Packages and Hosts do not depend on A2A protocol types
+unless they intentionally install that adapter.
+
 The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
-release candidate and public SDK surface are `4.1.0rc2`. Consumers import
-only from `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`,
-`deepkeel.adapter_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, or
-`deepkeel.orchestration_sdk`. The versioned public
+release and public SDK surface are `4.1.0`. Consumers import only from
+`deepkeel.runtime_sdk`, `deepkeel.extension_sdk`, `deepkeel.adapter_sdk`,
+`deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, `deepkeel.orchestration_sdk`, or the
+experimental `deepkeel.a2a_sdk`. The versioned public
 symbol manifest is available from `deepkeel.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
 suite stores a frozen API fingerprint, so contract changes require an explicit

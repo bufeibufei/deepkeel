@@ -14,6 +14,7 @@ from deepkeel.entrypoints import (
 from deepkeel.events import AgentEventPersistenceError
 from deepkeel.failures import classify_runtime_failure
 from deepkeel.graph import create_harness_graph
+from deepkeel.guardrails import GuardrailAudit
 from deepkeel.hooks import HookAudit
 from deepkeel.langgraph_adapter import checkpointer_supports_async, compiler_checkpointer
 from deepkeel.leases import ExecutionFence
@@ -22,6 +23,7 @@ from deepkeel.runtime_api import RuntimeRequest, RuntimeResult
 from deepkeel.runtime_events import RuntimeEventEmitter
 from deepkeel.runtime_execution_support import EventSink, emit_runtime_hook_audits
 from deepkeel.runtime_graph_execution import execute_graph_turn
+from deepkeel.runtime_input_guardrails import guard_runtime_input
 from deepkeel.runtime_lifecycle import run_start_lifecycle_hooks
 from deepkeel.runtime_model_pipeline import build_runtime_model_gateway
 from deepkeel.runtime_policy import (
@@ -38,6 +40,10 @@ from deepkeel.runtime_turn_preparation import (
     PreparedTurnInputs,
     prepare_turn_identity,
     prepare_turn_inputs,
+)
+from deepkeel.runtime_turn_events import (
+    emit_input_guardrail_audits,
+    emit_memory_recall_events,
 )
 from deepkeel.skills import SkillPolicy
 from deepkeel.tools import ToolExecutionContext
@@ -99,8 +105,25 @@ class RuntimeTurnCoordinator:
         self.event_sink = event_sink
         self.execution_fence = execution_fence
         self.started_monotonic = time.monotonic()
+        self._input_guardrail_audits: tuple[GuardrailAudit, ...] = ()
 
     async def run(self) -> RuntimeResult:
+        try:
+            guarded = await guard_runtime_input(self.runtime.guardrail_runner, self.request)
+        except Exception as exc:
+            return await self._context_failure(
+                exc,
+                short=self._request_short(),
+                bundle=self._request_bundle(),
+            )
+        self.request = guarded.request
+        self._input_guardrail_audits = guarded.audits
+        if guarded.error:
+            return await self._context_failure(
+                RuntimeError(guarded.error),
+                short=self._request_short(),
+                bundle=self._request_bundle(),
+            )
         prepared = await self._prepare_inputs()
         if isinstance(prepared, RuntimeResult):
             return prepared
@@ -198,33 +221,9 @@ class RuntimeTurnCoordinator:
             package_ids=prepared.capability_view.package_ids,
         )
         state.emitter(_entrypoint_resolved_event(prepared.capability_view))
-        self._emit_memory_recall(state)
+        emit_input_guardrail_audits(state.emitter, self._input_guardrail_audits)
+        emit_memory_recall_events(state.emitter, state.bundle, state.short)
         return state
-
-    def _emit_memory_recall(self, state: _TurnState) -> None:
-        recall = as_dict(state.bundle.get("memory_recall"))
-        if not recall or state.short.get("resume") or state.short.get("recover_interrupted"):
-            return
-        state.emitter(
-            {
-                "event_type": "memory.recall.decided",
-                "title": "Memory recall policy evaluated",
-                "summary": str(recall.get("reason") or recall.get("status") or ""),
-                "payload": dict(recall),
-                "visible": False,
-            }
-        )
-        status = str(recall.get("status") or "")
-        if status in {"completed", "failed", "skipped"}:
-            state.emitter(
-                {
-                    "event_type": f"memory.recall.{status}",
-                    "title": f"Memory recall {status}",
-                    "summary": str(recall.get("reason") or status),
-                    "payload": dict(recall),
-                    "visible": False,
-                }
-            )
 
     async def _run_lifecycle(self, state: _TurnState) -> RuntimeResult | None:
         started = await run_start_lifecycle_hooks(
@@ -290,6 +289,7 @@ class RuntimeTurnCoordinator:
             deadline_monotonic=state.deadline_monotonic,
             tool_view_mode=self.runtime.tool_view_mode,
             hook_runner=self.runtime.hook_runner,
+            guardrail_runner=self.runtime.guardrail_runner,
             entry_tool_skill_activator=self.runtime.entry_tool_skill_activator,
         )
         return _GraphRuntime(graph, gateway, tool_context, turn_context)

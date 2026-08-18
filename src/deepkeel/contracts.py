@@ -11,6 +11,8 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 ObservationStatus = Literal["pending", "succeeded", "failed", "requires_user_action"]
 ResultOutcome = Literal["completed", "partial", "degraded", "skipped", "canceled"]
 ToolResultStatus = Literal["succeeded", "failed", "requires_user_action", "waiting_async"]
+DataOrigin = Literal["user", "model", "tool", "host", "memory", "external", "unknown"]
+TrustLevel = Literal["trusted", "internal", "external", "untrusted", "unknown"]
 
 
 def utc_now() -> datetime:
@@ -125,6 +127,19 @@ class PendingAction(ContractModel):
     resolved_at: datetime | None = None
 
 
+class DataProvenance(ContractModel):
+    """Portable lineage and trust metadata for model-visible runtime data."""
+
+    schema_version: str = "data-provenance-v1"
+    origin: DataOrigin = "unknown"
+    source_id: str = ""
+    trust_level: TrustLevel = "unknown"
+    sensitivity: list[str] = Field(default_factory=list)
+    content_hash: str = ""
+    parent_ids: list[str] = Field(default_factory=list)
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 class Artifact(ContractModel):
     id: str = Field(min_length=1)
     run_id: str = Field(min_length=1)
@@ -133,6 +148,7 @@ class Artifact(ContractModel):
     summary: str = ""
     source_id: str = ""
     data: dict[str, Any] = Field(default_factory=dict)
+    provenance: DataProvenance = Field(default_factory=DataProvenance)
     created_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 
@@ -148,6 +164,7 @@ class Observation(ContractModel):
     data: dict[str, Any] = Field(default_factory=dict)
     error: str = ""
     artifact_ids: list[str] = Field(default_factory=list)
+    provenance: DataProvenance = Field(default_factory=DataProvenance)
     created_at: datetime = Field(default_factory=utc_now)
     metadata: dict[str, Any] = Field(default_factory=dict)
 

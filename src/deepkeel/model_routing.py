@@ -159,7 +159,8 @@ def _is_tool_discovery_continuation(context: ModelStepContext) -> bool:
     result_names = tuple(name for name in context.tool_result_names if name)
     if len(sources) != context.observation_count or len(result_names) != context.tool_result_count:
         return False
-    return all(name == "runtime.discover_tools" for name in (*sources, *result_names))
+    discovery_names = {"runtime.discover_tools", "runtime.discover_skills"}
+    return all(name in discovery_names for name in (*sources, *result_names))
 
 
 def _available_role(preferred: str, available: tuple[str, ...]) -> str:
