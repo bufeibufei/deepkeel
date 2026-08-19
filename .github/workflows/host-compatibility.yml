@@ -55,16 +55,16 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out DeepKeel candidate
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           path: deepkeel
       - name: Check out downstream Host
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: ${{ inputs.host_repository }}
           ref: ${{ inputs.host_ref }}
           path: host
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: ${{ inputs.python_version }}
           enable-cache: true

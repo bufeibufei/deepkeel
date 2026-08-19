@@ -38,11 +38,17 @@ uv run python scripts/build_release_candidate.py
 ```
 
 The command rejects a dirty tree and emits one wheel plus a sidecar manifest
-containing the immutable source SHA, package version, build timestamp, and
-wheel SHA256. A Host must install this wheel in an isolated environment, run
+containing the immutable source SHA/ref/commit time, package version, build
+environment, optional Host SHA/release ID, build timestamp, and wheel SHA256.
+For a coordinated Host release, pass `--host-sha <sha> --release-id <id>`.
+A Host must install this wheel in an isolated environment, run
 its gates there, deploy the same bytes without rebuilding, verify the SHA256
 again before installation, and retain both Core and Host provenance in release
 metadata.
+
+Every third-party GitHub Action is pinned to a full commit SHA. PostgreSQL
+reference adapters have an independent coverage gate because package-wide
+coverage collected without the `postgres` marker does not exercise them.
 
 On Windows, the package-owned gate is:
 

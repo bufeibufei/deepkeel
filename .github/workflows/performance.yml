@@ -16,8 +16,8 @@ jobs:
   concurrency-baseline:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v6
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: astral-sh/setup-uv@d0cc045d04ccac9d8b7881df0226f9e82c39688e # v6
         with:
           python-version: "3.12"
           enable-cache: true
@@ -32,7 +32,7 @@ jobs:
             --workers 32 \
             --min-success-rate 1 \
             --max-p95-ms 2000 | tee performance-report.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: deepkeel-performance-report

@@ -5,7 +5,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import platform
 import subprocess
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 from zipfile import ZipFile
@@ -18,6 +20,8 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--output-dir", default="dist/candidate")
     parser.add_argument("--allow-dirty", action="store_true")
+    parser.add_argument("--host-sha", default="")
+    parser.add_argument("--release-id", default="")
     args = parser.parse_args()
 
     status = _git("status", "--porcelain")
@@ -42,8 +46,15 @@ def main() -> int:
         "project": "deepkeel",
         "version": _wheel_version(wheel),
         "source_sha": source_sha,
+        "source_ref": _git("branch", "--show-current") or "detached",
+        "source_commit_time": _git("show", "-s", "--format=%cI", "HEAD"),
+        "host_sha": str(args.host_sha or "").strip(),
+        "release_id": str(args.release_id or "").strip(),
         "wheel": wheel.name,
         "wheel_sha256": _sha256(wheel),
+        "python": platform.python_version(),
+        "platform": platform.platform(),
+        "builder": f"{Path(sys.executable).name} {platform.python_implementation()}",
         "built_at": datetime.now(UTC).isoformat(),
     }
     manifest_path = wheel.with_suffix(wheel.suffix + ".manifest.json")

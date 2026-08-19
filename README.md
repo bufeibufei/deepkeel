@@ -36,6 +36,7 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 - [Runtime lifecycle](docs/runtime-lifecycle.md)
 - [Capability Packages](docs/capability-package-v1.md)
 - [Context management](docs/context-management.md)
+- [Catalog discovery](docs/catalog-discovery.md)
 - [Security and trust](docs/security-and-trust.md)
 - [Capability Package trust](docs/capability-trust.md)
 - [MCP and A2A interoperability](docs/interoperability.md)

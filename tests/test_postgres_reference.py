@@ -50,6 +50,7 @@ from deepkeel.contrib.postgres import (
     PostgresToolExecutionStore,
     PostgresTraceStore,
 )
+from deepkeel.contrib.postgres.migrations import default_postgres_migrations
 from deepkeel.memory_sdk import MemoryClaim, MemoryMutation, MemoryQuery
 from examples.production_worker import build_production_worker
 
@@ -475,7 +476,8 @@ def test_postgres_schema_registry_is_current_and_idempotent(
     second = postgres_database.migration_status()
 
     assert first.up_to_date is True
-    assert first.current_version == first.target_version == 5
+    expected_version = default_postgres_migrations(postgres_database.schema)[-1].version
+    assert first.current_version == first.target_version == expected_version
     assert [record.version for record in first.applied] == list(range(1, first.target_version + 1))
     assert first.pending == ()
     assert second == first

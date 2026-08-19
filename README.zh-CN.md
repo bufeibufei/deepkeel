@@ -28,6 +28,7 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 - [运行生命周期](docs/runtime-lifecycle.md)
 - [Capability Package](docs/capability-package-v1.md)
 - [上下文管理](docs/context-management.md)
+- [能力目录发现](docs/catalog-discovery.md)
 - [安全与信任边界](docs/security-and-trust.md)
 - [Capability Package 信任模型](docs/capability-trust.md)
 - [MCP 与 A2A 互操作](docs/interoperability.md)
