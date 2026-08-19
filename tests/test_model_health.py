@@ -310,7 +310,7 @@ def test_routed_gateway_fails_explicitly_when_all_models_are_open() -> None:
             immediate=True,
         )
 
-    with pytest.raises(RuntimeError, match="model invocation attempts exhausted"):
+    with pytest.raises(RuntimeError, match="NO_ELIGIBLE_MODEL"):
         gateway.run_turn(
             [AgentMessage(id="message-1", role="user", content="hello")],
             tools=[],

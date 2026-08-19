@@ -13,6 +13,12 @@ class CheckpointAuthority(StrEnum):
     SESSION_PROJECTION = "session_projection"
 
 
+class CanonicalStateUnavailableError(RuntimeError):
+    """Canonical state could not be read, so recovery must fail closed."""
+
+    code = "CANONICAL_STATE_UNAVAILABLE"
+
+
 class PersistenceResponsibility(StrEnum):
     """Non-overlapping responsibility assigned to each persistence mechanism."""
 

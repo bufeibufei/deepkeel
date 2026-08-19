@@ -5,7 +5,10 @@ import json
 from typing import Any, Callable
 
 from deepkeel.async_ports import run_sync_adapter
-from deepkeel.checkpoint_authority import CheckpointAuthority
+from deepkeel.checkpoint_authority import (
+    CanonicalStateUnavailableError,
+    CheckpointAuthority,
+)
 from deepkeel.events import envelope_runtime_event
 from deepkeel.leases import ExecutionFence
 from deepkeel.persistence import durable_state_from_result
@@ -165,7 +168,10 @@ async def aload_authoritative_checkpoint(
             if isinstance(state, dict) and state:
                 return dict(state), CheckpointAuthority.RUNTIME_STATE_STORE, errors
         except Exception as exc:
-            errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
+            raise CanonicalStateUnavailableError(
+                f"canonical runtime state is unavailable for {run_id}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
     elif runtime.runtime_state_store is not None:
         state, authority, sync_errors = await run_sync_adapter(
             runtime._load_authoritative_checkpoint,

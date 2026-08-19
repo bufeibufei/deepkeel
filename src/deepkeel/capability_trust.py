@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -78,7 +79,7 @@ def evaluate_capability_trust(
         )
     else:
         trusted = any(
-            source.source_uri.startswith(prefix)
+            _uri_is_within_prefix(source.source_uri, prefix)
             for prefix in policy.allowed_isolated_sources
         )
         reason = (
@@ -93,6 +94,26 @@ def evaluate_capability_trust(
         reason=reason,
         content_sha256=digest,
     )
+
+
+def _uri_is_within_prefix(source_uri: str, allowed_prefix: str) -> bool:
+    source = urlsplit(str(source_uri or ""))
+    allowed = urlsplit(str(allowed_prefix or ""))
+    if not source.scheme or not source.hostname or not allowed.scheme or not allowed.hostname:
+        return False
+    source_port = source.port or (443 if source.scheme.lower() == "https" else 80)
+    allowed_port = allowed.port or (443 if allowed.scheme.lower() == "https" else 80)
+    if (
+        source.scheme.lower() != allowed.scheme.lower()
+        or source.hostname.lower() != allowed.hostname.lower()
+        or source_port != allowed_port
+    ):
+        return False
+    allowed_path = "/" + str(allowed.path or "").strip("/")
+    source_path = "/" + str(source.path or "").strip("/")
+    if allowed_path == "/":
+        return True
+    return source_path == allowed_path or source_path.startswith(f"{allowed_path}/")
 
 
 __all__ = [

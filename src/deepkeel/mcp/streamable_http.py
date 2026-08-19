@@ -8,7 +8,7 @@ import time
 import warnings
 from itertools import count
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
@@ -349,11 +349,16 @@ class StreamableHttpMcpClient:
             self._closed = True
             if self._protocol_era == "legacy" and self._session_id:
                 try:
-                    self._validate_egress_target()
-                    self._client.delete(
-                        self.spec.url,
-                        headers=self._request_headers(include_session=True),
+                    target_url, target_headers, extensions = self._validated_target()
+                    self._client.request(
+                        "DELETE",
+                        target_url,
+                        headers={
+                            **self._request_headers(include_session=True),
+                            **target_headers,
+                        },
                         timeout=self.spec.shutdown_timeout_seconds,
+                        extensions=extensions,
                     )
                 except httpx.HTTPError:
                     pass
@@ -462,16 +467,20 @@ class StreamableHttpMcpClient:
                 raise McpTransportError(f"MCP client is closed: {self.server_id}")
             self._in_flight += 1
         try:
-            self._validate_egress_target()
+            target_url, target_headers, extensions = self._validated_target()
             with self._client.stream(
                 "POST",
-                self.spec.url,
+                target_url,
                 json=payload,
-                headers=self._request_headers(
-                    include_session=include_session,
-                    payload=payload,
-                ),
+                headers={
+                    **self._request_headers(
+                        include_session=include_session,
+                        payload=payload,
+                    ),
+                    **target_headers,
+                },
                 timeout=max(0.001, float(timeout_seconds)),
+                extensions=extensions,
             ) as streamed:
                 content = bytearray()
                 for chunk in streamed.iter_bytes():
@@ -509,7 +518,7 @@ class StreamableHttpMcpClient:
             )
         return response
 
-    def _validate_egress_target(self) -> None:
+    def _validated_target(self) -> tuple[str, dict[str, str], dict[str, Any]]:
         parsed = urlsplit(self.spec.url)
         hostname = str(parsed.hostname or "").strip().lower()
         if not hostname:
@@ -531,14 +540,33 @@ class StreamableHttpMcpClient:
             raise McpTransportError(
                 f"MCP endpoint DNS resolution failed: {self.server_id}"
             ) from exc
-        if self.spec.allow_private_network:
-            return
-        for value in addresses:
+        approved: list[str] = []
+        for value in sorted(addresses):
             address = ipaddress.ip_address(value)
-            if not address.is_global:
+            if not self.spec.allow_private_network and not address.is_global:
                 raise McpTransportError(
                     f"MCP endpoint resolved to a non-public address: {self.server_id}"
                 )
+            approved.append(address.compressed)
+        if not approved:
+            raise McpTransportError(f"MCP endpoint resolved to no address: {self.server_id}")
+
+        # Connect to the validated address directly. The original hostname stays
+        # in Host and TLS SNI, so httpx cannot perform a second DNS lookup that
+        # could be rebound to an unvalidated destination.
+        selected = approved[0]
+        netloc_host = f"[{selected}]" if ":" in selected else selected
+        if parsed.port is not None:
+            netloc_host = f"{netloc_host}:{parsed.port}"
+        target_url = urlunsplit(
+            (parsed.scheme, netloc_host, parsed.path, parsed.query, parsed.fragment)
+        )
+        default_port = 443 if parsed.scheme == "https" else 80
+        host_header = hostname if (parsed.port or default_port) == default_port else f"{hostname}:{parsed.port}"
+        extensions: dict[str, Any] = {}
+        if parsed.scheme == "https":
+            extensions["sni_hostname"] = hostname.encode("idna")
+        return target_url, {"Host": host_header}, extensions
 
     def _request_headers(
         self,

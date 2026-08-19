@@ -1,6 +1,12 @@
 """Step-routing tests owned by the standalone runtime package."""
 
-from deepkeel.model_routing import AdaptiveStepModelRouter, ModelStepContext
+import pytest
+
+from deepkeel.model_routing import (
+    AdaptiveStepModelRouter,
+    ModelStepContext,
+    NoEligibleModelError,
+)
 
 
 def _context(**overrides):
@@ -136,3 +142,15 @@ def test_adaptive_router_requires_declared_image_capability():
     )
 
     assert decision.role == "reasoning"
+
+
+def test_adaptive_router_fails_closed_when_every_role_is_ineligible():
+    with pytest.raises(NoEligibleModelError, match="NO_ELIGIBLE_MODEL"):
+        AdaptiveStepModelRouter().route(
+            _context(
+                provider_profiles={
+                    "fast": {"health": {"available": False}},
+                    "reasoning": {"health": {"available": False}},
+                },
+            )
+        )

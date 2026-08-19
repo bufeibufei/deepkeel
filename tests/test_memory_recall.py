@@ -24,6 +24,11 @@ class StaticPolicy:
         return self.decision
 
 
+class BrokenPolicy:
+    def decide(self, _request):
+        raise RuntimeError("policy unavailable")
+
+
 class RecordingMemoryPort:
     def __init__(self, *, fail: bool = False) -> None:
         self.fail = fail
@@ -187,6 +192,19 @@ def test_policy_can_disable_runtime_memory_search() -> None:
 
     result = asyncio.run(coordinator.prepare("do not use memory", {}, _bundle()))
 
+    assert result["disabled_tool_names"] == ["memory.search"]
+
+
+def test_policy_failure_denies_runtime_memory_search() -> None:
+    coordinator = DefaultMemoryRecallCoordinator(
+        policy=BrokenPolicy(),
+        memory_port=RecordingMemoryPort(),
+    )
+
+    result = asyncio.run(coordinator.prepare("remember this", {}, _bundle()))
+
+    assert result["memory_recall"]["mode"] == "skip"
+    assert result["memory_recall"]["reason"] == "policy_error:RuntimeError"
     assert result["disabled_tool_names"] == ["memory.search"]
 
 

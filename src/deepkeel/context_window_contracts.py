@@ -13,6 +13,7 @@ from deepkeel.context_contracts import (
     ContextTier,
     ContextVisibility,
 )
+from deepkeel.scope import RuntimeScope
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,33 +106,43 @@ class ContextSummaryRecord:
 
 
 class ContextSummaryCache(Protocol):
-    def get(self, cache_key: str, source_fingerprint: str) -> ContextSummaryRecord | None: ...
+    def get(
+        self,
+        scope: RuntimeScope,
+        cache_key: str,
+        source_fingerprint: str,
+    ) -> ContextSummaryRecord | None: ...
 
-    def put(self, record: ContextSummaryRecord) -> None: ...
+    def put(self, scope: RuntimeScope, record: ContextSummaryRecord) -> None: ...
 
-    def invalidate(self, cache_key: str) -> None: ...
+    def invalidate(self, scope: RuntimeScope, cache_key: str) -> None: ...
 
 
 class InMemoryContextSummaryCache:
     """Thread-safe reference cache that rejects stale source fingerprints."""
 
     def __init__(self) -> None:
-        self._records: dict[str, ContextSummaryRecord] = {}
+        self._records: dict[tuple[str, str], ContextSummaryRecord] = {}
         self._lock = Lock()
 
-    def get(self, cache_key: str, source_fingerprint: str) -> ContextSummaryRecord | None:
+    def get(
+        self,
+        scope: RuntimeScope,
+        cache_key: str,
+        source_fingerprint: str,
+    ) -> ContextSummaryRecord | None:
         with self._lock:
-            record = self._records.get(str(cache_key or ""))
+            record = self._records.get((scope.scope_digest, str(cache_key or "")))
             if record is None or record.source_fingerprint != source_fingerprint:
                 return None
             return copy.deepcopy(record)
 
-    def put(self, record: ContextSummaryRecord) -> None:
+    def put(self, scope: RuntimeScope, record: ContextSummaryRecord) -> None:
         if not record.cache_key or not record.source_fingerprint:
             return
         with self._lock:
-            self._records[record.cache_key] = copy.deepcopy(record)
+            self._records[(scope.scope_digest, record.cache_key)] = copy.deepcopy(record)
 
-    def invalidate(self, cache_key: str) -> None:
+    def invalidate(self, scope: RuntimeScope, cache_key: str) -> None:
         with self._lock:
-            self._records.pop(str(cache_key or ""), None)
+            self._records.pop((scope.scope_digest, str(cache_key or "")), None)

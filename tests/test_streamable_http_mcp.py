@@ -10,6 +10,7 @@ import pytest
 
 from deepkeel.adapter_sdk import GovernanceScope, MappingSecretProvider
 from deepkeel.mcp import McpClientPool, McpServerSpec, McpTransportError
+from deepkeel.mcp.streamable_http import StreamableHttpMcpClient
 
 
 class _McpHandler(BaseHTTPRequestHandler):
@@ -267,6 +268,29 @@ def test_streamable_http_blocks_private_network_without_explicit_opt_in() -> Non
             client.list_tools()
 
         pool.close()
+
+
+def test_streamable_http_connects_to_the_validated_dns_address(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "deepkeel.mcp.streamable_http.socket.getaddrinfo",
+        lambda *_args, **_kwargs: [
+            (2, 1, 6, "", ("93.184.216.34", 443)),
+        ],
+    )
+    client = StreamableHttpMcpClient(
+        McpServerSpec(
+            id="dns-pinned",
+            transport="streamable_http",
+            url="https://mcp.example.test/api?version=1",
+        )
+    )
+
+    target_url, headers, extensions = client._validated_target()
+    client.close()
+
+    assert target_url == "https://93.184.216.34/api?version=1"
+    assert headers == {"Host": "mcp.example.test"}
+    assert extensions == {"sni_hostname": b"mcp.example.test"}
 
 
 def test_streamable_http_enforces_request_and_response_size_limits() -> None:

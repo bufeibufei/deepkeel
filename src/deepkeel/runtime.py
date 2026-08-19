@@ -692,6 +692,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
     ) -> tuple[dict[str, Any], CheckpointAuthority, list[str]]:
         """Load portable state from the canonical store before compatibility fallbacks."""
 
+        from deepkeel.checkpoint_authority import CanonicalStateUnavailableError
+
         errors: list[str] = []
         if self.runtime_state_store is not None:
             try:
@@ -720,7 +722,10 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                 if isinstance(state, dict) and state:
                     return dict(state), CheckpointAuthority.RUNTIME_STATE_STORE, errors
             except Exception as exc:
-                errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
+                raise CanonicalStateUnavailableError(
+                    f"canonical runtime state is unavailable for {run_id}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
         if self.checkpoint_store is not None:
             try:
                 legacy_user_id = require_legacy_compatible_scope(

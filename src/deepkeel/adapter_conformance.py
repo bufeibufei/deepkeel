@@ -141,17 +141,22 @@ def verify_trace_store_contract(store: TraceStore, *, run_id: str) -> None:
 
 
 def verify_context_summary_cache_contract(cache: ContextSummaryCache) -> None:
+    first_scope = RuntimeScope(tenant_id="tenant-a", user_id="user-1")
+    isolated_scope = RuntimeScope(tenant_id="tenant-b", user_id="user-1")
     record = ContextSummaryRecord(
         cache_key="profile:summary",
         source_fingerprint="fingerprint-v1",
         summary={"focus": "career"},
         summary_version="v1",
     )
-    cache.put(record)
-    assert cache.get(record.cache_key, record.source_fingerprint) == record
-    assert cache.get(record.cache_key, "stale") is None
-    cache.invalidate(record.cache_key)
-    assert cache.get(record.cache_key, record.source_fingerprint) is None
+    cache.put(first_scope, record)
+    assert cache.get(first_scope, record.cache_key, record.source_fingerprint) == record
+    assert cache.get(first_scope, record.cache_key, "stale") is None
+    assert cache.get(isolated_scope, record.cache_key, record.source_fingerprint) is None
+    cache.invalidate(isolated_scope, record.cache_key)
+    assert cache.get(first_scope, record.cache_key, record.source_fingerprint) == record
+    cache.invalidate(first_scope, record.cache_key)
+    assert cache.get(first_scope, record.cache_key, record.source_fingerprint) is None
 
 
 def verify_capability_package_store_contract(

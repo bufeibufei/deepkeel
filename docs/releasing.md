@@ -30,6 +30,20 @@ the changelog, and the tag must identify the same version.
 7. Update downstream Hosts to the exact released tag or commit, then run their
    own Capability Pack, persistence, frontend, and deployment regressions.
 
+For a downstream Host candidate, build the wheel exactly once after committing
+the Core tree:
+
+```powershell
+uv run python scripts/build_release_candidate.py
+```
+
+The command rejects a dirty tree and emits one wheel plus a sidecar manifest
+containing the immutable source SHA, package version, build timestamp, and
+wheel SHA256. A Host must install this wheel in an isolated environment, run
+its gates there, deploy the same bytes without rebuilding, verify the SHA256
+again before installation, and retain both Core and Host provenance in release
+metadata.
+
 On Windows, the package-owned gate is:
 
 ```powershell

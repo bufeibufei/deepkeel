@@ -63,6 +63,7 @@ from deepkeel.context_window_support import (
 )
 from deepkeel.token_estimation import ConservativeTokenEstimator, TokenEstimator
 from deepkeel.type_narrowing import as_dict
+from deepkeel.scope import RuntimeScope
 
 
 class DeterministicContextWindowManager:
@@ -93,6 +94,7 @@ class DeterministicContextWindowManager:
     ) -> ContextWindowResult:
         policy = self.policy
         bundle = dict(context_bundle)
+        runtime_scope = RuntimeScope.model_validate(bundle.pop("_runtime_scope", None) or {})
         profile = ModelContextProfile.from_mapping(
             bundle.pop("_model_context_profile", None) or bundle.get("model_context_profile")
         )
@@ -192,6 +194,7 @@ class DeterministicContextWindowManager:
         bounded_context, context_diagnostics = self._bounded_context(
             model_segments,
             context_budget,
+            scope=runtime_scope,
         )
 
         bundle["runtime_context"] = bounded_context
@@ -366,6 +369,8 @@ class DeterministicContextWindowManager:
         self,
         segments: list[ContextSegment],
         budget: int,
+        *,
+        scope: RuntimeScope,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         runtime_context = {segment.key: segment.value for segment in segments}
         original_tokens = self.estimator.estimate(runtime_context) if runtime_context else 0
@@ -374,6 +379,7 @@ class DeterministicContextWindowManager:
                 for segment in segments:
                     if segment.cache_key and segment.summary not in (None, "", [], {}):
                         self.summary_cache.put(
+                            scope,
                             ContextSummaryRecord(
                                 cache_key=segment.cache_key,
                                 source_fingerprint=(
@@ -467,13 +473,14 @@ class DeterministicContextWindowManager:
             summary = segment.summary
             fingerprint = segment.source_fingerprint or context_fingerprint(value)
             if segment.cache_key and self.summary_cache is not None:
-                cached = self.summary_cache.get(segment.cache_key, fingerprint)
+                cached = self.summary_cache.get(scope, segment.cache_key, fingerprint)
                 if cached is not None:
                     summary = cached.summary
                     summary_cache_hits.append(key)
                 elif summary not in (None, "", [], {}):
                     summary_cache_misses.append(key)
                     self.summary_cache.put(
+                        scope,
                         ContextSummaryRecord(
                             cache_key=segment.cache_key,
                             source_fingerprint=fingerprint,

@@ -101,6 +101,22 @@ def test_isolated_capability_uses_host_source_allowlist() -> None:
 
     assert evaluate_capability_trust(source, policy).trusted is True
 
+    bypass = source.model_copy(
+        update={"source_uri": "https://mcp.example.test.evil.invalid/search"}
+    )
+    path_policy = CapabilityTrustPolicy(
+        allowed_isolated_sources=("https://mcp.example.test/api",),
+    )
+    sibling_path = source.model_copy(
+        update={"source_uri": "https://mcp.example.test/api.evil/package"}
+    )
+    child_path = source.model_copy(
+        update={"source_uri": "https://mcp.example.test/api/package"}
+    )
+    assert evaluate_capability_trust(bypass, policy).trusted is False
+    assert evaluate_capability_trust(sibling_path, path_policy).trusted is False
+    assert evaluate_capability_trust(child_path, path_policy).trusted is True
+
 
 def test_langgraph_adapter_owns_engine_specific_resume_calls() -> None:
     class FakeGraph:

@@ -128,6 +128,7 @@ _REQUIRED_COLUMNS = {
     },
     "capability_catalog": {"catalog_id", "revision", "snapshot", "updated_at"},
     "context_summaries": {
+        "scope_digest",
         "cache_key",
         "source_fingerprint",
         "summary",
@@ -487,6 +488,24 @@ def default_postgres_migrations(schema: str) -> tuple[PostgresMigration, ...]:
             name="control_plane_reference_stores",
             statements=_control_plane_schema(schema),
         ),
+        PostgresMigration(
+            version=6,
+            name="context_summary_scope_isolation",
+            statements=(
+                f"DROP TABLE IF EXISTS {schema}.context_summaries",
+                f"""
+                CREATE TABLE {schema}.context_summaries (
+                    scope_digest TEXT NOT NULL,
+                    cache_key TEXT NOT NULL,
+                    source_fingerprint TEXT NOT NULL,
+                    summary JSONB NOT NULL,
+                    summary_version TEXT NOT NULL DEFAULT '',
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (scope_digest, cache_key)
+                )
+                """,
+            ),
+        ),
     )
 
 
@@ -502,11 +521,13 @@ def _control_plane_schema(schema: str) -> tuple[str, ...]:
         """,
         f"""
         CREATE TABLE IF NOT EXISTS {schema}.context_summaries (
-            cache_key TEXT PRIMARY KEY,
+            scope_digest TEXT NOT NULL,
+            cache_key TEXT NOT NULL,
             source_fingerprint TEXT NOT NULL,
             summary JSONB NOT NULL,
             summary_version TEXT NOT NULL DEFAULT '',
-            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (scope_digest, cache_key)
         )
         """,
         f"""

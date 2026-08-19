@@ -59,6 +59,12 @@ class ModelRouter(Protocol):
     def route(self, context: ModelStepContext) -> ModelRouteDecision: ...
 
 
+class NoEligibleModelError(RuntimeError):
+    """No configured model satisfies health and capability constraints."""
+
+    code = "NO_ELIGIBLE_MODEL"
+
+
 class AdaptiveStepModelRouter:
     router_id = "adaptive-step-router-v1"
 
@@ -70,15 +76,20 @@ class AdaptiveStepModelRouter:
         policy = context.model_policy if isinstance(context.model_policy, dict) else {}
         mode = str(policy.get("mode") or "single").strip().lower()
         primary = str(policy.get("primary_role") or "reasoning")
+        eligible = _eligible_roles(context, available)
+        if not eligible:
+            raise NoEligibleModelError(
+                "NO_ELIGIBLE_MODEL: no configured model satisfies current health and "
+                "capability constraints"
+            )
         if mode != "adaptive":
             return self._decision(
-                _available_role(primary, available),
+                _available_role(primary, eligible),
                 "single model policy",
                 context,
             )
 
-        eligible = _eligible_roles(context, available)
-        routing_roles = eligible or available
+        routing_roles = eligible
 
         skill = context.skill_activation if isinstance(context.skill_activation, dict) else {}
         if context.policy_phase == "repair":

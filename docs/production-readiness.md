@@ -168,10 +168,21 @@ the same model name can behave differently behind different endpoints or
 credentials.
 
 Remote Streamable HTTP MCP denies private, loopback and link-local destinations
-by default, validates DNS before every request, refuses redirects and inherited
-proxy credentials, and enforces request/response byte ceilings. Hosts must use
-an explicit hostname allowlist; private-network access is an opt-in intended
-only for controlled internal MCP servers.
+by default, resolves DNS before every request, pins the request connection to a
+validated address while preserving the original Host/SNI identity, refuses
+redirects and inherited proxy credentials, and enforces request/response byte
+ceilings. Hosts must use an explicit hostname allowlist; private-network access
+is an opt-in intended only for controlled internal MCP servers. Capability URI
+trust uses parsed scheme, host, port, and path-segment boundaries rather than
+raw string prefixes.
+
+Canonical-state adapter errors are fail-closed. Legacy checkpoint fallback is
+allowed only when canonical state is absent or an explicit migration marker
+authorizes it; transport, timeout, and deserialization failures must surface to
+recovery instead of silently restoring a potentially stale checkpoint. Model
+routing likewise returns `NO_ELIGIBLE_MODEL` when health and capability policy
+exclude every binding, while Memory search is denied on policy failure unless a
+Host explicitly installs a degraded-mode policy.
 
 Remote A2A specialists require the same egress and credential policy. Treat
 Agent Cards, Messages, Task states, and Artifacts as untrusted input. A parent

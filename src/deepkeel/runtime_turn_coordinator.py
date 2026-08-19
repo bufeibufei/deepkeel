@@ -256,6 +256,7 @@ class RuntimeTurnCoordinator:
     def _reprepare_context(self, state: _TurnState) -> None:
         state.bundle["_model_context_profile"] = state.inputs.model_context_profile.as_dict()
         state.bundle["_configured_input_limit"] = state.inputs.configured_input_limit
+        state.bundle["_runtime_scope"] = self.request.runtime_scope.model_dump(mode="json")
         prepared = self.runtime.context_window_manager.prepare(
             self.request.question,
             state.short,

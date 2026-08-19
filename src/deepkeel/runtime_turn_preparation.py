@@ -118,6 +118,7 @@ async def prepare_turn_inputs(
     bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
     bundle["governance_scopes"] = governance_scopes
     bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
+    bundle["_runtime_scope"] = request.runtime_scope.model_dump(mode="json")
     bundle["_model_context_profile"] = model_context_profile.as_dict()
     bundle["_configured_input_limit"] = configured_input_limit
     prepared_context = runtime.context_window_manager.prepare(
