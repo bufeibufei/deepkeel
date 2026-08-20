@@ -86,3 +86,9 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 exclude = ["build", "dist"]
+
+[[tool.mypy.overrides]]
+module = ["deepkeel.discovery_sdk", "deepkeel.hybrid_discovery"]
+disallow_any_generics = true
+disallow_untyped_defs = true
+warn_return_any = true

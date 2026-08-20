@@ -48,6 +48,7 @@ def test_source_installation_identity_conformance() -> None:
         "DEEPKEEL_VERSION",
         "a2a_sdk",
         "adapter_sdk",
+        "discovery_sdk",
         "extension_sdk",
         "mcp_sdk",
         "memory_sdk",

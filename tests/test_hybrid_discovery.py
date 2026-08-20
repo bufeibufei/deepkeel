@@ -2,13 +2,33 @@ from __future__ import annotations
 
 import pytest
 
-from deepkeel.hybrid_discovery import (
+from deepkeel.discovery_sdk import (
     HybridDiscoveryPolicy,
     HybridSkillRanker,
     HybridToolRanker,
+    PreservingSkillReranker,
+    PreservingToolReranker,
 )
 from deepkeel.skill_disclosure import SkillDescriptor
 from deepkeel.tool_disclosure import ToolDescriptor
+
+
+def test_preserving_rerankers_keep_upstream_order() -> None:
+    skills = (
+        SkillDescriptor("second", "Second", "Second skill", "prompt", ("model",), ("second.run",)),
+        SkillDescriptor("first", "First", "First skill", "prompt", ("model",), ("first.run",)),
+    )
+    tools = (
+        ToolDescriptor("second.run", "Second tool", "discoverable", ()),
+        ToolDescriptor("first.run", "First tool", "discoverable", ()),
+    )
+
+    assert PreservingSkillReranker().rerank(
+        query="ignored", candidates=skills, limit=1
+    ) == skills[:1]
+    assert PreservingToolReranker().rerank(
+        query="ignored", candidates=tools, limit=1
+    ) == tools[:1]
 
 
 class _Similarity:

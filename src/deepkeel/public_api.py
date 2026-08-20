@@ -1,11 +1,13 @@
 """Machine-readable manifest for the frozen DeepKeel v4 public surface."""
 
 import deepkeel.adapter_sdk as adapter_sdk
+import deepkeel.discovery_sdk as discovery_sdk
 import deepkeel.extension_sdk as extension_sdk
 import deepkeel.memory_sdk as memory_sdk
 import deepkeel.runtime_sdk as runtime_sdk
 
 from deepkeel.adapter_sdk import ADAPTER_SDK_API
+from deepkeel.discovery_sdk import DISCOVERY_SDK_API
 from deepkeel.a2a_sdk import A2A_SDK_API
 from deepkeel.api_stability import build_public_api_manifest, build_semantic_contract
 from deepkeel.extension_sdk import EXTENSION_SDK_API
@@ -24,6 +26,7 @@ PUBLIC_API_BY_LAYER = {
     "mcp": MCP_SDK_API,
     "memory": MEMORY_SDK_API,
     "adapter": ADAPTER_SDK_API,
+    "discovery": DISCOVERY_SDK_API,
 }
 PUBLIC_API_SYMBOLS = frozenset(
     symbol for symbols in PUBLIC_API_BY_LAYER.values() for symbol in symbols

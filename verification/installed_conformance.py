@@ -585,6 +585,7 @@ def verify_installation_isolation() -> None:
         "DEEPKEEL_VERSION",
         "a2a_sdk",
         "adapter_sdk",
+        "discovery_sdk",
         "extension_sdk",
         "mcp_sdk",
         "memory_sdk",

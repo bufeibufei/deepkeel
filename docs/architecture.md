@@ -49,7 +49,8 @@ retains full recovery and diagnostics for compatibility, while
 `RuntimeResult.to_summary()` returns the smaller product-facing result shape.
 
 The integration layers are `runtime_sdk`, `extension_sdk`, `adapter_sdk`,
-`memory_sdk`, `mcp_sdk`, `orchestration_sdk`, and experimental `a2a_sdk`.
+`discovery_sdk`, `memory_sdk`, `mcp_sdk`, `orchestration_sdk`, and experimental
+`a2a_sdk`.
 Internal modules may change without compatibility guarantees.
 
 Each public symbol has exactly one owner:
@@ -57,6 +58,7 @@ Each public symbol has exactly one owner:
 - `runtime_sdk`: requests, results, state, scope, lifecycle, and execution;
 - `extension_sdk`: Capability Packages, Skills, tools, artifacts, and handoffs;
 - `adapter_sdk`: Host infrastructure ports, conformance suites, and composition;
+- `discovery_sdk`: provider-neutral hybrid Skill and Tool catalog ranking;
 - `memory_sdk`: product-neutral memory records and memory ports;
 - `mcp_sdk`: governed MCP server and transport integration;
 - `orchestration_sdk`: bounded execution-plan, SubAgent, and deliberation contracts;

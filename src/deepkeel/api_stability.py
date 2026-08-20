@@ -36,6 +36,7 @@ PUBLIC_API_LAYER_POLICY: Mapping[str, tuple[ApiStability, str]] = {
     "extension": ("stable", "capability package authors"),
     "memory": ("stable", "host memory adapters and capability packages"),
     "adapter": ("advanced", "host infrastructure integrators"),
+    "discovery": ("advanced", "host catalog discovery integrators"),
     "mcp": ("advanced", "MCP transport and ToolProvider integrators"),
     "orchestration": ("experimental", "bounded SubAgent workflow authors"),
     "a2a": ("experimental", "A2A remote specialist integrators"),

@@ -25,6 +25,7 @@ SHARED_CONTRACT_MARKERS = (
     "docs/releasing.md",
     "deepkeel.runtime_sdk",
     "deepkeel.extension_sdk",
+    "deepkeel.discovery_sdk",
     "deepkeel.adapter_sdk",
     "deepkeel.a2a_sdk",
     "docs/security-and-trust.md",

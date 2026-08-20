@@ -8,6 +8,7 @@ silently expanding the compatibility surface.
 from deepkeel import (
     a2a_sdk,
     adapter_sdk,
+    discovery_sdk,
     extension_sdk,
     mcp_sdk,
     memory_sdk,
@@ -21,6 +22,7 @@ __all__ = [
     "DEEPKEEL_VERSION",
     "a2a_sdk",
     "adapter_sdk",
+    "discovery_sdk",
     "extension_sdk",
     "mcp_sdk",
     "memory_sdk",

@@ -27,6 +27,8 @@ jobs:
         run: uv run ruff check src tests verification examples
       - name: Verify public type contracts
         run: uv run mypy src/deepkeel
+      - name: Enforce type debt ratchet
+        run: uv run python verification/type_debt_budget.py
       - name: Verify synchronized documentation
         run: uv run python verification/readme_contract.py
       - name: Run deterministic Core tests

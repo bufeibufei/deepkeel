@@ -24,6 +24,11 @@ try {
         throw "DeepKeel type contracts failed."
     }
 
+    & uv run python verification/type_debt_budget.py
+    if ($LASTEXITCODE -ne 0) {
+        throw "DeepKeel type debt budget failed."
+    }
+
     & uv run python verification/readme_contract.py
     if ($LASTEXITCODE -ne 0) {
         throw "DeepKeel synchronized documentation contract failed."

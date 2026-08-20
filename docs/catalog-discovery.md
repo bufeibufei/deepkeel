@@ -6,7 +6,7 @@ that were not in the permission-filtered candidate set.
 
 The portable default is deterministic lexical matching. Larger catalogs should
 install `HybridSkillRanker` and `HybridToolRanker` from
-`deepkeel.hybrid_discovery` as both the discovery and reranker ports. They combine
+`deepkeel.discovery_sdk` as both the discovery and reranker ports. They combine
 provider-neutral semantic similarity with lexical evidence and abstain when the
 best candidates do not reach `HybridDiscoveryPolicy.minimum_score`.
 

@@ -25,6 +25,7 @@ jobs:
       - run: uv sync --frozen --extra test
       - run: uv run ruff check src tests verification examples
       - run: uv run mypy src/deepkeel
+      - run: uv run python verification/type_debt_budget.py
       - run: uv run python verification/readme_contract.py
       - name: Run coverage gate
         run: >-

@@ -17,6 +17,7 @@ CRITICAL_COVERAGE = {
     "src/deepkeel/events.py": 95.0,
     "src/deepkeel/execution_engine.py": 95.0,
     "src/deepkeel/graph_workflow.py": 68.0,
+    "src/deepkeel/hybrid_discovery.py": 95.0,
     "src/deepkeel/leases.py": 80.0,
     "src/deepkeel/mcp/contracts.py": 80.0,
     "src/deepkeel/mcp/provider.py": 70.0,

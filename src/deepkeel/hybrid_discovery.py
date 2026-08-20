@@ -91,6 +91,34 @@ class HybridToolRanker:
     rerank = discover
 
 
+class PreservingSkillReranker:
+    """Keep the order produced by an upstream Skill discovery adapter."""
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: tuple[SkillDescriptor, ...],
+        limit: int,
+    ) -> tuple[SkillDescriptor, ...]:
+        del query
+        return candidates[: max(1, int(limit))]
+
+
+class PreservingToolReranker:
+    """Keep the order produced by an upstream Tool discovery adapter."""
+
+    def rerank(
+        self,
+        *,
+        query: str,
+        candidates: tuple[ToolDescriptor, ...],
+        limit: int,
+    ) -> tuple[ToolDescriptor, ...]:
+        del query
+        return candidates[: max(1, int(limit))]
+
+
 DescriptorT = TypeVar("DescriptorT")
 
 
@@ -177,5 +205,7 @@ __all__ = [
     "HybridDiscoveryPolicy",
     "HybridSkillRanker",
     "HybridToolRanker",
+    "PreservingSkillReranker",
+    "PreservingToolReranker",
     "SimilarityPort",
 ]

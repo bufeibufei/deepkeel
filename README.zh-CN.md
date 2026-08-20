@@ -279,6 +279,7 @@ Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生
 - `deepkeel.runtime_sdk`：请求、结果、事件、运行与状态契约。
 - `deepkeel.extension_sdk`：工具、Skill、Artifact 和 Capability Pack。
 - `deepkeel.adapter_sdk`：模型、存储、策略、预算、租约和生产门禁。
+- `deepkeel.discovery_sdk`：与模型供应商无关的 Skill/Tool 混合发现与排序。
 - `deepkeel.memory_sdk`：记忆端口与主题契约。
 - `deepkeel.orchestration_sdk`：有界执行计划、SubAgent 与多方论证编排。
 - `deepkeel.mcp_sdk`：MCP Client、传输和工具映射。

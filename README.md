@@ -490,7 +490,8 @@ unless they intentionally install that adapter.
 The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
 release and public SDK surface are `4.1.0`. Consumers import only from
 `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`, `deepkeel.adapter_sdk`,
-`deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, `deepkeel.orchestration_sdk`, or the
+`deepkeel.discovery_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`,
+`deepkeel.orchestration_sdk`, or the
 experimental `deepkeel.a2a_sdk`. The versioned public
 symbol manifest is available from `deepkeel.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
