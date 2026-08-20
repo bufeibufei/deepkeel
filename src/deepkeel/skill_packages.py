@@ -8,6 +8,7 @@ from typing import Any, Iterable, Literal
 from pydantic import BaseModel, ConfigDict, Field, computed_field, field_validator, model_validator
 
 from deepkeel.type_narrowing import as_dict
+from deepkeel.planning.contracts import PlanningPolicy
 
 
 _WORKFLOW_WAITING_STATUSES = {"waiting_user_input", "waiting_user_action"}
@@ -189,6 +190,7 @@ class CompiledSkillSpec(BaseModel):
     output_contract: dict[str, Any] = Field(default_factory=dict)
     retry_policy: dict[str, Any] = Field(default_factory=dict)
     delegation_policy: dict[str, Any] = Field(default_factory=dict)
+    planning_policy: dict[str, Any] = Field(default_factory=dict)
     ui_handoff: dict[str, Any] = Field(default_factory=dict)
     package: dict[str, Any] = Field(default_factory=dict)
 
@@ -296,6 +298,8 @@ class SkillPackageManifest(BaseModel):
             self.resume_compatible_versions.append(self.version)
         if compiled.delegation_policy:
             DelegationPolicySpec.model_validate(compiled.delegation_policy)
+        if compiled.planning_policy:
+            PlanningPolicy.model_validate(compiled.planning_policy)
         return self
 
     def _skill_id(self) -> str:

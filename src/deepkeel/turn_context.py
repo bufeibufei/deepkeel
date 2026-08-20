@@ -6,6 +6,7 @@ from typing import Any, Callable, Literal
 
 from deepkeel.model import ModelGateway
 from deepkeel.hooks import HookRunner
+from deepkeel.guardrails import GuardrailRunner
 from deepkeel.skill_activation import EntryToolSkillActivator
 from deepkeel.tools import ToolExecutionContext
 
@@ -25,6 +26,7 @@ class TurnExecutionContext:
     deadline_monotonic: float | None = None
     tool_view_mode: ToolViewMode = "legacy"
     hook_runner: HookRunner | None = None
+    guardrail_runner: GuardrailRunner | None = None
     entry_tool_skill_activator: EntryToolSkillActivator | None = None
 
 

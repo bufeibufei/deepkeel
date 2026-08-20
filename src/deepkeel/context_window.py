@@ -7,7 +7,10 @@ from dataclasses import dataclass, field
 from threading import Lock
 from typing import Any, Literal, Protocol
 
-from deepkeel.context_compaction import DeterministicWorkingContextCompactor
+from deepkeel.context_compaction import (
+    ContextCheckpointBuilder,
+    DeterministicWorkingContextCompactor,
+)
 from deepkeel.context_contracts import (
     ContextCheckpoint,
     ContextAuthority,
@@ -25,6 +28,7 @@ from deepkeel.context_planning import (
     ContextPlanningPolicy,
 )
 from deepkeel.context_validation import validate_context_items
+from deepkeel.context_quality import ContextQualityGate
 from deepkeel.context_window_contracts import (
     ContextLayer,
     ContextSegment,
@@ -59,6 +63,7 @@ from deepkeel.context_window_support import (
 )
 from deepkeel.token_estimation import ConservativeTokenEstimator, TokenEstimator
 from deepkeel.type_narrowing import as_dict
+from deepkeel.scope import RuntimeScope
 
 
 class DeterministicContextWindowManager:
@@ -69,11 +74,17 @@ class DeterministicContextWindowManager:
         policy: ContextWindowPolicy | None = None,
         estimator: TokenEstimator | None = None,
         summary_cache: ContextSummaryCache | None = None,
+        checkpoint_builder: ContextCheckpointBuilder | None = None,
+        quality_gate: ContextQualityGate | None = None,
     ) -> None:
         self.policy = policy or ContextWindowPolicy()
         self.estimator = estimator or ConservativeTokenEstimator()
         self.summary_cache = summary_cache
-        self.compactor = DeterministicWorkingContextCompactor(self.estimator)
+        self.quality_gate = quality_gate or ContextQualityGate()
+        self.compactor = DeterministicWorkingContextCompactor(
+            self.estimator,
+            checkpoint_builder=checkpoint_builder,
+        )
 
     def prepare(
         self,
@@ -83,6 +94,7 @@ class DeterministicContextWindowManager:
     ) -> ContextWindowResult:
         policy = self.policy
         bundle = dict(context_bundle)
+        runtime_scope = RuntimeScope.model_validate(bundle.pop("_runtime_scope", None) or {})
         profile = ModelContextProfile.from_mapping(
             bundle.pop("_model_context_profile", None) or bundle.get("model_context_profile")
         )
@@ -154,6 +166,10 @@ class DeterministicContextWindowManager:
             context_items,
             active_subject_id=active_subject_id,
         )
+        quality = self.quality_gate.evaluate(
+            context_items,
+            active_subject_id=active_subject_id,
+        )
         mismatched_segments = [
             segment
             for segment in segments
@@ -163,6 +179,8 @@ class DeterministicContextWindowManager:
             and _segment_tier(segment) in {"L1", "L2"}
         ]
         mismatched_keys = {segment.key for segment in mismatched_segments}
+        quality_quarantined_keys = set(quality.quarantined_keys)
+        quarantined_keys = mismatched_keys | quality_quarantined_keys
         runtime_only_context = {
             segment.key: copy.deepcopy(segment.value)
             for segment in segments
@@ -171,19 +189,21 @@ class DeterministicContextWindowManager:
         model_segments = [
             segment
             for segment in segments
-            if segment.visibility in {"model", "both"} and segment.key not in mismatched_keys
+            if segment.visibility in {"model", "both"} and segment.key not in quarantined_keys
         ]
         bounded_context, context_diagnostics = self._bounded_context(
             model_segments,
             context_budget,
+            scope=runtime_scope,
         )
 
         bundle["runtime_context"] = bounded_context
         if runtime_only_context:
             bundle["runtime_only_context"] = runtime_only_context
-        if mismatched_segments:
+        quarantined_segments = [segment for segment in segments if segment.key in quarantined_keys]
+        if quarantined_segments:
             bundle["quarantined_context"] = {
-                segment.key: copy.deepcopy(segment.value) for segment in mismatched_segments
+                segment.key: copy.deepcopy(segment.value) for segment in quarantined_segments
             }
         bundle["recent_messages"] = history
         original_tokens = (
@@ -226,6 +246,18 @@ class DeterministicContextWindowManager:
             )
             for segment in mismatched_segments
         )
+        decisions.extend(
+            ContextDecision(
+                key=segment.key,
+                tier=_segment_tier(segment),
+                action="dropped",
+                reason="context quality policy quarantined item before model input",
+                tokens=self.estimator.estimate(segment.value),
+                source_ref=segment.source_ref,
+            )
+            for segment in segments
+            if segment.key in quality_quarantined_keys and segment.key not in mismatched_keys
+        )
         diagnostics = {
             "schema_version": "harness-context-window-v3",
             "policy_id": policy.policy_id,
@@ -247,11 +279,13 @@ class DeterministicContextWindowManager:
             "tiers": tiers,
             "budget_plan": budget_plan.as_dict(),
             "validation": validation.as_dict(),
+            "quality": quality.as_dict(),
             "context_manifest": {
                 "schema_version": "harness-context-manifest-v1",
                 "tiers": tiers,
                 "decisions": [decision.as_dict() for decision in decisions],
                 "validation": validation.as_dict(),
+                "quality": quality.as_dict(),
             },
             "injection_sources": sorted(
                 {
@@ -335,6 +369,8 @@ class DeterministicContextWindowManager:
         self,
         segments: list[ContextSegment],
         budget: int,
+        *,
+        scope: RuntimeScope,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         runtime_context = {segment.key: segment.value for segment in segments}
         original_tokens = self.estimator.estimate(runtime_context) if runtime_context else 0
@@ -343,6 +379,7 @@ class DeterministicContextWindowManager:
                 for segment in segments:
                     if segment.cache_key and segment.summary not in (None, "", [], {}):
                         self.summary_cache.put(
+                            scope,
                             ContextSummaryRecord(
                                 cache_key=segment.cache_key,
                                 source_fingerprint=(
@@ -436,13 +473,14 @@ class DeterministicContextWindowManager:
             summary = segment.summary
             fingerprint = segment.source_fingerprint or context_fingerprint(value)
             if segment.cache_key and self.summary_cache is not None:
-                cached = self.summary_cache.get(segment.cache_key, fingerprint)
+                cached = self.summary_cache.get(scope, segment.cache_key, fingerprint)
                 if cached is not None:
                     summary = cached.summary
                     summary_cache_hits.append(key)
                 elif summary not in (None, "", [], {}):
                     summary_cache_misses.append(key)
                     self.summary_cache.put(
+                        scope,
                         ContextSummaryRecord(
                             cache_key=segment.cache_key,
                             source_fingerprint=fingerprint,

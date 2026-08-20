@@ -6,6 +6,7 @@ from typing import Any, Callable, Mapping, Protocol
 
 from jsonschema import Draft202012Validator
 
+from deepkeel.entrypoints import AgentEntrypointSpec
 from deepkeel.handoffs import HandoffSpec
 from deepkeel.hooks import HookSpec
 from deepkeel.subagents.contracts import SubAgentSpec
@@ -48,6 +49,7 @@ class CapabilityPackSpec:
     declared_subagents: tuple[str, ...] = ()
     declared_hooks: tuple[str, ...] = ()
     declared_context_contributors: tuple[str, ...] = ()
+    declared_agent_entrypoints: tuple[str, ...] = ()
     declared_resources: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -84,6 +86,7 @@ class CapabilityContribution:
     subagents: tuple[str, ...] = ()
     hooks: tuple[str, ...] = ()
     context_contributors: tuple[str, ...] = ()
+    agent_entrypoints: tuple[str, ...] = ()
     resources: tuple[str, ...] = ()
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -112,6 +115,7 @@ class CapabilityCatalog:
         self.subagents: dict[str, SubAgentSpec] = {}
         self.hooks: dict[str, HookSpec] = {}
         self.context_contributors: dict[str, ContextContributor] = {}
+        self.agent_entrypoints: dict[str, AgentEntrypointSpec] = {}
         self.resources: dict[str, object] = {}
 
     def register_skill(self, skill_id: str, spec: object) -> None:
@@ -147,6 +151,9 @@ class CapabilityCatalog:
             contributor,
             "context contributor",
         )
+
+    def register_agent_entrypoint(self, spec: AgentEntrypointSpec) -> None:
+        self._register(self.agent_entrypoints, spec.id, spec, "Agent entrypoint")
 
     def register_resource(self, resource_id: str, resource: object) -> None:
         if not callable(getattr(resource, "close", None)):
@@ -246,6 +253,9 @@ class CapabilityInstallContext:
     ) -> None:
         self.catalog.register_context_contributor(contributor_id, contributor)
 
+    def register_agent_entrypoint(self, spec: AgentEntrypointSpec) -> None:
+        self.catalog.register_agent_entrypoint(spec)
+
     def register_resource(self, resource_id: str, resource: object) -> None:
         self.catalog.register_resource(resource_id, resource)
 
@@ -285,6 +295,7 @@ def capability_pack_spec_from_manifest(manifest: object) -> CapabilityPackSpec:
         declared_subagents=manifest.subagents,
         declared_hooks=manifest.hooks,
         declared_context_contributors=manifest.context_contributors,
+        declared_agent_entrypoints=manifest.agent_entrypoints,
         declared_resources=manifest.resources,
         required_scopes=manifest.permissions,
         metadata={
@@ -299,6 +310,7 @@ def capability_pack_spec_from_manifest(manifest: object) -> CapabilityPackSpec:
                     for name, scopes in manifest.tool_permissions.items()
                 },
                 "memory_namespaces": list(manifest.memory_namespaces),
+                "agent_entrypoints": list(manifest.agent_entrypoints),
                 "ui_surfaces": list(manifest.ui_surfaces),
                 "state_schema_version": manifest.state_schema_version,
                 "resume_compatible_versions": list(
@@ -329,6 +341,7 @@ def assert_capability_contribution(
         "subagents": set(spec.declared_subagents),
         "hooks": set(spec.declared_hooks),
         "context_contributors": set(spec.declared_context_contributors),
+        "agent_entrypoints": set(spec.declared_agent_entrypoints),
         "resources": set(spec.declared_resources),
     }
     installed = {
@@ -384,6 +397,7 @@ _DECLARATION_FIELDS = (
     "declared_subagents",
     "declared_hooks",
     "declared_context_contributors",
+    "declared_agent_entrypoints",
     "declared_resources",
     "required_scopes",
 )
@@ -396,6 +410,7 @@ _CONTRIBUTION_FIELDS = (
     "subagents",
     "hooks",
     "context_contributors",
+    "agent_entrypoints",
     "resources",
 )
 _CATALOG_FIELDS = (
@@ -406,6 +421,7 @@ _CATALOG_FIELDS = (
     "subagents",
     "hooks",
     "context_contributors",
+    "agent_entrypoints",
     "resources",
 )
 

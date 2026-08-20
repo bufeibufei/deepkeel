@@ -28,6 +28,29 @@ class ModelInputContextResult:
     diagnostics: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class ContextCheckpointBuildRequest:
+    omitted_messages: tuple[dict[str, Any], ...]
+    retained_messages: tuple[dict[str, Any], ...]
+    deterministic_checkpoint: ContextCheckpoint
+    previous_checkpoint: ContextCheckpoint | None = None
+
+
+class ContextCheckpointBuilder(Protocol):
+    """Optional semantic enrichment boundary for a source-linked L2 checkpoint."""
+
+    builder_id: str
+
+    def build(self, request: ContextCheckpointBuildRequest) -> ContextCheckpoint: ...
+
+
+class DeterministicContextCheckpointBuilder:
+    builder_id = "deterministic-v1"
+
+    def build(self, request: ContextCheckpointBuildRequest) -> ContextCheckpoint:
+        return request.deterministic_checkpoint
+
+
 class ContextInputBudgetError(RuntimeError):
     code = "CONTEXT_INPUT_BUDGET_EXCEEDED"
 
@@ -48,8 +71,13 @@ class WorkingContextCompactor(Protocol):
 class DeterministicWorkingContextCompactor:
     """Token-aware L2 reducer that never splits tool-call/result groups."""
 
-    def __init__(self, estimator: TokenEstimatorLike | None = None) -> None:
+    def __init__(
+        self,
+        estimator: TokenEstimatorLike | None = None,
+        checkpoint_builder: ContextCheckpointBuilder | None = None,
+    ) -> None:
         self.estimator = estimator or ConservativeTokenEstimator()
+        self.checkpoint_builder = checkpoint_builder or DeterministicContextCheckpointBuilder()
 
     def compact(
         self,
@@ -115,14 +143,42 @@ class DeterministicWorkingContextCompactor:
         ]
         omitted_count = len(omitted)
         checkpoint = previous_checkpoint
+        checkpoint_diagnostics: dict[str, Any] = {
+            "checkpoint_builder": getattr(
+                self.checkpoint_builder,
+                "builder_id",
+                type(self.checkpoint_builder).__name__,
+            ),
+            "checkpoint_fallback": False,
+        }
         if omitted:
-            checkpoint = _checkpoint_from_messages(
+            deterministic = _checkpoint_from_messages(
                 omitted,
                 retained,
                 thread_id=thread_id,
                 subject_id=subject_id,
                 previous_checkpoint=previous_checkpoint,
             )
+            request = ContextCheckpointBuildRequest(
+                omitted_messages=tuple(copy.deepcopy(omitted)),
+                retained_messages=tuple(copy.deepcopy(retained)),
+                deterministic_checkpoint=deterministic,
+                previous_checkpoint=previous_checkpoint,
+            )
+            try:
+                checkpoint = _verified_checkpoint(
+                    self.checkpoint_builder.build(request),
+                    deterministic=deterministic,
+                    request=request,
+                )
+            except Exception as exc:
+                checkpoint = deterministic
+                checkpoint_diagnostics.update(
+                    {
+                        "checkpoint_fallback": True,
+                        "checkpoint_fallback_reason": type(exc).__name__,
+                    }
+                )
         return ContextCompactionResult(
             retained_messages=retained,
             checkpoint=checkpoint,
@@ -147,6 +203,7 @@ class DeterministicWorkingContextCompactor:
                 "first_kept_event_id": (
                     checkpoint.first_kept_event_id if checkpoint is not None else ""
                 ),
+                **checkpoint_diagnostics,
             },
         )
 
@@ -160,6 +217,7 @@ def prepare_model_input_context(
     estimator: TokenEstimatorLike | None = None,
     thread_id: str = "",
     subject_id: str = "",
+    compactor: WorkingContextCompactor | None = None,
 ) -> ModelInputContextResult:
     """Apply the final model-specific budget after routing selected a provider."""
 
@@ -223,7 +281,8 @@ def prepare_model_input_context(
     )
     base_tokens = l1_tokens + (estimator.estimate(l2_system) if l2_system else 0)
     conversation_budget = max(0, plan.available_input_tokens - base_tokens)
-    compaction = DeterministicWorkingContextCompactor(estimator).compact(
+    working_compactor = compactor or DeterministicWorkingContextCompactor(estimator)
+    compaction = working_compactor.compact(
         conversation,
         token_budget=conversation_budget,
         thread_id=thread_id,
@@ -236,7 +295,7 @@ def prepare_model_input_context(
             2_048,
             max(96, int(conversation_budget * 0.25)),
         )
-        compaction = DeterministicWorkingContextCompactor(estimator).compact(
+        compaction = working_compactor.compact(
             conversation,
             token_budget=max(0, conversation_budget - checkpoint_reserve),
             thread_id=thread_id,
@@ -535,6 +594,43 @@ def _checkpoint_from_messages(
             previous_checkpoint.checkpoint_id if previous_checkpoint is not None else ""
         ),
     )
+
+
+def _verified_checkpoint(
+    checkpoint: ContextCheckpoint,
+    *,
+    deterministic: ContextCheckpoint,
+    request: ContextCheckpointBuildRequest,
+) -> ContextCheckpoint:
+    if not isinstance(checkpoint, ContextCheckpoint):
+        raise TypeError("checkpoint builder must return ContextCheckpoint")
+    immutable_fields = (
+        "thread_id",
+        "subject_id",
+        "covered_event_range",
+        "first_kept_event_id",
+        "source_fingerprint",
+        "previous_checkpoint_id",
+    )
+    for field_name in immutable_fields:
+        if getattr(checkpoint, field_name) != getattr(deterministic, field_name):
+            raise ValueError(f"semantic checkpoint changed source field {field_name}")
+    if not checkpoint.checkpoint_id:
+        raise ValueError("semantic checkpoint requires checkpoint_id")
+    source_refs = {
+        str(message.get("id") or "conversation-history")
+        for message in (*request.omitted_messages, *request.retained_messages)
+    }
+    if request.previous_checkpoint is not None:
+        source_refs.update(
+            str(item.get("source_ref") or "")
+            for item in request.previous_checkpoint.critical_facts
+        )
+    for fact in checkpoint.critical_facts:
+        source_ref = str(fact.get("source_ref") or "").strip()
+        if not source_ref or source_ref not in source_refs:
+            raise ValueError("semantic checkpoint fact has an unknown source_ref")
+    return checkpoint
 
 
 def _message_excerpt(message: dict[str, Any], limit: int = 240) -> str:

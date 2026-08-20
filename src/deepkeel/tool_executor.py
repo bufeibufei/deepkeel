@@ -9,9 +9,6 @@ from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Literal, Mapping, Protocol
 from uuid import uuid4
 
-from jsonschema import Draft202012Validator
-from jsonschema.exceptions import SchemaError
-
 from deepkeel.budget import (
     TOOL_CONCURRENCY,
     TOOL_CALLS,
@@ -35,6 +32,7 @@ from deepkeel.hooks import (
     HookPoint,
     HookRunner,
 )
+from deepkeel.guardrails import GuardrailRunner
 from deepkeel.policy import (
     DefaultPolicyEngine,
     PolicyDecision,
@@ -56,7 +54,11 @@ from deepkeel.tool_execution_hooks import (
     _hook_confirmation_result,
     _tool_hook_invocation,
 )
+from deepkeel.sandbox import SandboxPort, SandboxUnavailable, WorkspacePort
+from deepkeel.sandbox_execution import PreparedToolEnvironment, prepare_tool_environment
+from deepkeel.tool_guardrails import guard_tool_input, guard_tool_output
 from deepkeel.tool_execution_support import (
+    _artifact_contract_error,
     _argument_schema_error,
     _bind_authoritative_context_arguments,
     _confirmation_grant,
@@ -96,6 +98,9 @@ class ToolExecutor:
         policy_engine: PolicyEngine | None = None,
         budget_ledger: BudgetLedger | None = None,
         hook_runner: HookRunner | None = None,
+        guardrail_runner: GuardrailRunner | None = None,
+        sandbox_port: SandboxPort | None = None,
+        workspace_port: WorkspacePort | None = None,
         claim_lease_seconds: float = 300,
         max_idempotent_attempts: int = 2,
     ):
@@ -120,6 +125,9 @@ class ToolExecutor:
         self.policy_engine = policy_engine or DefaultPolicyEngine()
         self.budget_ledger = budget_ledger or InMemoryBudgetLedger()
         self.hook_runner = hook_runner
+        self.guardrail_runner = guardrail_runner
+        self.sandbox_port = sandbox_port
+        self.workspace_port = workspace_port
         self.claim_lease_seconds = max(0.001, float(claim_lease_seconds))
         self.max_idempotent_attempts = max(1, int(max_idempotent_attempts))
         self._handlers: dict[str, ToolHandler] = {}
@@ -188,7 +196,20 @@ class ToolExecutor:
                     message=before.decision.confirmation_message or before.decision.reason,
                 )
 
+        active_call, guarded = await guard_tool_input(
+            self.guardrail_runner,
+            active_call,
+            context,
+        )
+        if guarded is not None:
+            return guarded
         result = await self._aexecute_core(active_call, context)
+        result = await guard_tool_output(
+            self.guardrail_runner,
+            active_call,
+            context,
+            result,
+        )
         if self.hook_runner is None:
             return result
         point = HookPoint.TOOL_FAILED if result.status == "failed" else HookPoint.TOOL_AFTER
@@ -604,32 +625,70 @@ class ToolExecutor:
                 "budget": budget.as_dict(),
             }
             return _with_runtime_metrics(result, started_at, phase="budget", executed=False)
+        environment: PreparedToolEnvironment | None = None
+        release_status = "failed"
+        release_error = ""
         try:
+            environment = await prepare_tool_environment(
+                sandbox_port=self.sandbox_port,
+                workspace_port=self.workspace_port,
+                call=call,
+                context=context,
+                spec=spec,
+            )
+            execution_context = environment.context
             native_execute = getattr(handler, "aexecute", None)
             if callable(native_execute):
-                raw = await native_execute(call, context)
+                raw = await native_execute(call, execution_context)
             else:
                 # Tool handlers are sync by default. Running them in the event
                 # loop would stall every active run while MCP, database, or
                 # filesystem I/O is in flight.
-                raw = await asyncio.to_thread(handler, call, context)
+                raw = await asyncio.to_thread(handler, call, execution_context)
                 if inspect.isawaitable(raw):
                     raw = await raw
-            context.raise_if_fence_lost()
-            await _araise_if_cancelled(context, force=True)
-            ensure_time_remaining(context.deadline_monotonic)
+            execution_context.raise_if_fence_lost()
+            await _araise_if_cancelled(execution_context, force=True)
+            ensure_time_remaining(execution_context.deadline_monotonic)
             if not isinstance(raw, ToolResult):
                 raise TypeError("tool handlers must return ToolResult")
             result = raw
             result = _normalize_async_result(result, spec)
-            artifact_error = self._artifact_contract_error(result)
-            if artifact_error:
+            if artifact_error := _artifact_contract_error(
+                result, configured=self._artifact_contracts_configured, schemas=self._artifact_schemas
+            ):
                 result = _failed_result(call, artifact_error)
                 result.metadata["artifact_contract_failed"] = True
+            release_status = result.status
         except (RunCanceledError, RunDeadlineExceededError):
             raise
+        except SandboxUnavailable as exc:
+            result = _failed_result(call, str(exc), retryable=False)
+            result.metadata["error_code"] = exc.code
         except Exception as exc:
             result = _failed_result(call, str(exc), retryable=True)
+        finally:
+            if environment is not None:
+                try:
+                    await environment.close(status=release_status)
+                except Exception as exc:
+                    release_error = str(exc)
+        if release_error:
+            result = _failed_result(
+                call,
+                f"tool execution environment cleanup failed: {release_error}",
+                retryable=True,
+            )
+            result.metadata["error_code"] = "SANDBOX_CLEANUP_FAILED"
+        elif environment is not None:
+            result.metadata["execution_environment"] = {
+                "sandbox": environment.sandbox.as_dict()
+                if environment.sandbox is not None
+                else None,
+                "workspace": environment.workspace.as_dict()
+                if environment.workspace is not None
+                else None,
+            }
         result.metadata = {
             **(result.metadata if isinstance(result.metadata, dict) else {}),
             "governance": {
@@ -638,21 +697,3 @@ class ToolExecutor:
             },
         }
         return _with_runtime_metrics(result, started_at, phase="execution")
-
-    def _artifact_contract_error(self, result: ToolResult) -> str:
-        if not result.artifacts or not self._artifact_contracts_configured:
-            return ""
-        for artifact in result.artifacts:
-            schema = self._artifact_schemas.get(artifact.artifact_type)
-            if schema is None:
-                return f"unregistered artifact type: {artifact.artifact_type}"
-            errors = sorted(
-                Draft202012Validator(schema).iter_errors(artifact.data),
-                key=lambda item: list(item.absolute_path),
-            )
-            if errors:
-                return (
-                    f"artifact {artifact.artifact_type} does not match its contract: "
-                    f"{errors[0].message}"
-                )
-        return ""

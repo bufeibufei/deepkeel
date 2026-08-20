@@ -1,10 +1,15 @@
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal, Protocol
 from urllib.parse import urlsplit, urlunsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from deepkeel.mcp.protocol import (
+    SUPPORTED_MCP_PROTOCOL_VERSIONS,
+    default_client_capabilities,
+)
 from deepkeel.version import DEEPKEEL_VERSION
 
 
@@ -58,9 +63,18 @@ class McpServerSpec(BaseModel):
     max_response_bytes: int = Field(default=4_194_304, ge=1)
     client_name: str = Field(default="harness-core", min_length=1)
     client_version: str = Field(default=DEEPKEEL_VERSION, min_length=1)
+    protocol_version: str = ""
+    allow_legacy_fallback: bool = True
+    client_capabilities: dict[str, Any] = Field(default_factory=default_client_capabilities)
+    tool_cache_ttl_seconds: float = Field(default=60.0, ge=0, le=3600)
 
     @model_validator(mode="after")
     def validate_transport_configuration(self) -> "McpServerSpec":
+        if (
+            self.protocol_version
+            and self.protocol_version not in SUPPORTED_MCP_PROTOCOL_VERSIONS
+        ):
+            raise ValueError(f"unsupported MCP protocol version: {self.protocol_version}")
         if self.transport == "stdio":
             if not self.command.strip():
                 raise ValueError("stdio MCP server requires command")
@@ -113,6 +127,10 @@ class McpServerSpec(BaseModel):
             "max_response_bytes": self.max_response_bytes,
             "client_name": self.client_name,
             "client_version": self.client_version,
+            "protocol_version": self.protocol_version or "auto",
+            "allow_legacy_fallback": self.allow_legacy_fallback,
+            "client_capabilities": dict(self.client_capabilities),
+            "tool_cache_ttl_seconds": self.tool_cache_ttl_seconds,
         }
 
 
@@ -122,14 +140,47 @@ class McpRemoteTool(BaseModel):
     name: str = Field(min_length=1)
     description: str = ""
     input_schema: dict[str, Any] = Field(default_factory=dict)
+    output_schema: dict[str, Any] = Field(default_factory=dict)
+    annotations: dict[str, Any] = Field(default_factory=dict)
+    task_support: Literal["forbidden", "optional", "required"] = "forbidden"
+
+
+class McpInputRequest(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str = Field(min_length=1)
+    method: str = Field(min_length=1)
+    params: dict[str, Any] = Field(default_factory=dict)
+
+
+class McpTask(BaseModel):
+    model_config = ConfigDict(extra="allow", populate_by_name=True)
+
+    task_id: str = Field(alias="taskId", min_length=1)
+    status: Literal["working", "input_required", "completed", "failed", "cancelled"]
+    status_message: str = Field(default="", alias="statusMessage")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    last_updated_at: datetime | None = Field(default=None, alias="lastUpdatedAt")
+    ttl_ms: int | None = Field(default=None, alias="ttlMs")
+    poll_interval_ms: int | None = Field(default=None, alias="pollIntervalMs")
+    input_requests: dict[str, dict[str, Any]] = Field(
+        default_factory=dict,
+        alias="inputRequests",
+    )
+    result: Any = None
+    error: dict[str, Any] | None = None
 
 
 class McpCallResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     content: list[dict[str, Any]] = Field(default_factory=list)
-    structured_content: dict[str, Any] = Field(default_factory=dict)
+    structured_content: Any = Field(default_factory=dict)
     is_error: bool = False
+    result_type: Literal["complete", "input_required", "task"] = "complete"
+    input_requests: list[McpInputRequest] = Field(default_factory=list)
+    request_state: Any = None
+    task: McpTask | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -153,6 +204,38 @@ class McpClient(Protocol):
         *,
         timeout_seconds: float | None = None,
     ) -> McpCallResult: ...
+
+    def continue_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        input_responses: dict[str, Any],
+        request_state: Any,
+        timeout_seconds: float | None = None,
+    ) -> McpCallResult: ...
+
+    def get_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask: ...
+
+    def update_task(
+        self,
+        task_id: str,
+        input_responses: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None: ...
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None: ...
 
     def diagnostics(self) -> dict[str, Any]: ...
 

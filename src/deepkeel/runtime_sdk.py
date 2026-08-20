@@ -10,6 +10,7 @@ from deepkeel.artifact_views import (
 from deepkeel.contracts import (
     AgentMessage,
     Artifact,
+    DataProvenance,
     FinalAnswer,
     MessageContentPart,
     Observation,
@@ -42,12 +43,18 @@ from deepkeel.evaluation import (
     evaluate_runtime_result,
 )
 from deepkeel.events import AgentEventPersistenceError, normalize_runtime_event
+from deepkeel.entrypoints import (
+    CapabilityView,
+    narrow_capability_view,
+    resolve_capability_view,
+)
 from deepkeel.failures import (
     FailureDiagnosis,
     RunCanceledError,
     diagnose_failure,
     failure_from_code,
 )
+from deepkeel.golden_path import AgentDefaults, AgentHarness
 from deepkeel.persistence import DurableCheckpointStore, InMemoryDurableCheckpointStore
 from deepkeel.recovery import RecoveryOutcome, RecoveryState, classify_recovery_outcome
 from deepkeel.operations import (
@@ -68,6 +75,7 @@ from deepkeel.runtime_api import (
     RuntimeReference,
     RuntimeRequest,
     RuntimeResult,
+    RuntimeResultSummary,
     RuntimeResultStatus,
     RuntimeStreamEvent,
     RuntimeUIState,
@@ -108,13 +116,17 @@ from deepkeel.version import (
 from deepkeel.workflows import TERMINAL_WORKFLOW_STATES, workflow_projection
 
 RUNTIME_SDK_API = (
+    "AgentDefaults",
+    "AgentHarness",
     "AgentEventPersistenceError",
     "AgentMessage",
     "Artifact",
+    "DataProvenance",
     "ArtifactView",
     "ArtifactViewAction",
     "ArtifactViewField",
     "CancellableRunControl",
+    "CapabilityView",
     "DurableCheckpointStore",
     "EvalCase",
     "EvalCaseResult",
@@ -166,6 +178,7 @@ RUNTIME_SDK_API = (
     "RuntimeProfile",
     "RuntimeProfileName",
     "RuntimeResult",
+    "RuntimeResultSummary",
     "RuntimeResultStatus",
     "RUNTIME_CONTRACT_VERSION",
     "RuntimeScope",
@@ -191,11 +204,13 @@ RUNTIME_SDK_API = (
     "normalize_agent_context_snapshot",
     "normalize_runtime_event",
     "normalize_runtime_status",
+    "narrow_capability_view",
     "project_run_ui_state",
     "project_artifact_view",
     "project_artifact_views",
     "task_lifecycle",
     "resolve_runtime_scope",
+    "resolve_capability_view",
     "workflow_projection",
 )
 

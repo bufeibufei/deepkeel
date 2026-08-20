@@ -39,6 +39,13 @@ class RuntimeScope(BaseModel):
         payload = "\x1f".join(self.storage_key)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:20]
 
+    @property
+    def scope_digest(self) -> str:
+        """Return the irreversible, collision-resistant persistence scope key."""
+
+        payload = "\x1f".join(self.storage_key)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def qualify_identity(self, value: str) -> str:
         """Create an opaque storage identity while preserving legacy defaults."""
 

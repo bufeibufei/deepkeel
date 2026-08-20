@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-import hashlib
 from typing import Any
 
+from deepkeel.contrib.otel.segments import RuntimeTraceSegments
 from deepkeel.telemetry import TelemetryRecord
 from deepkeel.version import PACKAGE_VERSION
 
@@ -45,38 +45,52 @@ class OpenTelemetryTelemetry:
             unit="{run}",
             description="Active DeepKeel runs observed by this exporter",
         )
+        self._gen_ai_duration = self._meter.create_histogram(
+            "gen_ai.client.operation.duration",
+            unit="s",
+            description="GenAI model operation latency",
+        )
+        self._gen_ai_token_usage = self._meter.create_histogram(
+            "gen_ai.client.token.usage",
+            unit="{token}",
+            description="GenAI input and output token usage",
+        )
         self._include_ephemeral = include_ephemeral
         self._include_user_id = include_user_id
+        self._segments = RuntimeTraceSegments(self._tracer)
 
     def record(self, event: TelemetryRecord) -> None:
         if event.ephemeral and not self._include_ephemeral:
+            self._segments.project(
+                event,
+                attributes={},
+                start_time_ns=0,
+                end_time_ns=0,
+                duration_ms=None,
+                set_error=_set_error_status,
+            )
             return
-        trace = _trace_api()
-        context = _parent_context(trace, event)
         timestamp_ns = int(event.occurred_at.timestamp() * 1_000_000_000)
         attributes = _span_attributes(event, include_user_id=self._include_user_id)
-        self._record_metrics(event)
-        span = self._tracer.start_span(
-            f"deepkeel.{event.event_name}",
-            context=context,
-            kind=trace.SpanKind.INTERNAL,
-            start_time=timestamp_ns,
+        duration_ms = _duration_ms(event.attributes)
+        start_time_ns = timestamp_ns
+        if duration_ms is not None:
+            start_time_ns = max(0, timestamp_ns - int(duration_ms * 1_000_000))
+        accepted = self._segments.project(
+            event,
             attributes=attributes,
+            start_time_ns=start_time_ns,
+            end_time_ns=timestamp_ns,
+            duration_ms=duration_ms,
+            set_error=_set_error_status,
         )
-        try:
-            span.add_event(
-                event.event_name,
-                attributes={
-                    "deepkeel.telemetry_id": event.telemetry_id,
-                    "deepkeel.sequence": event.sequence,
-                },
-                timestamp=timestamp_ns,
-            )
-            if _is_error(event):
-                description = str(event.attributes.get("error_code") or event.status or "failed")
-                span.set_status(trace.Status(trace.StatusCode.ERROR, description))
-        finally:
-            span.end(end_time=timestamp_ns + 1)
+        if accepted:
+            self._record_metrics(event)
+
+    def shutdown(self) -> None:
+        """Close open trace segments before the Host shuts down its SDK provider."""
+
+        self._segments.shutdown()
 
     def _record_metrics(self, event: TelemetryRecord) -> None:
         attributes = {
@@ -99,6 +113,20 @@ class OpenTelemetryTelemetry:
         duration_ms = _duration_ms(event.attributes)
         if duration_ms is not None:
             self._duration_histogram.record(duration_ms, metric_attributes)
+        if event.component == "model":
+            gen_ai_attributes = _gen_ai_metric_attributes(event)
+            if duration_ms is not None:
+                self._gen_ai_duration.record(duration_ms / 1000.0, gen_ai_attributes)
+            for token_type, key in (
+                ("input", "input_tokens"),
+                ("output", "output_tokens"),
+            ):
+                value = event.attributes.get(key)
+                if isinstance(value, (int, float)) and value >= 0:
+                    self._gen_ai_token_usage.record(
+                        int(value),
+                        {**gen_ai_attributes, "gen_ai.token.type": token_type},
+                    )
 
 
 def _trace_api() -> Any:
@@ -119,28 +147,6 @@ def _metrics_api() -> Any:
             "OpenTelemetry support requires `deepkeel[otel]`"
         ) from exc
     return metrics
-
-
-def _parent_context(trace: Any, event: TelemetryRecord) -> Any:
-    try:
-        trace_id = int(event.trace_id, 16)
-        parent_span_id = int(event.parent_span_id or _root_span_id(event.trace_id), 16)
-        if not trace_id or not parent_span_id:
-            return None
-        span_context = trace.SpanContext(
-            trace_id=trace_id,
-            span_id=parent_span_id,
-            is_remote=True,
-            trace_flags=trace.TraceFlags(trace.TraceFlags.SAMPLED),
-            trace_state=trace.TraceState(),
-        )
-        return trace.set_span_in_context(trace.NonRecordingSpan(span_context))
-    except (TypeError, ValueError):
-        return None
-
-
-def _root_span_id(trace_id: str) -> str:
-    return hashlib.sha256(f"{trace_id}:root".encode("utf-8")).hexdigest()[:16]
 
 
 def _span_attributes(
@@ -178,7 +184,60 @@ def _span_attributes(
         normalized = _attribute_value(value)
         if normalized is not None:
             attributes[f"deepkeel.attr.{key}"] = normalized
+    attributes.update(_gen_ai_span_attributes(event))
     return {key: value for key, value in attributes.items() if value not in (None, "")}
+
+
+def _gen_ai_span_attributes(event: TelemetryRecord) -> dict[str, Any]:
+    component = str(event.component or "runtime")
+    attributes: dict[str, Any] = {}
+    if component == "model":
+        attributes["gen_ai.operation.name"] = "chat"
+        attributes["gen_ai.request.model"] = str(event.attributes.get("model_id") or "")
+        attributes["gen_ai.response.model"] = str(event.attributes.get("model_id") or "")
+        attributes["gen_ai.provider.name"] = str(event.attributes.get("provider_id") or "")
+        finish_reason = str(event.attributes.get("finish_reason") or "")
+        if finish_reason:
+            attributes["gen_ai.response.finish_reasons"] = (finish_reason,)
+        for source, target in (
+            ("input_tokens", "gen_ai.usage.input_tokens"),
+            ("output_tokens", "gen_ai.usage.output_tokens"),
+            ("reasoning_output_tokens", "gen_ai.usage.reasoning.output_tokens"),
+        ):
+            value = event.attributes.get(source)
+            if isinstance(value, (int, float)) and value >= 0:
+                attributes[target] = int(value)
+    elif component in {"tool", "mcp"}:
+        attributes["gen_ai.operation.name"] = "execute_tool"
+        attributes["gen_ai.tool.name"] = str(event.attributes.get("tool_name") or "")
+        attributes["gen_ai.tool.call.id"] = str(event.attributes.get("tool_call_id") or "")
+        attributes["gen_ai.tool.type"] = "extension"
+    elif component == "subagent":
+        attributes["gen_ai.operation.name"] = "invoke_agent"
+    elif component in {"agent", "run", "runtime", "workflow"}:
+        attributes["gen_ai.operation.name"] = (
+            "invoke_workflow" if component == "workflow" else "invoke_agent"
+        )
+        attributes["gen_ai.agent.name"] = "DeepKeel"
+        attributes["gen_ai.agent.id"] = str(event.attributes.get("skill_id") or "deepkeel")
+    return attributes
+
+
+def _gen_ai_metric_attributes(event: TelemetryRecord) -> dict[str, Any]:
+    return {
+        key: value
+        for key, value in {
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": str(event.attributes.get("model_id") or ""),
+            "gen_ai.provider.name": str(event.attributes.get("provider_id") or ""),
+            "error.type": (
+                str(event.attributes.get("error_type") or event.status or "")
+                if _is_error(event)
+                else ""
+            ),
+        }.items()
+        if value
+    }
 
 
 def _attribute_value(value: Any) -> Any:
@@ -224,3 +283,11 @@ def _is_error(event: TelemetryRecord) -> bool:
     return status in {"canceled", "cancelled", "error", "failed"} or bool(
         event.attributes.get("error_code")
     )
+
+
+def _set_error_status(span: Any, event: TelemetryRecord) -> None:
+    if not _is_error(event):
+        return
+    trace = _trace_api()
+    description = str(event.attributes.get("error_code") or event.status or "failed")
+    span.set_status(trace.Status(trace.StatusCode.ERROR, description))

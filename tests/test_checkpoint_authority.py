@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+import pytest
+
+from deepkeel.checkpoint_authority import (
+    CanonicalStateUnavailableError,
+    CheckpointAuthority,
+    PERSISTENCE_AUTHORITY,
+    PersistenceResponsibility,
+)
 from deepkeel.runtime import HarnessRuntime
 from deepkeel.state_store import RunStateSnapshot
 from deepkeel.tool_registry import ToolRegistry
@@ -58,7 +66,7 @@ def test_runtime_state_store_is_the_authoritative_portable_checkpoint() -> None:
     assert errors == []
 
 
-def test_checkpoint_loading_records_canonical_failure_before_legacy_fallback() -> None:
+def test_checkpoint_loading_fails_closed_when_canonical_store_is_unavailable() -> None:
     registry = ToolRegistry()
     runtime = HarnessRuntime(
         registry,
@@ -67,14 +75,22 @@ def test_checkpoint_loading_records_canonical_failure_before_legacy_fallback() -
         checkpoint_store=LegacyCheckpointStore(),
     )
 
-    state, authority, errors = runtime._load_authoritative_checkpoint(
-        "run-fallback",
-        session=None,
-        user_id="user-1",
-    )
+    with pytest.raises(CanonicalStateUnavailableError):
+        runtime._load_authoritative_checkpoint(
+            "run-fallback",
+            session=None,
+            user_id="user-1",
+        )
 
-    assert state == {"source": "legacy"}
-    assert authority == "durable_checkpoint_store"
-    assert errors == [
-        "runtime_state_store:ConnectionError:canonical store unavailable"
-    ]
+
+def test_persistence_mechanisms_have_non_overlapping_authority() -> None:
+    assert PERSISTENCE_AUTHORITY.runtime_state_store is PersistenceResponsibility.PRODUCT_STATE
+    assert (
+        PERSISTENCE_AUTHORITY.durable_checkpoint_store
+        is PersistenceResponsibility.PORTABLE_RECOVERY
+    )
+    assert (
+        PERSISTENCE_AUTHORITY.graph_checkpointer
+        is PersistenceResponsibility.GRAPH_CONTINUATION
+    )
+    assert CheckpointAuthority.RUNTIME_STATE_STORE == "runtime_state_store"

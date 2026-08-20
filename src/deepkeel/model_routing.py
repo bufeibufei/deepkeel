@@ -24,6 +24,11 @@ class ModelStepContext:
     governance_scope: dict[str, Any] = field(default_factory=dict)
     deadline_monotonic: float | None = None
     operational_run_id: str = ""
+    estimated_input_tokens: int = 0
+    requires_native_tools: bool = False
+    requires_image_input: bool = False
+    provider_profiles: dict[str, dict[str, Any]] = field(default_factory=dict)
+    budget_snapshot: dict[str, Any] = field(default_factory=dict)
 
     @property
     def accounting_run_id(self) -> str:
@@ -54,6 +59,12 @@ class ModelRouter(Protocol):
     def route(self, context: ModelStepContext) -> ModelRouteDecision: ...
 
 
+class NoEligibleModelError(RuntimeError):
+    """No configured model satisfies health and capability constraints."""
+
+    code = "NO_ELIGIBLE_MODEL"
+
+
 class AdaptiveStepModelRouter:
     router_id = "adaptive-step-router-v1"
 
@@ -65,21 +76,29 @@ class AdaptiveStepModelRouter:
         policy = context.model_policy if isinstance(context.model_policy, dict) else {}
         mode = str(policy.get("mode") or "single").strip().lower()
         primary = str(policy.get("primary_role") or "reasoning")
+        eligible = _eligible_roles(context, available)
+        if not eligible:
+            raise NoEligibleModelError(
+                "NO_ELIGIBLE_MODEL: no configured model satisfies current health and "
+                "capability constraints"
+            )
         if mode != "adaptive":
             return self._decision(
-                _available_role(primary, available),
+                _available_role(primary, eligible),
                 "single model policy",
                 context,
             )
 
+        routing_roles = eligible
+
         skill = context.skill_activation if isinstance(context.skill_activation, dict) else {}
         if context.policy_phase == "repair":
             return self._decision(
-                _available_role("reasoning", available),
+                _available_role("reasoning", routing_roles),
                 "workflow contract repair requires reasoning",
                 context,
             )
-        if _is_tool_discovery_continuation(context) and "fast" in available:
+        if _is_tool_discovery_continuation(context) and "fast" in routing_roles:
             return self._decision(
                 "fast",
                 "tool discovery continuation uses fast model",
@@ -91,7 +110,7 @@ class AdaptiveStepModelRouter:
             and context.step_index == 0
             and context.observation_count == 0
             and context.tool_result_count == 0
-            and "fast" in available
+            and "fast" in routing_roles
         ):
             return self._decision(
                 "fast",
@@ -100,20 +119,20 @@ class AdaptiveStepModelRouter:
             )
         if is_workflow:
             return self._decision(
-                _available_role("reasoning", available),
+                _available_role("reasoning", routing_roles),
                 "workflow observations require reasoning",
                 context,
             )
         if context.observation_count > 0 or context.tool_result_count > 0:
             return self._decision(
-                _available_role("reasoning", available),
+                _available_role("reasoning", routing_roles),
                 "tool observations require synthesis",
                 context,
             )
-        if context.step_index == 0 and "fast" in available:
+        if context.step_index == 0 and "fast" in routing_roles:
             return self._decision("fast", "initial lightweight planning step", context)
         return self._decision(
-            _available_role("reasoning", available),
+            _available_role("reasoning", routing_roles),
             "continued reasoning step",
             context,
         )
@@ -136,6 +155,10 @@ class AdaptiveStepModelRouter:
                 "tool_result_names": list(context.tool_result_names),
                 "policy_phase": context.policy_phase,
                 "skill_id": str(context.skill_activation.get("skill_id") or ""),
+                "estimated_input_tokens": context.estimated_input_tokens,
+                "eligible_roles": list(_eligible_roles(context, context.available_roles)),
+                "provider_profile": dict(context.provider_profiles.get(role) or {}),
+                "budget_usage": dict(context.budget_snapshot.get("usage") or {}),
             },
         )
 
@@ -147,7 +170,8 @@ def _is_tool_discovery_continuation(context: ModelStepContext) -> bool:
     result_names = tuple(name for name in context.tool_result_names if name)
     if len(sources) != context.observation_count or len(result_names) != context.tool_result_count:
         return False
-    return all(name == "runtime.discover_tools" for name in (*sources, *result_names))
+    discovery_names = {"runtime.discover_tools", "runtime.discover_skills"}
+    return all(name in discovery_names for name in (*sources, *result_names))
 
 
 def _available_role(preferred: str, available: tuple[str, ...]) -> str:
@@ -158,3 +182,33 @@ def _available_role(preferred: str, available: tuple[str, ...]) -> str:
     if "fast" in available:
         return "fast"
     return available[0]
+
+
+def _eligible_roles(
+    context: ModelStepContext,
+    available: tuple[str, ...],
+) -> tuple[str, ...]:
+    eligible: list[str] = []
+    for role in available:
+        profile = context.provider_profiles.get(role) or {}
+        raw_health = profile.get("health")
+        health: dict[str, Any] = raw_health if isinstance(raw_health, dict) else {}
+        raw_capabilities = profile.get("capabilities")
+        capabilities: dict[str, Any] = (
+            raw_capabilities if isinstance(raw_capabilities, dict) else {}
+        )
+        if health.get("available") is False:
+            continue
+        if context.requires_native_tools and capabilities.get("supports_native_tools") is False:
+            continue
+        if context.requires_image_input and capabilities.get("supports_image_input") is not True:
+            continue
+        context_limit = capabilities.get("context_window_tokens")
+        if (
+            isinstance(context_limit, int)
+            and context_limit > 0
+            and context.estimated_input_tokens > context_limit
+        ):
+            continue
+        eligible.append(role)
+    return tuple(eligible)

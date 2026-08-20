@@ -13,6 +13,7 @@ class ModelFailureInfo:
     retry_after_seconds: float
     public_message: str
     degrades_provider_health: bool = True
+    fallback_only: bool = False
 
 
 class ModelToolContractError(RuntimeError):
@@ -92,6 +93,16 @@ def classify_model_failure(exc: BaseException) -> ModelFailureInfo:
             0.0,
             "The selected model rejected a provider capability parameter; a fallback was attempted.",
         )
+    if _looks_like_provider_capability_mismatch(message):
+        return ModelFailureInfo(
+            "provider_capability_unsupported",
+            True,
+            status_code,
+            0.0,
+            "The selected model is unavailable for this provider capability; a fallback was attempted.",
+            True,
+            True,
+        )
     if status_code in {400, 401, 403, 404, 409, 422}:
         return ModelFailureInfo(
             "invalid_request",
@@ -138,6 +149,19 @@ def _looks_like_provider_parameter_drift(message: str) -> bool:
             "unsupported parameter",
             "parameter is not supported",
             "does not support this parameter",
+        )
+    )
+
+
+def _looks_like_provider_capability_mismatch(message: str) -> bool:
+    return any(
+        token in message
+        for token in (
+            "does not support the agent plan feature",
+            "doesn't support the agent plan feature",
+            "not support the agent plan feature",
+            "model does not support agent plan",
+            "model is not supported by agent plan",
         )
     )
 

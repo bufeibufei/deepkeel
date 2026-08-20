@@ -7,6 +7,21 @@ from deepkeel.deliberation import (
     DeliberationResult,
     DeliberationSpec,
 )
+from deepkeel.planning import (
+    ExecutionPlan,
+    ExecutionPlanValidator,
+    PLAN_TOOL_NAME,
+    PlanExecutorKind,
+    PlanPatch,
+    PlanStatus,
+    PlanStep,
+    PlanStepStatus,
+    PlanValidationError,
+    PlanningMode,
+    PlanningPolicy,
+    merge_plan_revision,
+    select_ready_plan_steps,
+)
 from deepkeel.subagents import (
     AsyncDelegationDispatcher,
     AsyncDelegationExecutor,
@@ -49,6 +64,18 @@ ORCHESTRATION_SDK_API = (
     "DeliberationParticipant",
     "DeliberationResult",
     "DeliberationSpec",
+    "ExecutionPlan",
+    "ExecutionPlanValidator",
+    "PLAN_TOOL_NAME",
+    "PlanExecutorKind",
+    "PlanPatch",
+    "PlanStatus",
+    "PlanStep",
+    "PlanStepStatus",
+    "PlanValidationError",
+    "PlanningMode",
+    "PlanningPolicy",
+    "merge_plan_revision",
     "SubAgentExecutor",
     "SubAgentArtifactRef",
     "SubAgentBudget",
@@ -64,6 +91,7 @@ ORCHESTRATION_SDK_API = (
     "SubAgentSpec",
     "TaskBrief",
     "delegation_tool_parameters_schema",
+    "select_ready_plan_steps",
 )
 
 __all__ = list(ORCHESTRATION_SDK_API)

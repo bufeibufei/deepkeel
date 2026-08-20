@@ -43,12 +43,10 @@ from deepkeel.control import NoopRunControl, RunControl
 from deepkeel.event_journal import RuntimeEventJournal
 from deepkeel.events import AgentEventPersistenceError, envelope_runtime_event
 from deepkeel.failures import RuntimeFailure, classify_runtime_failure
-from deepkeel.graph import (
-    GraphDurability,
-    HarnessGraph,
-    create_harness_graph,
-)
+from deepkeel.graph import GraphDurability
+from deepkeel.execution_engine import TurnExecutionEngine, create_langgraph_execution_engine
 from deepkeel.hooks import HookAudit, HookRunner
+from deepkeel.guardrails import GuardrailRunner
 from deepkeel.langgraph_adapter import (
     LangGraphCheckpointerAdapter,
     checkpointer_supports_async,
@@ -61,6 +59,7 @@ from deepkeel.model import (
 )
 from deepkeel.model_health import InMemoryModelHealthStore, ModelHealthStore
 from deepkeel.model_routing import AdaptiveStepModelRouter, ModelRouter
+from deepkeel.online_evaluation import OnlineEvalPolicy, OnlineEvalPort
 from deepkeel.leases import (
     AsyncRunLeaseGuard,
     ExecutionFence,
@@ -73,6 +72,7 @@ from deepkeel.persistence import (
     CheckpointCompatibilityError,
     DurableCheckpointStore,
 )
+from deepkeel.planning.tool import execution_planning_prompt, install_execution_planning
 from deepkeel.capabilities import CapabilityCatalog, CapabilityContribution
 from deepkeel.capability_manifest import RuntimeGeneration
 from deepkeel.ports import ContextBuilder, GraphCheckpointer, SessionFactory
@@ -103,6 +103,7 @@ from deepkeel.runtime_persistence import (
 from deepkeel.runtime_async_stream import stream_runtime_async
 from deepkeel.skills import SkillPolicy
 from deepkeel.skill_activation import EntryToolSkillActivator
+from deepkeel.skill_disclosure import SkillDiscoveryPort, SkillRerankerPort
 from deepkeel.scope import (
     RuntimeScope,
     require_legacy_compatible_scope,
@@ -115,10 +116,11 @@ from deepkeel.state_store import (
 from deepkeel.telemetry import NoopTelemetry, TelemetryPort, TelemetryRecord
 from deepkeel.type_narrowing import as_dict
 from deepkeel.tool_registry import ToolRegistry
-from deepkeel.tool_disclosure import ToolDiscoveryPort, install_tool_discovery
+from deepkeel.tool_disclosure import ToolDiscoveryPort, ToolRerankerPort
 from deepkeel.tools import ToolExecutionContext, ToolExecutor
 from deepkeel.turn_context import ToolViewMode, TurnExecutionContext
 from deepkeel.ui import project_run_ui_state
+from deepkeel.progressive_disclosure import install_progressive_disclosure
 from deepkeel.version import DEEPKEEL_CONTRACT_VERSION, DEEPKEEL_VERSION
 from deepkeel.runtime_policy import (
     _budget_limits,
@@ -137,6 +139,7 @@ from deepkeel.runtime_results import (
 from deepkeel.runtime_model_pipeline import build_runtime_model_gateway
 from deepkeel.runtime_execution_support import hook_audit_dict
 from deepkeel.runtime_turn_execution import RuntimeTurnExecutionMixin
+from deepkeel.checkpoint_authority import CheckpointAuthority
 
 
 EventSink = Callable[[dict[str, Any]], None]
@@ -173,6 +176,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         capability_contributions: tuple[CapabilityContribution, ...] = (),
         capability_catalog: CapabilityCatalog | None = None,
         telemetry: TelemetryPort | None = None,
+        online_eval_port: OnlineEvalPort | None = None,
+        online_eval_policy: OnlineEvalPolicy | None = None,
         context_builder: ContextBuilder | None = None,
         memory_recall_coordinator: MemoryRecallCoordinator | None = None,
         context_window_manager: ContextWindowManager | None = None,
@@ -192,16 +197,33 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         graph_durability: GraphDurability = "exit",
         tool_view_mode: ToolViewMode = "legacy",
         hook_runner: HookRunner | None = None,
+        guardrail_runner: GuardrailRunner | None = None,
         tool_discovery_port: ToolDiscoveryPort | None = None,
+        tool_reranker_port: ToolRerankerPort | None = None,
+        skill_discovery_port: SkillDiscoveryPort | None = None,
+        skill_reranker_port: SkillRerankerPort | None = None,
         entry_tool_skill_activator: EntryToolSkillActivator | None = None,
         runtime_generation: RuntimeGeneration | None = None,
+        planning_enabled: bool = False,
     ) -> None:
         self.tool_registry = tool_registry
         self.tool_executor = tool_executor
         self.checkpointer = checkpointer or LangGraphCheckpointerAdapter()
         self.checkpoint_store = checkpoint_store
         self.async_checkpoint_store = async_checkpoint_store
-        self.system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
+        base_system_prompt_factory = system_prompt_factory or _default_system_prompt_factory
+        self.planning_enabled = bool(planning_enabled)
+        if self.planning_enabled:
+            self.system_prompt_factory = lambda skill: "\n\n".join(
+                part
+                for part in (
+                    base_system_prompt_factory(skill),
+                    execution_planning_prompt(skill),
+                )
+                if part.strip()
+            )
+        else:
+            self.system_prompt_factory = base_system_prompt_factory
         self.session_factory = session_factory
         self.max_steps = max(2, int(max_steps))
         self.model_router = model_router or AdaptiveStepModelRouter()
@@ -218,6 +240,8 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.capability_contributions = capability_contributions
         self.capability_catalog = capability_catalog or CapabilityCatalog()
         self.telemetry = telemetry or NoopTelemetry()
+        self.online_eval_port = online_eval_port
+        self.online_eval_policy = online_eval_policy or OnlineEvalPolicy()
         self.context_builder = context_builder
         self.memory_recall_coordinator = memory_recall_coordinator
         self.context_window_manager = context_window_manager or DeterministicContextWindowManager()
@@ -237,20 +261,28 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         self.graph_durability = graph_durability
         self.tool_view_mode = tool_view_mode
         self.hook_runner = hook_runner or HookRunner()
+        self.guardrail_runner = guardrail_runner or GuardrailRunner()
         self.entry_tool_skill_activator = entry_tool_skill_activator
         self.runtime_generation = runtime_generation
         if self.tool_view_mode != "legacy":
-            install_tool_discovery(
+            install_progressive_disclosure(
+                self.capability_catalog,
                 self.tool_registry,
                 self.tool_executor,
-                discovery_port=tool_discovery_port,
+                tool_discovery=tool_discovery_port,
+                tool_reranker=tool_reranker_port,
+                skill_discovery=skill_discovery_port,
+                skill_reranker=skill_reranker_port,
             )
-        self._compiled_graph: HarnessGraph | None = None
+        if self.planning_enabled:
+            install_execution_planning(self.tool_registry, self.tool_executor)
+        self._compiled_engine: TurnExecutionEngine | None = None
         self._graph_compile_count = 0
         self._graph_compile_lock = Lock()
         self.tool_executor.policy_engine = self.policy_engine
         self.tool_executor.budget_ledger = self.budget_ledger
         self.tool_executor.hook_runner = self.hook_runner
+        self.tool_executor.guardrail_runner = self.guardrail_runner
         self._validate_exclusive_io_ports()
 
     def _validate_exclusive_io_ports(self) -> None:
@@ -276,14 +308,14 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
     def _hook_audit_payload(audit: HookAudit) -> dict[str, Any]:
         return hook_audit_dict(audit)
 
-    def _shared_compiled_graph(self) -> HarnessGraph:
-        graph = self._compiled_graph
-        if graph is not None:
-            return graph
+    def _shared_execution_engine(self) -> TurnExecutionEngine:
+        engine = self._compiled_engine
+        if engine is not None:
+            return engine
         with self._graph_compile_lock:
-            graph = self._compiled_graph
-            if graph is None:
-                graph = create_harness_graph(
+            engine = self._compiled_engine
+            if engine is None:
+                engine = create_langgraph_execution_engine(
                     tool_executor=self.tool_executor,
                     tool_registry=self.tool_registry,
                     max_steps=self.max_steps,
@@ -293,9 +325,9 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     run_control=self.run_control,
                     durability=self.graph_durability,
                 )
-                self._compiled_graph = graph
+                self._compiled_engine = engine
                 self._graph_compile_count += 1
-        return graph
+        return engine
 
     def close(self) -> None:
         self.capability_catalog.close()
@@ -657,8 +689,10 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
         session: Any,
         user_id: str,
         scope: RuntimeScope | None = None,
-    ) -> tuple[dict[str, Any], str, list[str]]:
+    ) -> tuple[dict[str, Any], CheckpointAuthority, list[str]]:
         """Load portable state from the canonical store before compatibility fallbacks."""
+
+        from deepkeel.checkpoint_authority import CanonicalStateUnavailableError
 
         errors: list[str] = []
         if self.runtime_state_store is not None:
@@ -686,9 +720,12 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     )
                 state = snapshot.checkpoint_state
                 if isinstance(state, dict) and state:
-                    return dict(state), "runtime_state_store", errors
+                    return dict(state), CheckpointAuthority.RUNTIME_STATE_STORE, errors
             except Exception as exc:
-                errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
+                raise CanonicalStateUnavailableError(
+                    f"canonical runtime state is unavailable for {run_id}: "
+                    f"{type(exc).__name__}: {exc}"
+                ) from exc
         if self.checkpoint_store is not None:
             try:
                 legacy_user_id = require_legacy_compatible_scope(
@@ -701,10 +738,10 @@ class HarnessRuntime(RuntimeTurnExecutionMixin):
                     user_id=legacy_user_id,
                 )
                 if isinstance(legacy_state, dict) and legacy_state:
-                    return dict(legacy_state), "durable_checkpoint_store", errors
+                    return dict(legacy_state), CheckpointAuthority.DURABLE_CHECKPOINT_STORE, errors
             except Exception as exc:
                 errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
-        return {}, "session_projection", errors
+        return {}, CheckpointAuthority.SESSION_PROJECTION, errors
 
     async def _aload_authoritative_checkpoint(
         self,

@@ -5,6 +5,10 @@ import json
 from typing import Any, Callable
 
 from deepkeel.async_ports import run_sync_adapter
+from deepkeel.checkpoint_authority import (
+    CanonicalStateUnavailableError,
+    CheckpointAuthority,
+)
 from deepkeel.events import envelope_runtime_event
 from deepkeel.leases import ExecutionFence
 from deepkeel.persistence import durable_state_from_result
@@ -149,7 +153,7 @@ async def aload_authoritative_checkpoint(
     session: Any,
     user_id: str,
     scope: RuntimeScope,
-) -> tuple[dict[str, Any], str, list[str]]:
+) -> tuple[dict[str, Any], CheckpointAuthority, list[str]]:
     """Load canonical state before falling back to compatibility stores."""
 
     errors: list[str] = []
@@ -162,9 +166,12 @@ async def aload_authoritative_checkpoint(
             )
             state = snapshot.checkpoint_state
             if isinstance(state, dict) and state:
-                return dict(state), "runtime_state_store", errors
+                return dict(state), CheckpointAuthority.RUNTIME_STATE_STORE, errors
         except Exception as exc:
-            errors.append(f"runtime_state_store:{type(exc).__name__}:{exc}")
+            raise CanonicalStateUnavailableError(
+                f"canonical runtime state is unavailable for {run_id}: "
+                f"{type(exc).__name__}: {exc}"
+            ) from exc
     elif runtime.runtime_state_store is not None:
         state, authority, sync_errors = await run_sync_adapter(
             runtime._load_authoritative_checkpoint,
@@ -191,7 +198,7 @@ async def aload_authoritative_checkpoint(
                 user_id=legacy_user_id,
             )
             if isinstance(loaded_state, dict) and loaded_state:
-                return dict(loaded_state), "durable_checkpoint_store", errors
+                return dict(loaded_state), CheckpointAuthority.DURABLE_CHECKPOINT_STORE, errors
         except Exception as exc:
             errors.append(f"durable_checkpoint_store:{type(exc).__name__}:{exc}")
     elif runtime.runtime_state_store is None and runtime.checkpoint_store is not None:
@@ -205,7 +212,7 @@ async def aload_authoritative_checkpoint(
         errors.extend(error for error in sync_errors if error not in errors)
         if state:
             return state, authority, errors
-    return {}, "session_projection", errors
+    return {}, CheckpointAuthority.SESSION_PROJECTION, errors
 
 
 async def event_latest_sequence(

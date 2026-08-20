@@ -2,6 +2,70 @@
 
 ## Unreleased
 
+- Add an internal execution-engine seam around LangGraph, a compact
+  `RuntimeResultSummary`, and typed event-to-telemetry projections without
+  removing the v4 RuntimeResult or event contracts.
+- Add Capability Pack scaffolding and validation CLI commands, an explicit
+  in-process versus isolated package trust policy, a runnable HTTP/SSE reference
+  Host, and a reusable downstream Host compatibility workflow.
+- Relaunch stdio MCP servers before legacy negotiation when modern discovery
+  times out, preventing a reset transport from breaking the fallback request.
+- Preserve explicit trusted Host governance scopes for lightweight Capability
+  Packs that intentionally omit a manifest, while keeping manifest-declared
+  permissions authoritative for governed packages.
+
+## 4.1.0 - 2026-08-18
+
+- Add versioned user-facing Agent entrypoints and immutable per-conversation
+  Capability Views. Direct specialist Agents now reuse the canonical compiled
+  graph while narrowing packages, Skills, tools, SubAgents, context, Memory,
+  permissions, prompts and model policy without creating a second runtime.
+- Add optional bounded Plan & Execute orchestration inside the canonical ReAct
+  graph, including validated DAGs, safe parallel reads, serialized side effects,
+  bounded revisions, typed progress events, and portable interruption recovery.
+- Add the `AgentHarness` Golden Path for minimal embedding while retaining the
+  explicit `HarnessRuntimeBuilder` path for production composition.
+- Add first-class input, model-output, and tool-boundary Guardrails with ordered
+  decisions, replay safety, audit records, provenance labels, and fail-closed
+  required policies.
+- Add replaceable Sandbox and Workspace ports with bounded execution metadata,
+  deterministic cleanup, policy enforcement, and production-readiness checks.
+- Add progressive Skill and Tool discovery with replaceable candidate retrieval
+  and reranking, plus L1/L2/L3 context quality checks for provenance, subject,
+  authority, duplication, and token-budget drift.
+- Add privacy-bounded online evaluation and OpenTelemetry GenAI semantic
+  attributes without exporting prompts, tool payloads, or model output by
+  default.
+- Upgrade MCP to the modern `2026-07-28` protocol era, including stateless
+  discovery, request metadata, task lifecycle, safe parameter headers,
+  `outputSchema` validation, and bounded fallback to legacy servers.
+- Add an optional experimental A2A 1.0 adapter that maps remote Agent Cards and
+  Tasks into the existing governed SubAgent, checkpoint, cancellation, Artifact,
+  and parent-owned final-answer lifecycle.
+- Extend production and release gates for local safety adapters, clean package
+  verification, SBOM generation, build provenance, bilingual documentation, and
+  an explicit 4.1 migration checklist.
+- Keep the persisted Capability Pack contract at `harness-core-v3`; 4.1 is an
+  additive SDK and runtime release and requires no persisted-state migration.
+
+## 4.1.0rc1 - 2026-08-10
+
+- Project each uninterrupted run segment as one hierarchical OpenTelemetry
+  trace, with operation child spans, lifecycle events, replay deduplication,
+  delta aggregation, and links between resumed segments.
+- Add a replaceable semantic context-checkpoint builder that is verified
+  against deterministic source ranges, fingerprints, subjects, and fact
+  references before it can enrich L2 working context.
+- Route adaptive model steps against provider health, context capacity,
+  modality, native-tool support, latency, cost and remaining budget while
+  preserving strict user-selected single-model semantics.
+- Split model-node execution and RuntimeResult projection into typed phases,
+  and move trace/diagnostic projection behind independently ratcheted modules.
+- Split routed model attempts, SubAgent batch/bounded/task execution and the
+  claimed runtime turn into typed lifecycle coordinators with strict size and
+  complexity ratchets.
+- Define non-overlapping persistence authority for canonical product state,
+  portable recovery checkpoints and LangGraph continuation checkpoints.
 - Isolate runtime events, leases, tool/model idempotency, checkpoints and
   operational identities by `RuntimeScope`, with a forward-only PostgreSQL v3
   migration and cross-tenant contract tests.

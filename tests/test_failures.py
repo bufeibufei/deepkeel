@@ -164,6 +164,20 @@ def test_model_failure_classifier_retries_provider_parameter_drift_only() -> Non
     assert classify_model_failure(ordinary_bad_request).retryable is False
 
 
+def test_model_failure_classifier_falls_back_for_agent_plan_model_mismatch() -> None:
+    unsupported = RuntimeError(
+        "The requested model does not support the agent plan feature."
+    )
+    unsupported.status_code = 404
+
+    failure = classify_model_failure(unsupported)
+
+    assert failure.category == "provider_capability_unsupported"
+    assert failure.retryable is True
+    assert failure.fallback_only is True
+    assert failure.degrades_provider_health is True
+
+
 def test_model_failure_helpers_tolerate_malformed_metadata() -> None:
     malformed = RuntimeError("rate limit")
     malformed.code = object()

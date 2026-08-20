@@ -27,6 +27,7 @@ def _server(**updates) -> McpServerSpec:
         "environment": {"MCP_FAKE_SECRET": "private-value"},
         "startup_timeout_seconds": 5,
         "request_timeout_seconds": 2,
+        "protocol_version": "2025-03-26",
     }
     values.update(updates)
     return McpServerSpec(**values)
@@ -70,6 +71,27 @@ def test_stdio_timeout_does_not_poison_later_calls() -> None:
         with pytest.raises(McpTimeoutError):
             client.call_tool("lookup", {"query": "timeout"})
         time.sleep(0.25)
+        recovered = client.call_tool("lookup", {"query": "recovered"}, timeout_seconds=1)
+    finally:
+        client.close()
+
+    assert recovered.structured_content["results"][0]["title"] == "Result for recovered"
+
+
+def test_stdio_discovery_timeout_relaunches_before_legacy_fallback() -> None:
+    client = StdioMcpClient(
+        _server(
+            protocol_version="",
+            request_timeout_seconds=0.01,
+            environment={
+                "MCP_FAKE_SECRET": "private-value",
+                "MCP_DISCOVERY_DELAY": "0.05",
+            },
+        )
+    )
+    try:
+        with pytest.raises(McpTimeoutError):
+            client.start(timeout_seconds=0.01)
         recovered = client.call_tool("lookup", {"query": "recovered"}, timeout_seconds=1)
     finally:
         client.close()

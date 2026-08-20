@@ -6,12 +6,14 @@ from uuid import uuid4
 
 from deepkeel.context import build_initial_messages
 from deepkeel.events import AgentEventPersistenceError
+from deepkeel.execution_engine import TurnExecutionEngine
 from deepkeel.persistence import (
     checkpoint_from_durable_state,
     checkpoint_from_runtime,
     restore_run_context,
     resume_payload_from_context,
 )
+from deepkeel.planning.runtime import advance_plan_after_resume
 from deepkeel.runtime_results import (
     _new_context,
     _skill_precondition_tool_calls,
@@ -27,7 +29,7 @@ class GraphExecutionOutcome:
 
 async def execute_graph_turn(
     *,
-    graph: Any,
+    engine: TurnExecutionEngine,
     question: str,
     run_id: str,
     graph_thread_id: str,
@@ -52,7 +54,7 @@ async def execute_graph_turn(
     if short_context.get("recover_interrupted"):
         if has_graph_checkpoint(graph_thread_id):
             state = dict(
-                await graph.arecover(
+                await engine.arecover(
                     graph_thread_id,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -77,7 +79,7 @@ async def execute_graph_turn(
                 input_parts=input_parts,
             )
             state = dict(
-                await graph.ainvoke(
+                await engine.ainvoke(
                     context,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -89,7 +91,7 @@ async def execute_graph_turn(
         resume_payload = resume_payload_from_context(short_context)
         try:
             state = dict(
-                await graph.aresume(
+                await engine.aresume(
                     graph_thread_id,
                     resume_payload,
                     tool_context=tool_context,
@@ -146,6 +148,27 @@ async def execute_graph_turn(
                 model_policy=model_policy,
                 migrations=state_migrations,
             )
+            recovered_state = recovered.model_dump(mode="json")
+            pending = (
+                recovered_checkpoint.get("pending_action")
+                or recovered_checkpoint.get("pending_async")
+                or {}
+            )
+            advance_plan_after_resume(
+                recovered_state,
+                pending=pending if isinstance(pending, dict) else {},
+                resume_payload=resume_payload,
+                registry=tool_registry,
+                emit=lambda event_type, title, summary, payload: emit(
+                    {
+                        "event_type": event_type,
+                        "title": title,
+                        "summary": summary,
+                        "payload": payload,
+                    }
+                ),
+            )
+            recovered = type(recovered).model_validate(recovered_state)
             if not any(message.role == "user" for message in recovered.messages):
                 recovered.messages = [
                     *build_initial_messages(
@@ -158,7 +181,7 @@ async def execute_graph_turn(
                 ]
             active_graph_thread_id = recovered_thread_id
             state = dict(
-                await graph.ainvoke(
+                await engine.ainvoke(
                     recovered,
                     tool_context=tool_context,
                     event_sink=emit,
@@ -186,7 +209,7 @@ async def execute_graph_turn(
             pending_tool_calls=precondition_calls,
         )
         state = dict(
-            await graph.ainvoke(
+            await engine.ainvoke(
                 context,
                 tool_context=tool_context,
                 event_sink=emit,

@@ -9,6 +9,7 @@ from deepkeel.capability_control import (
     CapabilityPackageSnapshot,
 )
 from deepkeel.context_window_contracts import ContextSummaryRecord
+from deepkeel.scope import RuntimeScope
 from deepkeel.memory_sdk import (
     MemoryClaim,
     MemoryMutation,
@@ -80,35 +81,42 @@ class PostgresContextSummaryCache:
     def __init__(self, database: PostgresDatabase) -> None:
         self.database = database
 
-    def get(self, cache_key: str, source_fingerprint: str) -> ContextSummaryRecord | None:
+    def get(
+        self,
+        scope: RuntimeScope,
+        cache_key: str,
+        source_fingerprint: str,
+    ) -> ContextSummaryRecord | None:
         with self.database.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 SELECT cache_key, source_fingerprint, summary, summary_version
                 FROM {self.database.schema}.context_summaries
-                WHERE cache_key = %s AND source_fingerprint = %s
+                WHERE scope_digest = %s AND cache_key = %s AND source_fingerprint = %s
                 """,
-                (str(cache_key), str(source_fingerprint)),
+                (scope.scope_digest, str(cache_key), str(source_fingerprint)),
             )
             row = cursor.fetchone()
         return ContextSummaryRecord(**row) if row else None
 
-    def put(self, record: ContextSummaryRecord) -> None:
+    def put(self, scope: RuntimeScope, record: ContextSummaryRecord) -> None:
         if not record.cache_key or not record.source_fingerprint:
             return
         with self.database.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
                 f"""
                 INSERT INTO {self.database.schema}.context_summaries (
-                    cache_key, source_fingerprint, summary, summary_version, updated_at
-                ) VALUES (%s, %s, %s::jsonb, %s, CURRENT_TIMESTAMP)
-                ON CONFLICT (cache_key) DO UPDATE SET
+                    scope_digest, cache_key, source_fingerprint,
+                    summary, summary_version, updated_at
+                ) VALUES (%s, %s, %s, %s::jsonb, %s, CURRENT_TIMESTAMP)
+                ON CONFLICT (scope_digest, cache_key) DO UPDATE SET
                     source_fingerprint = EXCLUDED.source_fingerprint,
                     summary = EXCLUDED.summary,
                     summary_version = EXCLUDED.summary_version,
                     updated_at = CURRENT_TIMESTAMP
                 """,
                 (
+                    scope.scope_digest,
                     record.cache_key,
                     record.source_fingerprint,
                     _json(record.summary),
@@ -116,11 +124,12 @@ class PostgresContextSummaryCache:
                 ),
             )
 
-    def invalidate(self, cache_key: str) -> None:
+    def invalidate(self, scope: RuntimeScope, cache_key: str) -> None:
         with self.database.connect() as connection, connection.cursor() as cursor:
             cursor.execute(
-                f"DELETE FROM {self.database.schema}.context_summaries WHERE cache_key = %s",
-                (str(cache_key),),
+                f"DELETE FROM {self.database.schema}.context_summaries "
+                "WHERE scope_digest = %s AND cache_key = %s",
+                (scope.scope_digest, str(cache_key)),
             )
 
 

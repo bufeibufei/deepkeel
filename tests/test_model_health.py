@@ -17,6 +17,10 @@ class ProviderError(Exception):
     status_code = 503
 
 
+class AgentPlanCapabilityError(Exception):
+    status_code = 404
+
+
 class FakeProvider:
     def __init__(self, model: str, role: str, *, fails: bool = False) -> None:
         self.model = model
@@ -34,6 +38,14 @@ class FakeProvider:
             "finish_reason": "stop",
             "model": self.model,
         }
+
+
+class UnsupportedAgentPlanProvider(FakeProvider):
+    def complete_chat(self, *_args, **_kwargs):
+        self.calls += 1
+        raise AgentPlanCapabilityError(
+            "The requested model does not support the agent plan feature."
+        )
 
 
 class MalformedThenValidToolProvider:
@@ -191,6 +203,64 @@ def test_routed_gateway_records_failure_and_falls_back() -> None:
     )
 
 
+def test_routed_gateway_falls_back_from_agent_plan_incompatible_model() -> None:
+    health = InMemoryModelHealthStore(failure_threshold=3)
+    reasoning = UnsupportedAgentPlanProvider("kimi-k3", "reasoning")
+    fast = FakeProvider("doubao-seed-2.0-lite", "fast")
+    gateway = RoutedModelGateway(
+        {"reasoning": reasoning, "fast": fast},
+        router=None,
+        policy_engine=DefaultPolicyEngine(),
+        budget_ledger=InMemoryBudgetLedger(),
+        model_health_store=health,
+    )
+
+    result = gateway.run_turn(
+        [AgentMessage(id="message-1", role="user", content="hello")],
+        tools=[],
+        step_context=_context(),
+    )
+
+    assert result.content == "doubao-seed-2.0-lite"
+    assert reasoning.calls == 1
+    assert fast.calls == 1
+    assert health.snapshot(
+        gateway.providers["reasoning"].info.provider_id,
+        "kimi-k3",
+    ).is_available() is False
+
+
+def test_agent_plan_incompatible_model_is_not_retried_as_the_same_binding() -> None:
+    provider = UnsupportedAgentPlanProvider("kimi-k3", "reasoning")
+    gateway = RoutedModelGateway(
+        {"reasoning": provider},
+        router=None,
+        policy_engine=DefaultPolicyEngine(),
+        budget_ledger=InMemoryBudgetLedger(),
+    )
+    context = replace(
+        _context(),
+        available_roles=("reasoning",),
+        model_policy={
+            "mode": "single",
+            "primary_role": "reasoning",
+            "failure_policy": "auto_fallback",
+        },
+    )
+
+    with pytest.raises(
+        AgentPlanCapabilityError,
+        match="does not support the agent plan feature",
+    ):
+        gateway.run_turn(
+            [AgentMessage(id="message-1", role="user", content="hello")],
+            tools=[],
+            step_context=context,
+        )
+
+    assert provider.calls == 1
+
+
 def test_routed_gateway_skips_an_open_model_without_invoking_it() -> None:
     health = InMemoryModelHealthStore(failure_threshold=1)
     reasoning = FakeProvider("reasoning-model", "reasoning")
@@ -240,7 +310,7 @@ def test_routed_gateway_fails_explicitly_when_all_models_are_open() -> None:
             immediate=True,
         )
 
-    with pytest.raises(RuntimeError, match="model invocation attempts exhausted"):
+    with pytest.raises(RuntimeError, match="NO_ELIGIBLE_MODEL"):
         gateway.run_turn(
             [AgentMessage(id="message-1", role="user", content="hello")],
             tools=[],

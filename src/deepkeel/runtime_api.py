@@ -86,6 +86,8 @@ class RuntimeRequest(BaseModel):
     run_id: str = ""
     thread_id: str = ""
     turn_id: str = ""
+    agent_entrypoint_id: str = ""
+    agent_entrypoint_version: str = ""
     short_context: dict[str, Any] = Field(default_factory=dict)
     context_bundle: dict[str, Any] = Field(default_factory=dict)
     skill_activation: dict[str, Any] = Field(default_factory=dict)
@@ -167,6 +169,27 @@ class RuntimeStreamEvent(RuntimeEventEnvelope):
     """Backward-compatible name for streaming API consumers."""
 
 
+class RuntimeResultSummary(BaseModel):
+    """Compact product-facing projection of a full runtime result."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    run_id: str
+    thread_id: str
+    turn_id: str
+    status: RuntimeResultStatus
+    stop_reason: str
+    final_answer: FinalAnswer
+    artifacts: list[Artifact] = Field(default_factory=list)
+    artifact_views: list[ArtifactView] = Field(default_factory=list)
+    pending_action: PendingAction | None = None
+    active_task: RuntimeActiveTask | None = None
+    ui_state: RuntimeUIState
+    references: list[RuntimeReference] = Field(default_factory=list)
+    needs_user_input: bool = False
+    error: RuntimeErrorPayload | None = None
+
+
 class RuntimeResult(BaseModel):
     """Canonical typed result returned by the public runtime API."""
 
@@ -190,6 +213,7 @@ class RuntimeResult(BaseModel):
     observations: list[Observation] = Field(default_factory=list)
     tool_results: list[ToolResult] = Field(default_factory=list)
     pending_action: PendingAction | None = None
+    execution_plan: dict[str, Any] | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
     artifact_views: list[ArtifactView] = Field(default_factory=list)
     events: list[RuntimeStreamEvent] = Field(default_factory=list)
@@ -206,3 +230,23 @@ class RuntimeResult(BaseModel):
     needs_user_input: bool = False
     answer_delta_streamed: bool = False
     error: RuntimeErrorPayload | None = None
+
+    def to_summary(self) -> RuntimeResultSummary:
+        """Drop checkpoints, observations, events, and diagnostics for product reads."""
+
+        return RuntimeResultSummary(
+            run_id=self.run_id,
+            thread_id=self.thread_id,
+            turn_id=self.turn_id,
+            status=self.status,
+            stop_reason=self.stop_reason,
+            final_answer=self.final_answer,
+            artifacts=list(self.artifacts),
+            artifact_views=list(self.artifact_views),
+            pending_action=self.pending_action,
+            active_task=self.active_task,
+            ui_state=self.ui_state,
+            references=list(self.references),
+            needs_user_input=self.needs_user_input,
+            error=self.error,
+        )

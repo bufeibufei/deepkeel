@@ -2,23 +2,27 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**A durable, observable, capability-driven harness runtime for production-grade
-AI agents.**
+**A durable, observable Harness Agent runtime for governed root and specialist
+agents built from reusable Capability Packages.**
 
-DeepKeel owns the model/tool loop, typed runtime contracts, interruption,
-recovery, context engineering, governance ports, ToolProvider integration,
-Capability Pack composition, MCP adapters and bounded SubAgent orchestration.
+DeepKeel lets a Host expose a general assistant and directly addressable domain
+specialists from one immutable runtime generation. Each conversation receives a
+fail-closed capability view while sharing the same model/tool loop, durable
+lifecycle, persistence and observability contracts. DeepKeel also owns typed
+runtime contracts, interruption and recovery, context engineering, governance
+ports, ToolProvider integration, MCP adapters and bounded SubAgent orchestration.
 It deliberately does not own product APIs, database models, business prompts,
 host tools or frontend rendering.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
 python examples/quickstart/main.py
 ```
 
 PyPI publication uses Trusted Publishing and is enabled independently after
-the publisher is configured for this repository. Git tags and GitHub release
-artifacts remain the source of truth for release candidates.
+the publisher is configured for this repository. Immutable Git tags, GitHub
+release artifacts, provenance attestations, and the release SBOM remain the
+source of truth for a release.
 
 DeepKeel is designed for Hosts that need more than a demo loop: durable run
 identity, resumable user handoffs, progressive tool disclosure, model routing,
@@ -28,15 +32,24 @@ artifacts, trace diagnostics and replaceable persistence adapters.
 ## Start here
 
 - [Architecture](docs/architecture.md)
+- [Agent entrypoints](docs/agent-entrypoints.md)
 - [Runtime lifecycle](docs/runtime-lifecycle.md)
 - [Capability Packages](docs/capability-package-v1.md)
 - [Context management](docs/context-management.md)
+- [Catalog discovery](docs/catalog-discovery.md)
+- [Security and trust](docs/security-and-trust.md)
+- [Capability Package trust](docs/capability-trust.md)
+- [MCP and A2A interoperability](docs/interoperability.md)
 - [Durable execution](docs/durable-execution.md)
+- [Execution planning](docs/execution-planning.md)
 - [Model providers](docs/model-provider.md)
 - [Observability](docs/observability.md)
 - [Production readiness](docs/production-readiness.md)
+- [Downstream Host compatibility](docs/host-compatibility.md)
 - [PostgreSQL adapters](docs/postgresql-reference.md)
 - [API stability](docs/api-stability.md)
+- [Migrating to 4.1](docs/migrating-to-4.1.md)
+- [Supply-chain controls](docs/supply-chain.md)
 - [Release process](docs/releasing.md)
 
 The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
@@ -45,6 +58,8 @@ tools and artifacts. The [durable approval example](examples/durable_approval)
 demonstrates suspension and resume. The
 [production worker](examples/production_worker) composes the production profile,
 packaged PostgreSQL ports, migrations and optional OpenTelemetry export.
+The [reference Host](examples/reference_host) adds HTTP, SSE, run inspection and
+cancellation while keeping those product concerns outside Core.
 
 Production deployments should follow
 [`docs/production-readiness.md`](docs/production-readiness.md), replace every
@@ -133,6 +148,17 @@ injected runtime ports, while request and result data are serializable Core
 contracts. Product hosts project `RuntimeResult` into their own API, event and
 persistence DTOs without passing those mappings back into Core.
 
+For a minimal embedding, use the Golden Path facade. It creates the same
+canonical runtime and does not introduce a second execution loop:
+
+```python
+from deepkeel.runtime_sdk import AgentHarness
+
+harness = AgentHarness.create(provider=model_provider)
+result = harness.run("Inspect this incident", user_id="operator-42")
+print(result.final_answer.markdown)
+```
+
 ```python
 from deepkeel.runtime_sdk import RuntimeRequest
 
@@ -177,6 +203,38 @@ async for event in runtime.astream(request, provider=provider):
     if event.event_type == "answer.delta":
         publish(event.payload["delta"])
 ```
+
+Multi-step planning is an opt-in execution capability inside the same ReAct
+graph, not a second agent runtime. Enable the control tool at composition time,
+then let each Skill choose whether planning is disabled, allowed, preferred, or
+required. Valid plans are bounded DAGs whose executable steps still pass through
+the normal tool registry, Skill scope, policy, budget, idempotency, checkpoint,
+and event boundaries.
+
+```python
+from deepkeel.adapter_sdk import RuntimePorts
+from deepkeel.runtime_sdk import HarnessRuntimeBuilder
+
+runtime = (
+    HarnessRuntimeBuilder()
+    .with_ports(RuntimePorts(planning_enabled=True))
+    .build()
+)
+
+skill_activation = {
+    "skill_id": "evidence-consultation",
+    "planning_policy": {
+        "mode": "preferred",
+        "max_steps": 6,
+        "max_parallel_steps": 3,
+    },
+}
+```
+
+Simple turns remain direct ReAct turns. Planning only changes how ready work is
+scheduled; tools, workflows and delegated SubAgents remain ordinary governed
+capabilities. See [Execution planning](docs/execution-planning.md) for plan,
+resume, revision and event contracts.
 
 Thread-safe synchronous persistence adapters can be exposed to async Host
 control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
@@ -405,10 +463,11 @@ source, and diagnostics include only counts for the installed Capability Pack
 inventory.
 
 MCP servers use the same governed tool gateway for local stdio and remote
-Streamable HTTP transports. Remote credentials are resolved through the
-runtime `SecretProvider`, diagnostics expose only header names and sanitized
-endpoints, and expired HTTP sessions are re-initialized once before surfacing a
-transport failure.
+Streamable HTTP transports. The modern protocol path supports stateless server
+discovery, tasks, safe parameter-header projection, and remote `outputSchema`
+validation. Remote credentials are resolved through the runtime
+`SecretProvider`, diagnostics expose only header names and sanitized endpoints,
+and legacy servers remain available through an explicitly bounded fallback.
 
 ```python
 from deepkeel.mcp_sdk import McpServerSpec
@@ -422,11 +481,18 @@ remote_search = McpServerSpec(
 )
 ```
 
+Remote specialist Agents can opt into the experimental A2A 1.0 adapter through
+`deepkeel.a2a_sdk`. A2A Tasks become ordinary bounded SubAgent work: the parent
+run owns permissions, budgets, checkpoints, cancellation, Artifacts, and the
+final answer. Capability Packages and Hosts do not depend on A2A protocol types
+unless they intentionally install that adapter.
+
 The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
-release and public SDK surface are `4.0.0`. Consumers import
-only from `deepkeel.runtime_sdk`, `deepkeel.extension_sdk`,
-`deepkeel.adapter_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`, or
-`deepkeel.orchestration_sdk`. The versioned public
+release and public SDK surface are `4.1.0`. Consumers import only from
+`deepkeel.runtime_sdk`, `deepkeel.extension_sdk`, `deepkeel.adapter_sdk`,
+`deepkeel.discovery_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`,
+`deepkeel.orchestration_sdk`, or the
+experimental `deepkeel.a2a_sdk`. The versioned public
 symbol manifest is available from `deepkeel.public_api`; the package root
 only exposes those SDK modules and version constants. The package-owned test
 suite stores a frozen API fingerprint, so contract changes require an explicit

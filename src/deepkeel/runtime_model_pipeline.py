@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from deepkeel.budget import BudgetLedger
+from deepkeel.context_compaction import WorkingContextCompactor
 from deepkeel.model import (
     ModelInvocationRecorder,
     ModelInvocationStore,
@@ -22,6 +23,7 @@ def build_runtime_model_gateway(
     invocation_recorder: ModelInvocationRecorder | None,
     invocation_store: ModelInvocationStore | None,
     model_health_store: ModelHealthStore,
+    context_compactor: WorkingContextCompactor | None = None,
 ) -> RoutedModelGateway:
     """Compose the governed model pipeline outside the orchestration runtime."""
 
@@ -33,4 +35,5 @@ def build_runtime_model_gateway(
         invocation_recorder=invocation_recorder,
         invocation_store=invocation_store,
         model_health_store=model_health_store,
+        context_compactor=context_compactor,
     )

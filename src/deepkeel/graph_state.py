@@ -17,7 +17,10 @@ from deepkeel.contracts import (
     ToolCall,
     ToolResult,
 )
+from deepkeel.entrypoints import _restrict_tool_names
+from deepkeel.graph_tool_scope import _skill_tool_parameter_overrides
 from deepkeel.model import ModelGateway
+from deepkeel.planning import PLAN_TOOL_NAME, PlanningPolicy
 from deepkeel.skills import DelegationPolicy, SkillPolicy
 from deepkeel.tool_registry import ToolRegistry
 from deepkeel.type_narrowing import as_dict, as_list
@@ -45,6 +48,7 @@ class HarnessGraphState(TypedDict):
     pending_tool_calls: list[dict[str, Any]]
     pending_action: dict[str, Any] | None
     pending_async: dict[str, Any] | None
+    execution_plan: dict[str, Any] | None
     artifacts: list[dict[str, Any]]
     skill_activation: dict[str, Any]
     policy_phase: str
@@ -75,6 +79,10 @@ def validate_graph_state(state: dict[str, Any]) -> HarnessGraphState:
             raise TypeError(f"graph state {field_name} must be an object")
     if state.get("pending_action") is not None and state.get("pending_async") is not None:
         raise ValueError("graph state cannot wait for user action and async work simultaneously")
+    if state.get("execution_plan") is not None and not isinstance(
+        state.get("execution_plan"), dict
+    ):
+        raise TypeError("graph state execution_plan must be an object or null")
     if int(state.get("step_count") or 0) < 0 or int(state.get("repair_count") or 0) < 0:
         raise ValueError("graph counters must be non-negative")
     missing = state.get("missing_requirements")
@@ -119,51 +127,67 @@ def migrate_legacy_graph_state(
     migrated["step_count"] = int(migrated.get("step_count") or 0)
     migrated.setdefault("pending_action", None)
     migrated.setdefault("pending_async", None)
+    migrated.setdefault("execution_plan", None)
     migrated.setdefault("final_answer", None)
     return validate_graph_state(migrated)
+
 
 def _state_from_context(context: RunContext) -> HarnessGraphState:
     skill = dict(context.skill_activation)
     missing = as_dict(skill.get("missing_requirements"))
-    return validate_graph_state({
-        "run_id": context.run_id,
-        "thread_id": context.thread_id,
-        "turn_id": context.turn_id,
-        "user_id": context.user_id,
-        "status": context.status.value,
-        "messages": [message.model_dump(mode="json") for message in context.messages],
-        "observations": [item.model_dump(mode="json") for item in context.observations],
-        "pending_tool_calls": [item.model_dump(mode="json") for item in context.pending_tool_calls],
-        "pending_action": context.pending_action.model_dump(mode="json") if context.pending_action else None,
-        "pending_async": dict(context.pending_async) if context.pending_async else None,
-        "artifacts": [item.model_dump(mode="json") for item in context.artifacts],
-        "skill_activation": skill,
-        "policy_phase": str(
-            skill.get("policy_phase")
-            or ("pending" if skill.get("kind") == "workflow" else "")
-        ),
-        "missing_requirements": {
-            "tools": list(missing.get("tools") or []),
-            "artifacts": list(missing.get("artifacts") or []),
-        },
-        "repair_count": int(skill.get("repair_count") or 0),
-        "model_policy": dict(context.model_policy),
-        "budget_state": dict(context.budget_state),
-        "metadata": dict(context.metadata),
-        "step_count": context.step_count,
-        "events": [],
-        "tool_results": [],
-        "final_answer": None,
-    })
+    return validate_graph_state(
+        {
+            "run_id": context.run_id,
+            "thread_id": context.thread_id,
+            "turn_id": context.turn_id,
+            "user_id": context.user_id,
+            "status": context.status.value,
+            "messages": [message.model_dump(mode="json") for message in context.messages],
+            "observations": [item.model_dump(mode="json") for item in context.observations],
+            "pending_tool_calls": [
+                item.model_dump(mode="json") for item in context.pending_tool_calls
+            ],
+            "pending_action": context.pending_action.model_dump(mode="json")
+            if context.pending_action
+            else None,
+            "pending_async": dict(context.pending_async) if context.pending_async else None,
+            "execution_plan": deepcopy(context.execution_plan) if context.execution_plan else None,
+            "artifacts": [item.model_dump(mode="json") for item in context.artifacts],
+            "skill_activation": skill,
+            "policy_phase": str(
+                skill.get("policy_phase") or ("pending" if skill.get("kind") == "workflow" else "")
+            ),
+            "missing_requirements": {
+                "tools": list(missing.get("tools") or []),
+                "artifacts": list(missing.get("artifacts") or []),
+            },
+            "repair_count": int(skill.get("repair_count") or 0),
+            "model_policy": dict(context.model_policy),
+            "budget_state": dict(context.budget_state),
+            "metadata": dict(context.metadata),
+            "step_count": context.step_count,
+            "events": [],
+            "tool_results": [],
+            "final_answer": None,
+        }
+    )
 
 
 def _copy_state(state: Mapping[str, Any]) -> dict[str, Any]:
     current = dict(state)
-    for name in ("messages", "observations", "artifacts", "events", "pending_tool_calls", "tool_results"):
+    for name in (
+        "messages",
+        "observations",
+        "artifacts",
+        "events",
+        "pending_tool_calls",
+        "tool_results",
+    ):
         current[name] = list(state.get(name) or [])
     current["skill_activation"] = dict(state.get("skill_activation") or {})
     current["metadata"] = dict(state.get("metadata") or {})
     current["budget_state"] = dict(state.get("budget_state") or {})
+    current["execution_plan"] = deepcopy(state.get("execution_plan"))
     missing = as_dict(state.get("missing_requirements"))
     current["missing_requirements"] = {
         "tools": list(missing.get("tools") or []),
@@ -197,14 +221,23 @@ def _allowed_tool_names(
         if str(name).strip()
     }
     allowed = as_list(skill.get("allowed_tools"))
+    plan_available = PLAN_TOOL_NAME in {spec.name for spec in registry.list_tools()}
+    planning_policy = PlanningPolicy.from_snapshot(skill)
     if skill_policy.active and skill_policy.tool_scope_mode == "allowlist":
         names = {str(name) for name in allowed if name}
         if "agent.delegate" in names and not DelegationPolicy.from_snapshot(skill).enabled:
             names.remove("agent.delegate")
-        if names and _tool_discovery_available(state):
+        if names and _catalog_discovery_available(state, "runtime.discover_tools"):
             names.add("runtime.discover_tools")
+        if plan_available and planning_policy.enabled:
+            names.add(PLAN_TOOL_NAME)
+        else:
+            names.discard(PLAN_TOOL_NAME)
         names.difference_update(disabled)
-        return names
+        return _restrict_tool_names(
+            as_dict(as_dict(state.get("metadata")).get("capability_view")),
+            names,
+        )
     default_tools = {
         spec.name
         for spec in registry.list_tools()
@@ -214,13 +247,26 @@ def _allowed_tool_names(
         default_tools.update(skill_policy.required_tools)
         for group in skill_policy.required_tool_groups:
             default_tools.update(group)
-    if not _tool_discovery_available(state):
+    if not _catalog_discovery_available(state, "runtime.discover_tools"):
         default_tools.discard("runtime.discover_tools")
+    if not _catalog_discovery_available(state, "runtime.discover_skills"):
+        default_tools.discard("runtime.discover_skills")
+    if plan_available and planning_policy.enabled:
+        default_tools.add(PLAN_TOOL_NAME)
+    else:
+        default_tools.discard(PLAN_TOOL_NAME)
     default_tools.difference_update(disabled)
-    return default_tools
+    return _restrict_tool_names(
+        as_dict(as_dict(state.get("metadata")).get("capability_view")),
+        default_tools,
+    )
 
 
 def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
+    return _catalog_discovery_available(state, "runtime.discover_tools")
+
+
+def _catalog_discovery_available(state: Mapping[str, Any], tool_name: str) -> bool:
     metadata = as_dict(state.get("metadata"))
     try:
         limit = int(metadata.get("tool_discovery_attempt_limit") or 2)
@@ -231,8 +277,7 @@ def _tool_discovery_available(state: Mapping[str, Any]) -> bool:
         1
         for result in as_list(state.get("tool_results"))
         if isinstance(result, Mapping)
-        and str(result.get("name") or result.get("tool_name") or "")
-        == "runtime.discover_tools"
+        and str(result.get("name") or result.get("tool_name") or "") == tool_name
     )
     return attempts < limit
 
@@ -241,6 +286,23 @@ def _forced_workflow_tool_name(
     state: dict[str, Any],
     tools: list[dict[str, Any]],
 ) -> str:
+    available = {
+        str(as_dict(item.get("function")).get("name") or "")
+        for item in tools
+        if isinstance(item, dict) and isinstance(item.get("function"), dict)
+    }
+    planning_policy = PlanningPolicy.from_snapshot(
+        state.get("skill_activation")
+        if isinstance(state.get("skill_activation"), dict)
+        else {}
+    )
+    plan = as_dict(state.get("execution_plan"))
+    if (
+        planning_policy.mode == "required"
+        and PLAN_TOOL_NAME in available
+        and (not plan or str(plan.get("status") or "") == "replanning")
+    ):
+        return PLAN_TOOL_NAME
     phase = str(state.get("policy_phase") or "")
     metadata = as_dict(state.get("metadata"))
     resumed_after_clarification = (
@@ -261,66 +323,13 @@ def _forced_workflow_tool_name(
         and contract_driven
         and bool(decision.missing_tools)
     )
-    if (
-        phase != "repair"
-        and not resumed_after_clarification
-        and not initial_contract_transition
-    ):
+    if phase != "repair" and not resumed_after_clarification and not initial_contract_transition:
         return ""
     missing_tools = decision.missing_tools
-    available = {
-        str(as_dict(item.get("function")).get("name") or "")
-        for item in tools
-        if isinstance(item, dict) and isinstance(item.get("function"), dict)
-    }
     return next(
-        (
-            str(name)
-            for name in missing_tools or []
-            if str(name) and str(name) in available
-        ),
+        (str(name) for name in missing_tools or [] if str(name) and str(name) in available),
         "",
     )
-
-
-def _skill_tool_parameter_overrides(
-    state: dict[str, Any],
-    registry: ToolRegistry,
-) -> dict[str, dict[str, Any]]:
-    skill = as_dict(state.get("skill_activation"))
-    policy = DelegationPolicy.from_snapshot(skill)
-    if not policy.enabled:
-        return {}
-    try:
-        spec = registry.get("agent.delegate")
-    except KeyError:
-        return {}
-    formal_schema = getattr(spec, "formal_parameters_schema", None)
-    schema = formal_schema() if callable(formal_schema) else {}
-    if (
-        not isinstance(schema, dict)
-        or schema.get("type") != "object"
-        or not isinstance(schema.get("properties"), dict)
-    ):
-        return {}
-    schema = deepcopy(schema)
-    properties = as_dict(schema.get("properties"))
-    concurrency = properties.get("max_concurrency")
-    if isinstance(concurrency, dict):
-        concurrency["maximum"] = policy.max_concurrency
-        concurrency["default"] = min(
-            int(concurrency.get("default") or policy.max_concurrency),
-            policy.max_concurrency,
-        )
-    tasks = properties.get("tasks")
-    if isinstance(tasks, dict):
-        tasks["maxItems"] = policy.max_tasks
-        items = as_dict(tasks.get("items"))
-        task_properties = as_dict(items.get("properties"))
-        agent_id = task_properties.get("agent_id")
-        if isinstance(agent_id, dict) and policy.allowed_agents:
-            agent_id["enum"] = sorted(policy.allowed_agents)
-    return {"agent.delegate": schema}
 
 
 def _hydrate_call(raw: dict[str, Any], registry: ToolRegistry, run_id: str) -> ToolCall:
@@ -328,13 +337,16 @@ def _hydrate_call(raw: dict[str, Any], registry: ToolRegistry, run_id: str) -> T
     try:
         spec = registry.get(call.name)
     except KeyError:
-        return call.model_copy(update={"idempotency_key": call.idempotency_key or f"{run_id}:{call.id}"})
+        return call.model_copy(
+            update={"idempotency_key": call.idempotency_key or f"{run_id}:{call.id}"}
+        )
     return call.model_copy(
         update={
             "idempotency_key": call.idempotency_key or f"{run_id}:{call.id}",
             "read_only": spec.read_only,
             "parallel_safe": spec.parallel_safe,
-            "resource_key": call.resource_key or str(spec.runtime_policy.get("side_effect") or spec.name),
+            "resource_key": call.resource_key
+            or str(spec.runtime_policy.get("side_effect") or spec.name),
         }
     )
 
@@ -365,8 +377,7 @@ def _stable_tool_calls(
             call.model_copy(
                 update={
                     "idempotency_key": (
-                        f"{run_id}:step:{max(1, int(step_index))}:"
-                        f"tool:{ordinal}:{digest}"
+                        f"{run_id}:step:{max(1, int(step_index))}:tool:{ordinal}:{digest}"
                     )
                 }
             )
@@ -423,11 +434,9 @@ def _upsert_artifact(current: dict[str, Any], artifact: dict[str, Any]) -> None:
     if existing is None:
         artifacts.append(artifact)
         return
-    if (
-        str(existing.get("run_id") or "") != str(artifact.get("run_id") or "")
-        or str(existing.get("artifact_type") or "")
-        != str(artifact.get("artifact_type") or "")
-    ):
+    if str(existing.get("run_id") or "") != str(artifact.get("run_id") or "") or str(
+        existing.get("artifact_type") or ""
+    ) != str(artifact.get("artifact_type") or ""):
         raise ValueError(f"artifact identity conflict for {artifact_id}")
     existing.update(
         {
@@ -450,17 +459,31 @@ def _apply_tool_result(
     result: ToolResult,
     config: Mapping[str, Any],
 ) -> None:
-    if result.name == "runtime.discover_tools" and result.status == "succeeded":
+    if result.name in {"runtime.discover_tools", "runtime.discover_skills"} and result.status == "succeeded":
         metadata = current.setdefault("metadata", {})
-        metadata["tool_discovery_attempts"] = (
-            int(metadata.get("tool_discovery_attempts") or 0) + 1
+        attempt_key = (
+            "tool_discovery_attempts"
+            if result.name == "runtime.discover_tools"
+            else "skill_discovery_attempts"
         )
+        metadata[attempt_key] = int(metadata.get(attempt_key) or 0) + 1
         discovered = result.data.get("discovered_names")
+        if result.name == "runtime.discover_skills":
+            discovered = result.data.get("discovered_tool_names")
+            skill_ids = result.data.get("discovered_skill_ids")
+            if isinstance(skill_ids, list):
+                existing_skills = {
+                    str(skill_id)
+                    for skill_id in metadata.get("discovered_skill_ids", [])
+                    if str(skill_id).strip()
+                }
+                existing_skills.update(
+                    str(skill_id) for skill_id in skill_ids if str(skill_id).strip()
+                )
+                metadata["discovered_skill_ids"] = sorted(existing_skills)
         if isinstance(discovered, list):
             existing = {
-                str(name)
-                for name in metadata.get("discovered_tool_names", [])
-                if str(name).strip()
+                str(name) for name in metadata.get("discovered_tool_names", []) if str(name).strip()
             }
             existing.update(str(name) for name in discovered if str(name).strip())
             metadata["discovered_tool_names"] = sorted(existing)
@@ -529,10 +552,7 @@ def _apply_resume_payload(
     is_clarification = str(pending.get("action_type") or "") == "clarification"
     tool_call_id = str(pending.get("tool_call_id") or "")
     tool_name = str(
-        pending.get("tool_name")
-        or payload.get("tool_name")
-        or pending.get("action_type")
-        or source
+        pending.get("tool_name") or payload.get("tool_name") or pending.get("action_type") or source
     )
     status = str(payload.get("status") or "succeeded")
     summary = str(payload.get("summary") or "The user action is complete.")
@@ -555,11 +575,10 @@ def _apply_resume_payload(
     )
     current.setdefault("observations", []).append(observation.model_dump(mode="json"))
     if is_clarification:
-        clarification = str(
-            data.get("clarification_answer")
-            if isinstance(data, dict)
-            else ""
-        ).strip() or summary
+        clarification = (
+            str(data.get("clarification_answer") if isinstance(data, dict) else "").strip()
+            or summary
+        )
         metadata = current.setdefault("metadata", {})
         metadata["workflow_clarification_resume_count"] = (
             int(metadata.get("workflow_clarification_resume_count") or 0) + 1
@@ -574,7 +593,8 @@ def _apply_resume_payload(
                     content=(
                         "The user has supplied the requested clarification. Continue the active "
                         "workflow now. Do not present a business result directly before satisfying "
-                        f"the required tool transition(s): {', '.join(str(name) for name in missing_tools)}."
+                        "the required tool transition(s): "
+                        f"{', '.join(str(name) for name in missing_tools)}."
                     ),
                     metadata={
                         "kind": "workflow_clarification_resume_guard",
@@ -616,7 +636,14 @@ def _apply_resume_payload(
     current["pending_action"] = None
     current["pending_async"] = None
     current["status"] = "reasoning"
-    _emit(current, config, "run.resumed", "Run resumed", summary, {"observation": observation.model_dump(mode="json")})
+    _emit(
+        current,
+        config,
+        "run.resumed",
+        "Run resumed",
+        summary,
+        {"observation": observation.model_dump(mode="json")},
+    )
     return current
 
 
@@ -624,7 +651,10 @@ def _is_policy_confirmation(pending: Any) -> bool:
     if not isinstance(pending, dict):
         return False
     payload = as_dict(pending.get("payload"))
-    return pending.get("action_type") == "policy_confirmation" or payload.get("policy_confirmation") is True
+    return (
+        pending.get("action_type") == "policy_confirmation"
+        or payload.get("policy_confirmation") is True
+    )
 
 
 def _apply_policy_confirmation_resume(
@@ -635,10 +665,15 @@ def _apply_policy_confirmation_resume(
     resolution = resume_payload if isinstance(resume_payload, dict) else {"value": resume_payload}
     data = as_dict(resolution.get("data"))
     status = str(resolution.get("status") or "").lower()
-    confirmed = data.get("confirmed") is True or resolution.get("confirmed") is True or status in {
-        "confirmed",
-        "approved",
-    }
+    confirmed = (
+        data.get("confirmed") is True
+        or resolution.get("confirmed") is True
+        or status
+        in {
+            "confirmed",
+            "approved",
+        }
+    )
     pending = as_dict(current.get("pending_action"))
     payload = as_dict(pending.get("payload"))
     deferred = as_dict(payload.get("deferred_tool_call"))
@@ -731,7 +766,9 @@ def _tool_result_payload(result: ToolResult) -> dict[str, Any]:
     payload = result.model_dump(mode="json", exclude={"call", "metadata"})
     if result.call is not None:
         payload["call"] = result.call.model_dump(mode="json")
-    runtime_metrics = result.metadata.get("runtime_metrics") if isinstance(result.metadata, dict) else None
+    runtime_metrics = (
+        result.metadata.get("runtime_metrics") if isinstance(result.metadata, dict) else None
+    )
     if isinstance(runtime_metrics, dict):
         payload["runtime_metrics"] = runtime_metrics
     mcp = result.metadata.get("mcp") if isinstance(result.metadata, dict) else None

@@ -22,6 +22,13 @@ Production composition also requires `tool_view_mode="enforced"`. Development
 may retain legacy disclosure while migrating, but a production worker cannot
 silently expose the complete allowed catalog to the model.
 
+When optional execution-safety ports are configured, the gate also rejects an
+explicit `NoopSandboxPort`, warns when `LocalWorkspacePort` is used as a
+process-local workspace, and identifies in-memory Guardrail replay or online
+evaluation storage. A custom sandbox must enforce the limits declared by the
+ToolSpec; returning `enforced=False` for a required sandbox fails that tool
+before its handler runs.
+
 Do not use the `InMemory*` implementations in a multi-worker deployment. Install
 durable implementations for:
 
@@ -161,10 +168,26 @@ the same model name can behave differently behind different endpoints or
 credentials.
 
 Remote Streamable HTTP MCP denies private, loopback and link-local destinations
-by default, validates DNS before every request, refuses redirects and inherited
-proxy credentials, and enforces request/response byte ceilings. Hosts must use
-an explicit hostname allowlist; private-network access is an opt-in intended
-only for controlled internal MCP servers.
+by default, resolves DNS before every request, pins the request connection to a
+validated address while preserving the original Host/SNI identity, refuses
+redirects and inherited proxy credentials, and enforces request/response byte
+ceilings. Hosts must use an explicit hostname allowlist; private-network access
+is an opt-in intended only for controlled internal MCP servers. Capability URI
+trust uses parsed scheme, host, port, and path-segment boundaries rather than
+raw string prefixes.
+
+Canonical-state adapter errors are fail-closed. Legacy checkpoint fallback is
+allowed only when canonical state is absent or an explicit migration marker
+authorizes it; transport, timeout, and deserialization failures must surface to
+recovery instead of silently restoring a potentially stale checkpoint. Model
+routing likewise returns `NO_ELIGIBLE_MODEL` when health and capability policy
+exclude every binding, while Memory search is denied on policy failure unless a
+Host explicitly installs a degraded-mode policy.
+
+Remote A2A specialists require the same egress and credential policy. Treat
+Agent Cards, Messages, Task states, and Artifacts as untrusted input. A parent
+run must retain final-answer ownership and propagate cancellation to remote
+tasks; see [MCP and A2A interoperability](interoperability.md).
 
 ## Evaluation
 

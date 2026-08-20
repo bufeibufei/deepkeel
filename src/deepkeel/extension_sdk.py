@@ -15,6 +15,9 @@ from deepkeel.clarifications import (
     clarification_from_validation_error,
     clarification_tool_result,
 )
+from deepkeel.entrypoints import (
+    AgentEntrypointSpec,
+)
 from deepkeel.conformance import (
     CapabilityLifecycleConformanceReport,
     CapabilityPackageCertificationReport,
@@ -48,12 +51,25 @@ from deepkeel.skill_activation import (
     EntryToolActivationRequest,
     EntryToolSkillActivator,
 )
+from deepkeel.skill_disclosure import (
+    SKILL_DISCOVERY_NAME,
+    LexicalSkillDiscovery,
+    LexicalSkillReranker,
+    SkillDescriptor,
+    SkillDiscoveryPort,
+    SkillRerankerPort,
+    discover_skills,
+    install_skill_discovery,
+    skill_discovery_spec,
+)
 from deepkeel.tool_registry import ToolRegistry, ToolSpec
 from deepkeel.tool_disclosure import (
     TOOL_DISCOVERY_NAME,
     LexicalToolDiscovery,
+    LexicalToolReranker,
     ToolDescriptor,
     ToolDiscoveryPort,
+    ToolRerankerPort,
     ToolView,
     discover_tools,
     install_tool_discovery,
@@ -75,6 +91,14 @@ from deepkeel.capability_control import (
     CapabilityPackageSnapshot,
     CapabilityPackageStore,
     InMemoryCapabilityPackageStore,
+)
+from deepkeel.capability_trust import (
+    CapabilityExecutionMode,
+    CapabilityPackageSource,
+    CapabilityTrustPolicy,
+    CapabilityTrustReport,
+    capability_source_digest,
+    evaluate_capability_trust,
 )
 from deepkeel.hooks import (
     HookAction,
@@ -105,6 +129,7 @@ from deepkeel.async_ports import (
 )
 
 EXTENSION_SDK_API = (
+    "AgentEntrypointSpec",
     "AsyncToolExecutionStore",
     "AsyncToolExecutionStoreAdapter",
     "ArtifactPresentationActionSpec",
@@ -114,6 +139,7 @@ EXTENSION_SDK_API = (
     "CapabilityCatalog",
     "CapabilityBudgetSpec",
     "CapabilityContribution",
+    "CapabilityExecutionMode",
     "CapabilityInstallContext",
     "CapabilityManifest",
     "CapabilityLifecycleConformanceReport",
@@ -126,6 +152,9 @@ EXTENSION_SDK_API = (
     "CapabilityPackageRecord",
     "CapabilityPackageSnapshot",
     "CapabilityPackageStore",
+    "CapabilityPackageSource",
+    "CapabilityTrustPolicy",
+    "CapabilityTrustReport",
     "ClarificationRequest",
     "CompiledSkillSpec",
     "DefaultReferenceProjector",
@@ -153,6 +182,12 @@ EXTENSION_SDK_API = (
     "RuntimeGeneration",
     "RuntimeGenerationManager",
     "SkillPackageManifest",
+    "SKILL_DISCOVERY_NAME",
+    "LexicalSkillDiscovery",
+    "LexicalSkillReranker",
+    "SkillDescriptor",
+    "SkillDiscoveryPort",
+    "SkillRerankerPort",
     "ToolExecutionClaim",
     "ToolExecutionContext",
     "ToolExecutionStore",
@@ -165,22 +200,29 @@ EXTENSION_SDK_API = (
     "ToolSpec",
     "TOOL_DISCOVERY_NAME",
     "LexicalToolDiscovery",
+    "LexicalToolReranker",
     "ToolDescriptor",
     "ToolDiscoveryPort",
+    "ToolRerankerPort",
     "ToolView",
     "capability_pack_spec",
     "capability_pack_spec_from_manifest",
+    "capability_source_digest",
     "certify_capability_package",
     "clarification_from_validation_error",
     "clarification_tool_result",
     "discover_tools",
+    "discover_skills",
+    "evaluate_capability_trust",
     "harness_system_prompt",
     "install_tool_discovery",
+    "install_skill_discovery",
     "load_skill_packages",
     "load_capability_manifest",
     "standardize_pending_action_payload",
     "resolve_tool_view",
     "tool_discovery_spec",
+    "skill_discovery_spec",
     "validate_capability_pack",
     "validate_skill_packages",
     "validate_manifest_set",

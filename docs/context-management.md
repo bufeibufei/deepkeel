@@ -12,6 +12,30 @@ When L2 is too large, DeepKeel keeps a recent raw suffix and creates a
 source-linked checkpoint; raw events remain authoritative. Subject-mismatched
 authoritative context is quarantined rather than silently mixed.
 
+Before invocation, `ContextQualityGate` can audit provenance, authority,
+subject alignment, duplicate content, empty items, and declared token estimates.
+`observe` mode records issues without changing input; `enforce` mode rejects
+critical L1/L2 defects while allowing replaceable policies to decide which L3
+quality findings are tolerable. The quality report is diagnostic evidence, not
+a new source of truth.
+
+## Semantic checkpoints
+
+`DeterministicContextWindowManager` accepts an optional
+`ContextCheckpointBuilder`. The builder receives a deterministic draft plus
+defensive copies of the omitted and retained messages, and may enrich goals,
+decisions, progress, failures and next steps. Core verifies the returned
+checkpoint against immutable source fields and requires every critical fact to
+reference a supplied message or an earlier checkpoint fact. Invalid output or
+builder failure falls back to the deterministic draft and is recorded in the
+context diagnostics. This keeps semantic compression replaceable without
+making a model-generated summary authoritative.
+
+The same working-context compactor is reused for the runtime context window and
+the final provider-specific model input budget. A Host therefore configures the
+semantic boundary once instead of receiving different summaries at routing and
+invocation time.
+
 Hosts provide domain context through `RuntimePorts`. Capability Packages may
 enrich the generic envelope through registered contributors but must not bypass
 visibility, budget or provenance policy.

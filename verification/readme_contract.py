@@ -21,10 +21,16 @@ SHARED_CONTRACT_MARKERS = (
     "docs/architecture.md",
     "docs/postgresql-reference.md",
     "docs/production-readiness.md",
+    "docs/catalog-discovery.md",
     "docs/releasing.md",
     "deepkeel.runtime_sdk",
     "deepkeel.extension_sdk",
+    "deepkeel.discovery_sdk",
     "deepkeel.adapter_sdk",
+    "deepkeel.a2a_sdk",
+    "docs/security-and-trust.md",
+    "docs/interoperability.md",
+    "docs/supply-chain.md",
 )
 
 

@@ -1,5 +1,17 @@
 # Capability Package V1
 
+## Developer workflow
+
+Use `deepkeel pack init` to create a manifest-first skeleton, `pack inspect` to
+inspect its normalized contract, and `pack validate --factory` to compose the
+executable package through the public SDK and detect declaration drift. Release
+certification adds executable scenario evaluations through
+`certify_capability_package()`.
+
+Package permissions govern tools and resources after installation; they do not
+sandbox imported Python. Hosts must apply the provenance policy described in
+[`capability-trust.md`](capability-trust.md) before importing third-party code.
+
 A Capability Package is the only supported boundary for adding business
 behavior to DeepKeel. The package owns domain tools, Skills,
 artifacts, handoffs, prompts, UI projection metadata, and evaluation cases.
@@ -20,6 +32,13 @@ my_capability/
 `manifest.json` is the single source of truth. `package.py` derives its
 `CapabilityPackSpec` with `capability_pack_spec_from_manifest`; duplicating
 tool or Skill declarations in Python is not supported.
+
+Skills may declare a `planning_policy` when their work benefits from several
+dependent capabilities. The supported modes are `disabled`, `allowed`,
+`preferred`, and `required`, with bounded `max_steps`, `max_revisions`,
+`max_parallel_steps`, and `max_attempts_per_step`. Planning never expands the
+Skill allowlist: every plan step must still reference a tool already available
+to the active Skill.
 
 The manifest must declare:
 

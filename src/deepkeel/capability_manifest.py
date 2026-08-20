@@ -83,6 +83,7 @@ class CapabilityManifest(BaseModel):
     handoffs: tuple[str, ...] = ()
     hooks: tuple[str, ...] = ()
     context_contributors: tuple[str, ...] = ()
+    agent_entrypoints: tuple[str, ...] = ()
     mcp_servers: tuple[str, ...] = ()
     resources: tuple[str, ...] = ()
     permissions: tuple[str, ...] = ()
@@ -114,6 +115,7 @@ class CapabilityManifest(BaseModel):
             "handoffs",
             "hooks",
             "context_contributors",
+            "agent_entrypoints",
             "mcp_servers",
             "resources",
             "permissions",
@@ -334,6 +336,7 @@ def validate_manifest_set(manifests: tuple[CapabilityManifest, ...]) -> None:
             "handoffs",
             "hooks",
             "context_contributors",
+            "agent_entrypoints",
             "resources",
         ):
             for capability_id in getattr(manifest, kind):

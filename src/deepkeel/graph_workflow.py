@@ -25,11 +25,12 @@ EMPTY_MODEL_RESPONSE = "EMPTY_MODEL_RESPONSE"
 MAX_CONSECUTIVE_EMPTY_MODEL_RETRIES = 1
 TRUNCATED_MODEL_RESPONSE = "TRUNCATED_MODEL_RESPONSE"
 MAX_MODEL_OUTPUT_CONTINUATIONS = 2
-TRUNCATED_FINISH_REASONS = frozenset(
-    {"length", "max_tokens", "max_output_tokens", "token_limit"}
-)
+TRUNCATED_FINISH_REASONS = frozenset({"length", "max_tokens", "max_output_tokens", "token_limit"})
+
 
 def _route_after_tools(state: dict[str, Any]) -> str:
+    if state.get("pending_tool_calls"):
+        return "tools"
     if state.get("status") == "waiting_user":
         return "await_user"
     if state.get("status") == "waiting_async":
@@ -69,11 +70,7 @@ def _continue_or_fail_truncated_model_response(
     can_continue: bool,
 ) -> dict[str, Any]:
     metadata = current.setdefault("metadata", {})
-    parts = [
-        str(part)
-        for part in metadata.get("partial_answer_parts", [])
-        if str(part)
-    ]
+    parts = [str(part) for part in metadata.get("partial_answer_parts", []) if str(part)]
     if content:
         parts.append(content)
     metadata["partial_answer_parts"] = parts
@@ -151,11 +148,7 @@ def _continue_or_fail_truncated_model_response(
 
 
 def _complete_continued_answer(metadata: dict[str, Any], content: str) -> str:
-    parts = [
-        str(part)
-        for part in metadata.pop("partial_answer_parts", [])
-        if str(part)
-    ]
+    parts = [str(part) for part in metadata.pop("partial_answer_parts", []) if str(part)]
     metadata.pop("output_continuation_pending", None)
     metadata.pop("output_continuation_count", None)
     if not parts:
@@ -285,10 +278,9 @@ def _workflow_can_wait_for_user_input(
         # response must go through policy repair instead of becoming another prompt.
         # Tool-level validation can still suspend again with its own clarification.
         return False
-    if (
-        not decision.missing_tools
-        and not decision.missing_tool_groups
-    ) or str(state.get("policy_phase") or "") == "repair":
+    if (not decision.missing_tools and not decision.missing_tool_groups) or str(
+        state.get("policy_phase") or ""
+    ) == "repair":
         return False
     if skill.completion_policy.get("allow_model_clarification") is not True:
         return False
@@ -517,7 +509,14 @@ def _finish_failed(
     current["final_answer"] = answer.model_dump(mode="json")
     current["status"] = "failed"
     current["pending_tool_calls"] = []
-    _emit(current, config, "agent.failed", "Execution failed", message, {"final_answer": current["final_answer"]})
+    _emit(
+        current,
+        config,
+        "agent.failed",
+        "Execution failed",
+        message,
+        {"final_answer": current["final_answer"]},
+    )
     return current
 
 

@@ -237,6 +237,30 @@ def _argument_schema_error(arguments: dict[str, Any], spec: ToolSpec) -> str:
     return f"{path}: {error.message}" if path else error.message
 
 
+def _artifact_contract_error(
+    result: ToolResult,
+    *,
+    configured: bool,
+    schemas: Mapping[str, Mapping[str, Any]],
+) -> str:
+    if not result.artifacts or not configured:
+        return ""
+    for artifact in result.artifacts:
+        schema = schemas.get(artifact.artifact_type)
+        if schema is None:
+            return f"unregistered artifact type: {artifact.artifact_type}"
+        errors = sorted(
+            Draft202012Validator(schema).iter_errors(artifact.data),
+            key=lambda item: list(item.absolute_path),
+        )
+        if errors:
+            return (
+                f"artifact {artifact.artifact_type} does not match its contract: "
+                f"{errors[0].message}"
+            )
+    return ""
+
+
 def _invalid_arguments_result(
     call: ToolCall,
     context: ToolExecutionContext,

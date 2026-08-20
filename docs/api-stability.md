@@ -1,8 +1,14 @@
 # API stability
 
-Release candidates are installable from their immutable Git tags and GitHub
-release artifacts. PyPI publication is enabled only after this repository's
-Trusted Publisher has been configured.
+`RuntimeResultSummary` and `RuntimeResult.to_summary()` are additive v4.1
+projections. The full `RuntimeResult` remains canonical for recovery and
+diagnostics, so existing Hosts do not need to migrate. New product read paths
+should prefer the summary projection and fetch traces or checkpoints from their
+dedicated operational interfaces only when needed.
+
+Stable and candidate releases are installable from immutable Git tags and
+GitHub release artifacts. PyPI publication is enabled only after this
+repository's Trusted Publisher has been configured.
 
 DeepKeel follows Semantic Versioning. The v4 public SDK is frozen by
 `tests/public_api_v4.sha256`. A public symbol or signature change requires an
@@ -25,8 +31,8 @@ stability levels:
   compatibility policy;
 - `advanced`: adapter and MCP integration contracts intended for infrastructure
   authors and changed only through an explicit compatibility review;
-- `experimental`: bounded orchestration contracts that remain eligible for
-  refinement during release candidates.
+- `experimental`: bounded orchestration and A2A adapter contracts that remain
+  eligible for refinement in minor releases.
 
 `PUBLIC_API_BY_STABILITY` provides the corresponding machine-readable facade.
 Ordinary applications should stay in the stable layers; infrastructure code
@@ -42,14 +48,20 @@ Capability generations that accepted the final v3 package line remain
 loadable through an explicit compatibility bridge; newly authored packages
 should declare a v4 package range.
 
-During the final v4 release-candidate cycle, `HarnessRuntimeBuilder` moved from
+During the v4 release-candidate cycle, `HarnessRuntimeBuilder` moved from
 `deepkeel.adapter_sdk` to `deepkeel.runtime_sdk` because application authors need
 it for ordinary runtime construction. The former module keeps a transitional
 attribute for source compatibility, but new code must import the canonical
 Runtime SDK symbol.
 
-The final release-candidate cycle also adds additive async counterparts for
+The 4.1 line also adds additive async counterparts for
 Memory recall, tool-execution idempotency, and experimental bounded delegation.
 Existing synchronous contracts remain source compatible; async Hosts should
 prefer the native protocols and use the supplied bridges only for thread-safe
 legacy adapters.
+
+DeepKeel 4.1 adds the stable `AgentHarness` Golden Path and additive Guardrail,
+Sandbox, context-quality, Skill/Tool discovery, and online-evaluation contracts.
+The optional `a2a_sdk` is explicitly experimental. The persisted Capability
+Pack and runtime contract remains `harness-core-v3`; see
+[Migrating to 4.1](migrating-to-4.1.md).

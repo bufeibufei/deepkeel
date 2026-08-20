@@ -37,12 +37,21 @@ def test_adapter_preserves_trace_identity_and_safe_attributes() -> None:
     )
 
     adapter.record(event)
+    adapter.record(
+        TelemetryRecord(
+            event_name="runtime.settled",
+            run_id="run-otel",
+            sequence=8,
+            status="failed",
+        )
+    )
 
     spans = exporter.get_finished_spans()
-    assert len(spans) == 1
-    span = spans[0]
-    assert span.context.trace_id == int(event.trace_id, 16)
-    assert span.name == "deepkeel.tool.failed"
+    assert len(spans) == 2
+    span = next(item for item in spans if item.name == "deepkeel.tool.failed")
+    root = next(item for item in spans if item.name == "deepkeel.run.segment")
+    assert span.context.trace_id == root.context.trace_id
+    assert span.parent.span_id == root.context.span_id
     assert span.status.status_code is StatusCode.ERROR
     assert span.attributes["deepkeel.attr.tool_name"] == "lookup"
     assert span.attributes["deepkeel.attr.error_code"] == "TOOL_TIMEOUT"
@@ -50,7 +59,9 @@ def test_adapter_preserves_trace_identity_and_safe_attributes() -> None:
     assert "deepkeel.attr.prompt" not in span.attributes
     assert span.attributes["deepkeel.attr.duration_ms"] == 125
     assert "deepkeel.user_id" not in span.attributes
-    assert span.events[0].name == "tool.failed"
+    assert root.attributes["deepkeel.runtime_trace_id"] == event.trace_id
+    assert root.attributes["deepkeel.segment.operation_count"] == 1
+    assert root.events[0].name == "runtime.settled"
 
 
 def test_adapter_filters_ephemeral_records_and_requires_explicit_user_id_opt_in() -> None:
@@ -78,4 +89,118 @@ def test_adapter_filters_ephemeral_records_and_requires_explicit_user_id_opt_in(
             user_id="known-user",
         )
     )
-    assert exporter.get_finished_spans()[0].attributes["deepkeel.user_id"] == "known-user"
+    opted_in.shutdown()
+    operation = next(
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.run.segment"
+    )
+    assert operation.attributes["deepkeel.run_id"] == "run-user"
+    assert operation.attributes["deepkeel.user_id"] == "known-user"
+
+
+def test_adapter_groups_events_deduplicates_replay_and_links_resumed_segments() -> None:
+    adapter, exporter = _adapter()
+    started = TelemetryRecord(
+        event_id="event-started",
+        event_name="run.started",
+        run_id="run-grouped",
+        turn_id="turn-1",
+        run_version=1,
+        sequence=1,
+    )
+    adapter.record(started)
+    adapter.record(started.model_copy(deep=True))
+    for sequence in range(2, 5):
+        adapter.record(
+            TelemetryRecord(
+                event_name="answer.delta",
+                run_id="run-grouped",
+                turn_id="turn-1",
+                run_version=1,
+                sequence=sequence,
+                ephemeral=True,
+            )
+        )
+    adapter.record(
+        TelemetryRecord(
+            event_name="runtime.settled",
+            run_id="run-grouped",
+            turn_id="turn-1",
+            run_version=1,
+            sequence=5,
+            status="completed",
+        )
+    )
+    adapter.record(
+        TelemetryRecord(
+            event_name="run.resumed",
+            run_id="run-grouped",
+            turn_id="turn-1",
+            run_version=2,
+            sequence=6,
+        )
+    )
+    adapter.record(
+        TelemetryRecord(
+            event_name="runtime.settled",
+            run_id="run-grouped",
+            turn_id="turn-1",
+            run_version=2,
+            sequence=7,
+            status="completed",
+        )
+    )
+
+    roots = [
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.run.segment"
+    ]
+    assert len(roots) == 2
+    assert roots[0].attributes["deepkeel.segment.event_count"] == 2
+    assert roots[0].attributes["deepkeel.segment.delta_count"] == 3
+    assert roots[1].attributes["deepkeel.segment.resumed"] is True
+    assert roots[1].links[0].context.trace_id == roots[0].context.trace_id
+
+
+def test_adapter_projects_gen_ai_semantic_attributes_without_content() -> None:
+    adapter, exporter = _adapter()
+    adapter.record(
+        TelemetryRecord(
+            event_name="model.completed",
+            run_id="run-gen-ai",
+            turn_id="turn-1",
+            status="completed",
+            attributes={
+                "provider_id": "volcengine",
+                "model_id": "doubao-seed",
+                "finish_reason": "stop",
+                "input_tokens": 120,
+                "output_tokens": 32,
+                "duration_ms": 250,
+                "prompt": "must-not-leak",
+            },
+        )
+    )
+    adapter.record(
+        TelemetryRecord(
+            event_name="runtime.settled",
+            run_id="run-gen-ai",
+            turn_id="turn-1",
+            status="completed",
+        )
+    )
+
+    model_span = next(
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.model.completed"
+    )
+    root_span = next(
+        item for item in exporter.get_finished_spans() if item.name == "deepkeel.run.segment"
+    )
+    assert model_span.attributes["gen_ai.operation.name"] == "chat"
+    assert model_span.attributes["gen_ai.provider.name"] == "volcengine"
+    assert model_span.attributes["gen_ai.request.model"] == "doubao-seed"
+    assert model_span.attributes["gen_ai.usage.input_tokens"] == 120
+    assert model_span.attributes["gen_ai.usage.output_tokens"] == 32
+    assert "gen_ai.input.messages" not in model_span.attributes
+    assert "deepkeel.attr.prompt" not in model_span.attributes
+    assert root_span.attributes["gen_ai.operation.name"] == "invoke_agent"
+    assert root_span.attributes["gen_ai.agent.name"] == "DeepKeel"
+    assert "gen_ai.request.model" not in root_span.attributes

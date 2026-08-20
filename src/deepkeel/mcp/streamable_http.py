@@ -4,24 +4,36 @@ import json
 import ipaddress
 import socket
 import threading
+import time
+import warnings
 from itertools import count
 from typing import Any
-from urllib.parse import urlsplit
+from urllib.parse import urlsplit, urlunsplit
 
 import httpx
 
-from deepkeel.mcp.contracts import McpCallResult, McpRemoteTool, McpServerSpec
+from deepkeel.mcp.contracts import McpCallResult, McpRemoteTool, McpServerSpec, McpTask
+from deepkeel.mcp.header_projection import (
+    encode_mcp_header_value,
+    tool_header_bindings,
+    tool_parameter_headers,
+)
 from deepkeel.mcp.protocol import (
+    LEGACY_MCP_PROTOCOL_VERSION,
+    LEGACY_MCP_PROTOCOL_VERSIONS,
     MAX_TOOL_LIST_PAGES,
     MCP_PROTOCOL_VERSION,
     SUPPORTED_MCP_PROTOCOL_VERSIONS,
     McpProtocolError,
+    McpRemoteError,
     McpTimeoutError,
     McpTransportError,
+    modern_request_metadata,
+    remote_error,
     safe_server_info,
-    structured_content_from_text,
     validate_session_id,
 )
+from deepkeel.mcp.result_parsing import call_result, remote_tools, task_result
 from deepkeel.type_narrowing import as_dict, as_list
 
 
@@ -46,7 +58,12 @@ class StreamableHttpMcpClient:
         )
         self._session_id = ""
         self._protocol_version = ""
+        self._protocol_era = ""
         self._server_info: dict[str, Any] = {}
+        self._server_capabilities: dict[str, Any] = {}
+        self._tool_cache: list[McpRemoteTool] = []
+        self._tool_cache_expires_at = 0.0
+        self._tool_cache_scope = "private"
         self._closed = False
         self._generation = 0
         self._in_flight = 0
@@ -67,41 +84,86 @@ class StreamableHttpMcpClient:
                 raise McpTransportError(f"MCP client is closed: {self.server_id}")
             if self._protocol_version:
                 return
-            request_id = next(self._request_ids)
-            result, headers = self._post_request(
-                request_id,
-                "initialize",
-                {
-                    "protocolVersion": MCP_PROTOCOL_VERSION,
-                    "capabilities": {},
-                    "clientInfo": {
-                        "name": self.spec.client_name,
-                        "version": self.spec.client_version,
-                    },
-                },
-                timeout_seconds=timeout_seconds or self.spec.startup_timeout_seconds,
-                include_session=False,
-            )
-            negotiated = str(result.get("protocolVersion") or MCP_PROTOCOL_VERSION)
-            if negotiated not in SUPPORTED_MCP_PROTOCOL_VERSIONS:
-                raise McpProtocolError(
-                    f"unsupported MCP protocol version: {negotiated}"
-                )
-            self._protocol_version = negotiated
-            self._session_id = validate_session_id(
-                str(headers.get("mcp-session-id") or "")
-            )
-            self._server_info = as_dict(result.get("serverInfo"))
-            self._generation += 1
+            startup_timeout = timeout_seconds or self.spec.startup_timeout_seconds
+            if self.spec.protocol_version in LEGACY_MCP_PROTOCOL_VERSIONS:
+                self._start_legacy(self.spec.protocol_version, startup_timeout)
+                return
             try:
-                self._post_notification(
-                    "notifications/initialized",
-                    {},
-                    timeout_seconds=timeout_seconds,
-                )
-            except Exception:
-                self._reset_session()
-                raise
+                self._start_modern(startup_timeout)
+            except (McpProtocolError, McpTimeoutError, McpTransportError) as exc:
+                if not self._can_fallback_to_legacy(exc):
+                    raise
+                self._start_legacy(LEGACY_MCP_PROTOCOL_VERSION, startup_timeout)
+
+    def _start_modern(self, timeout_seconds: float) -> None:
+        result, _headers = self._post_request(
+            next(self._request_ids),
+            "server/discover",
+            {},
+            timeout_seconds=timeout_seconds,
+            include_session=False,
+            modern=True,
+        )
+        supported = {
+            str(value)
+            for value in as_list(result.get("supportedVersions"))
+            if str(value) in SUPPORTED_MCP_PROTOCOL_VERSIONS
+        }
+        if MCP_PROTOCOL_VERSION not in supported:
+            raise McpProtocolError(
+                "MCP server does not advertise the modern protocol revision"
+            )
+        self._protocol_version = MCP_PROTOCOL_VERSION
+        self._protocol_era = "modern"
+        self._server_capabilities = as_dict(result.get("capabilities"))
+        self._server_info = _server_info_from_result(result)
+        self._generation += 1
+
+    def _start_legacy(self, version: str, timeout_seconds: float) -> None:
+        result, headers = self._post_request(
+            next(self._request_ids),
+            "initialize",
+            {
+                "protocolVersion": version,
+                "capabilities": dict(self.spec.client_capabilities),
+                "clientInfo": {
+                    "name": self.spec.client_name,
+                    "version": self.spec.client_version,
+                },
+            },
+            timeout_seconds=timeout_seconds,
+            include_session=False,
+        )
+        negotiated = str(result.get("protocolVersion") or version)
+        if negotiated not in LEGACY_MCP_PROTOCOL_VERSIONS:
+            raise McpProtocolError(
+                f"unsupported legacy MCP protocol version: {negotiated}"
+            )
+        self._protocol_version = negotiated
+        self._protocol_era = "legacy"
+        self._session_id = validate_session_id(str(headers.get("mcp-session-id") or ""))
+        self._server_info = as_dict(result.get("serverInfo"))
+        self._server_capabilities = as_dict(result.get("capabilities"))
+        self._generation += 1
+        try:
+            self._post_notification(
+                "notifications/initialized",
+                {},
+                timeout_seconds=timeout_seconds,
+            )
+        except Exception:
+            self._reset_session()
+            raise
+
+    def _can_fallback_to_legacy(self, exc: BaseException) -> bool:
+        if self.spec.protocol_version or not self.spec.allow_legacy_fallback:
+            return False
+        if isinstance(exc, McpRemoteError) and exc.is_modern_version_error:
+            supported = {
+                str(value) for value in as_list(exc.data.get("supported"))
+            }
+            return bool(supported & LEGACY_MCP_PROTOCOL_VERSIONS)
+        return True
 
     def list_tools(
         self,
@@ -110,7 +172,10 @@ class StreamableHttpMcpClient:
     ) -> list[McpRemoteTool]:
         deadline = _deadline(timeout_seconds or self.spec.request_timeout_seconds)
         self.start(timeout_seconds=_remaining(deadline))
+        if self._tool_cache and time.monotonic() < self._tool_cache_expires_at:
+            return list(self._tool_cache)
         tools: list[McpRemoteTool] = []
+        ttl_seconds = self.spec.tool_cache_ttl_seconds
         cursor = ""
         seen_cursors: set[str] = set()
         for _page in range(MAX_TOOL_LIST_PAGES):
@@ -120,19 +185,17 @@ class StreamableHttpMcpClient:
                 params,
                 timeout_seconds=_remaining(deadline),
             )
-            for item in as_list(result.get("tools")):
-                if not isinstance(item, dict) or not str(item.get("name") or "").strip():
-                    continue
-                tools.append(
-                    McpRemoteTool(
-                        name=str(item["name"]),
-                        description=str(item.get("description") or ""),
-                        input_schema=as_dict(item.get("inputSchema")),
-                    )
-                )
+            page_tools = remote_tools(result)
+            if self._protocol_era == "modern":
+                page_tools = self._valid_http_tools(page_tools)
+            tools.extend(page_tools)
+            ttl_seconds = min(ttl_seconds, _cache_ttl_seconds(result, ttl_seconds))
+            self._tool_cache_scope = str(result.get("cacheScope") or "private")
             cursor = str(result.get("nextCursor") or "")
             if not cursor:
-                return tools
+                self._tool_cache = sorted(tools, key=lambda item: item.name)
+                self._tool_cache_expires_at = time.monotonic() + ttl_seconds
+                return list(self._tool_cache)
             if cursor in seen_cursors:
                 raise McpProtocolError("MCP tools/list returned a repeated cursor")
             seen_cursors.add(cursor)
@@ -146,33 +209,117 @@ class StreamableHttpMcpClient:
         timeout_seconds: float | None = None,
     ) -> McpCallResult:
         timeout = timeout_seconds or self.spec.request_timeout_seconds
-        self.start(timeout_seconds=timeout)
+        deadline = _deadline(timeout)
+        self.start(timeout_seconds=_remaining(deadline))
+        self._ensure_modern_tool_schema(name, timeout_seconds=_remaining(deadline))
+        return self._call_tool(name, arguments, timeout_seconds=_remaining(deadline))
+
+    def continue_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        input_responses: dict[str, Any],
+        request_state: Any,
+        timeout_seconds: float | None = None,
+    ) -> McpCallResult:
+        timeout = timeout_seconds or self.spec.request_timeout_seconds
+        deadline = _deadline(timeout)
+        self.start(timeout_seconds=_remaining(deadline))
+        self._ensure_modern_tool_schema(name, timeout_seconds=_remaining(deadline))
+        return self._call_tool(
+            name,
+            arguments,
+            input_responses=input_responses,
+            request_state=request_state,
+            timeout_seconds=_remaining(deadline),
+        )
+
+    def _call_tool(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        input_responses: dict[str, Any] | None = None,
+        request_state: Any = None,
+        timeout_seconds: float,
+    ) -> McpCallResult:
+        params: dict[str, Any] = {"name": name, "arguments": dict(arguments)}
+        if input_responses is not None:
+            params["inputResponses"] = dict(input_responses)
+            params["requestState"] = request_state
         result = self._request_with_session_recovery(
             "tools/call",
-            {"name": name, "arguments": dict(arguments)},
-            timeout_seconds=timeout,
+            params,
+            timeout_seconds=timeout_seconds,
         )
-        content = [
-            self._redact_value(item)
-            for item in as_list(result.get("content"))
-            if isinstance(item, dict)
-        ]
-        structured = (
-            self._redact_value(as_dict(result.get("structuredContent")))
-            if isinstance(result.get("structuredContent"), dict)
-            else structured_content_from_text(content)
-        )
-        return McpCallResult(
-            content=content,
-            structured_content=structured,
-            is_error=bool(result.get("isError")),
+        return call_result(
+            result,
+            redact=self._redact_value,
             metadata={
                 "server_id": self.server_id,
                 "transport": "streamable_http",
                 "protocol_version": self._protocol_version,
+                "protocol_era": self._protocol_era,
                 "server_info": safe_server_info(self._server_info),
             },
         )
+
+    def get_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask:
+        task = self._task_request("tasks/get", {"taskId": task_id}, timeout_seconds)
+        if task is None:
+            raise McpProtocolError("MCP tasks/get returned an empty result")
+        return task
+
+    def update_task(
+        self,
+        task_id: str,
+        input_responses: dict[str, Any],
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None:
+        return self._task_request(
+            "tasks/update",
+            {"taskId": task_id, "inputResponses": dict(input_responses)},
+            timeout_seconds,
+            allow_empty=True,
+        )
+
+    def cancel_task(
+        self,
+        task_id: str,
+        *,
+        timeout_seconds: float | None = None,
+    ) -> McpTask | None:
+        return self._task_request(
+            "tasks/cancel",
+            {"taskId": task_id},
+            timeout_seconds,
+            allow_empty=True,
+        )
+
+    def _task_request(
+        self,
+        method: str,
+        params: dict[str, Any],
+        timeout_seconds: float | None,
+        *,
+        allow_empty: bool = False,
+    ) -> McpTask | None:
+        self.start(timeout_seconds=timeout_seconds)
+        result = self._request_with_session_recovery(
+            method,
+            params,
+            timeout_seconds=timeout_seconds or self.spec.request_timeout_seconds,
+        )
+        if allow_empty and not result:
+            return None
+        return task_result(result)
 
     def diagnostics(self) -> dict[str, Any]:
         with self._state_lock:
@@ -180,8 +327,14 @@ class StreamableHttpMcpClient:
                 **self.spec.public_snapshot(),
                 "running": bool(self._protocol_version and not self._closed),
                 "protocol_version": self._protocol_version,
+                "protocol_era": self._protocol_era,
                 "server_info": safe_server_info(self._server_info),
+                "server_capabilities": dict(self._server_capabilities),
                 "session_active": bool(self._session_id),
+                "tool_cache_scope": self._tool_cache_scope,
+                "tool_cache_remaining_seconds": round(
+                    max(0.0, self._tool_cache_expires_at - time.monotonic()), 3
+                ),
                 "generation": self._generation,
                 "restart_count": max(0, self._generation - 1),
                 "in_flight_requests": self._in_flight,
@@ -194,13 +347,18 @@ class StreamableHttpMcpClient:
             if self._closed:
                 return
             self._closed = True
-            if self._session_id:
+            if self._protocol_era == "legacy" and self._session_id:
                 try:
-                    self._validate_egress_target()
-                    self._client.delete(
-                        self.spec.url,
-                        headers=self._request_headers(include_session=True),
+                    target_url, target_headers, extensions = self._validated_target()
+                    self._client.request(
+                        "DELETE",
+                        target_url,
+                        headers={
+                            **self._request_headers(include_session=True),
+                            **target_headers,
+                        },
                         timeout=self.spec.shutdown_timeout_seconds,
+                        extensions=extensions,
                     )
                 except httpx.HTTPError:
                     pass
@@ -215,16 +373,19 @@ class StreamableHttpMcpClient:
         timeout_seconds: float,
     ) -> dict[str, Any]:
         request_id = next(self._request_ids)
+        include_session = self._protocol_era == "legacy"
         try:
             result, _headers = self._post_request(
                 request_id,
                 method,
                 params,
                 timeout_seconds=timeout_seconds,
-                include_session=True,
+                include_session=include_session,
             )
             return result
         except _McpSessionExpired:
+            if not include_session:
+                raise
             with self._state_lock:
                 self._reset_session()
             self.start(timeout_seconds=timeout_seconds)
@@ -245,12 +406,16 @@ class StreamableHttpMcpClient:
         *,
         timeout_seconds: float,
         include_session: bool,
+        modern: bool | None = None,
     ) -> tuple[dict[str, Any], httpx.Headers]:
+        request_params = dict(params)
+        if modern is True or (modern is None and self._protocol_era == "modern"):
+            request_params = _modern_params(self.spec, request_params)
         payload = {
             "jsonrpc": "2.0",
             "id": request_id,
             "method": method,
-            "params": params,
+            "params": request_params,
         }
         response = self._post(
             payload,
@@ -259,15 +424,15 @@ class StreamableHttpMcpClient:
         )
         message = _response_message(response, request_id)
         if isinstance(message.get("error"), dict):
-            error = message["error"]
-            raise McpProtocolError(
-                self._redact(
-                    f"MCP {method} failed ({error.get('code')}): {error.get('message')}"
-                )
-            )
+            error = remote_error(method, message["error"])
+            error.args = (self._redact(str(error)),)
+            raise error
         result = message.get("result")
         if not isinstance(result, dict):
             raise McpProtocolError(f"MCP {method} returned an invalid result")
+        server_info = _server_info_from_result(result)
+        if server_info:
+            self._server_info = server_info
         return result, response.headers
 
     def _post_notification(
@@ -302,13 +467,20 @@ class StreamableHttpMcpClient:
                 raise McpTransportError(f"MCP client is closed: {self.server_id}")
             self._in_flight += 1
         try:
-            self._validate_egress_target()
+            target_url, target_headers, extensions = self._validated_target()
             with self._client.stream(
                 "POST",
-                self.spec.url,
+                target_url,
                 json=payload,
-                headers=self._request_headers(include_session=include_session),
+                headers={
+                    **self._request_headers(
+                        include_session=include_session,
+                        payload=payload,
+                    ),
+                    **target_headers,
+                },
                 timeout=max(0.001, float(timeout_seconds)),
+                extensions=extensions,
             ) as streamed:
                 content = bytearray()
                 for chunk in streamed.iter_bytes():
@@ -346,7 +518,7 @@ class StreamableHttpMcpClient:
             )
         return response
 
-    def _validate_egress_target(self) -> None:
+    def _validated_target(self) -> tuple[str, dict[str, str], dict[str, Any]]:
         parsed = urlsplit(self.spec.url)
         hostname = str(parsed.hostname or "").strip().lower()
         if not hostname:
@@ -368,30 +540,115 @@ class StreamableHttpMcpClient:
             raise McpTransportError(
                 f"MCP endpoint DNS resolution failed: {self.server_id}"
             ) from exc
-        if self.spec.allow_private_network:
-            return
-        for value in addresses:
+        approved: list[str] = []
+        for value in sorted(addresses):
             address = ipaddress.ip_address(value)
-            if not address.is_global:
+            if not self.spec.allow_private_network and not address.is_global:
                 raise McpTransportError(
                     f"MCP endpoint resolved to a non-public address: {self.server_id}"
                 )
+            approved.append(address.compressed)
+        if not approved:
+            raise McpTransportError(f"MCP endpoint resolved to no address: {self.server_id}")
 
-    def _request_headers(self, *, include_session: bool) -> dict[str, str]:
+        # Connect to the validated address directly. The original hostname stays
+        # in Host and TLS SNI, so httpx cannot perform a second DNS lookup that
+        # could be rebound to an unvalidated destination.
+        selected = approved[0]
+        netloc_host = f"[{selected}]" if ":" in selected else selected
+        if parsed.port is not None:
+            netloc_host = f"{netloc_host}:{parsed.port}"
+        target_url = urlunsplit(
+            (parsed.scheme, netloc_host, parsed.path, parsed.query, parsed.fragment)
+        )
+        default_port = 443 if parsed.scheme == "https" else 80
+        host_header = hostname if (parsed.port or default_port) == default_port else f"{hostname}:{parsed.port}"
+        extensions: dict[str, Any] = {}
+        if parsed.scheme == "https":
+            extensions["sni_hostname"] = hostname.encode("idna")
+        return target_url, {"Host": host_header}, extensions
+
+    def _request_headers(
+        self,
+        *,
+        include_session: bool,
+        payload: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
         headers = {
             "Accept": "application/json, text/event-stream",
             "Content-Type": "application/json",
         }
-        if self._protocol_version:
-            headers["MCP-Protocol-Version"] = self._protocol_version
+        method = str((payload or {}).get("method") or "")
+        params = as_dict((payload or {}).get("params"))
+        metadata = as_dict(params.get("_meta"))
+        request_version = str(
+            metadata.get("io.modelcontextprotocol/protocolVersion")
+            or self._protocol_version
+            or ""
+        )
+        if request_version:
+            headers["MCP-Protocol-Version"] = request_version
+        if request_version == MCP_PROTOCOL_VERSION and method:
+            headers["Mcp-Method"] = method
+            if method in {"tools/call", "resources/read", "prompts/get"}:
+                name = str(params.get("name") or params.get("uri") or "").strip()
+                if name:
+                    headers["Mcp-Name"] = encode_mcp_header_value(name)
+            if method == "tools/call":
+                arguments = as_dict(params.get("arguments"))
+                tool = next(
+                    (item for item in self._tool_cache if item.name == params.get("name")),
+                    None,
+                )
+                if tool is not None:
+                    headers.update(
+                        tool_parameter_headers(tool.input_schema, arguments)
+                    )
         if include_session and self._session_id:
             headers["Mcp-Session-Id"] = self._session_id
         return headers
 
+    def _valid_http_tools(
+        self,
+        tools: list[McpRemoteTool],
+    ) -> list[McpRemoteTool]:
+        valid: list[McpRemoteTool] = []
+        for tool in tools:
+            try:
+                tool_header_bindings(tool.input_schema)
+            except McpProtocolError as exc:
+                warnings.warn(
+                    f"Ignoring invalid MCP tool {tool.name!r}: {exc}",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+                continue
+            valid.append(tool)
+        return valid
+
+    def _ensure_modern_tool_schema(
+        self,
+        name: str,
+        *,
+        timeout_seconds: float,
+    ) -> None:
+        if self._protocol_era != "modern":
+            return
+        if not any(tool.name == name for tool in self._tool_cache):
+            self.list_tools(timeout_seconds=timeout_seconds)
+        if not any(tool.name == name for tool in self._tool_cache):
+            raise McpProtocolError(
+                f"MCP tool {name} is not exposed by {self.server_id}"
+            )
+
     def _reset_session(self) -> None:
         self._session_id = ""
         self._protocol_version = ""
+        self._protocol_era = ""
         self._server_info = {}
+        self._server_capabilities = {}
+        self._tool_cache = []
+        self._tool_cache_expires_at = 0.0
 
     def _redact(self, value: str) -> str:
         clean = value
@@ -452,9 +709,36 @@ def _deadline(timeout_seconds: float) -> float:
 
 
 def _remaining(deadline: float) -> float:
-    import time
-
     remaining = deadline - time.monotonic()
     if remaining <= 0:
         raise McpTimeoutError("MCP request deadline exceeded")
     return remaining
+
+
+def _modern_params(spec: McpServerSpec, params: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(params)
+    existing_meta = as_dict(merged.get("_meta"))
+    merged["_meta"] = {
+        **modern_request_metadata(
+            client_name=spec.client_name,
+            client_version=spec.client_version,
+            client_capabilities=spec.client_capabilities,
+        ),
+        **existing_meta,
+    }
+    return merged
+
+
+def _server_info_from_result(result: dict[str, Any]) -> dict[str, Any]:
+    metadata = as_dict(result.get("_meta"))
+    return as_dict(metadata.get("io.modelcontextprotocol/serverInfo")) or as_dict(
+        result.get("serverInfo")
+    )
+
+
+def _cache_ttl_seconds(result: dict[str, Any], fallback: float) -> float:
+    raw_ttl = result.get("ttlMs")
+    try:
+        return max(0.0, float(str(raw_ttl)) / 1000.0)
+    except (TypeError, ValueError):
+        return fallback

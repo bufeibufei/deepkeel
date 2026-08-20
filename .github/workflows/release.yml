@@ -38,11 +38,11 @@ jobs:
     env:
       DEEPKEEL_TEST_POSTGRES_DSN: postgresql://deepkeel:deepkeel@127.0.0.1:5432/deepkeel_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -50,7 +50,12 @@ jobs:
       - name: Verify fault and recovery contracts
         run: uv run pytest -q tests/test_fault_injection.py tests/test_checkpoint_authority.py
       - name: Verify PostgreSQL contracts
-        run: uv run pytest -q -m postgres tests/test_postgres_reference.py
+        run: >-
+          uv run pytest -q -m postgres tests/test_postgres_reference.py
+          --cov=deepkeel.contrib.postgres
+          --cov-report=term-missing
+          --cov-report=json:coverage-postgres.json
+          --cov-fail-under=80
       - name: Verify PostgreSQL multi-worker recovery
         run: >-
           uv run python -m verification.postgres_multiworker
@@ -68,11 +73,11 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@37802adc94f370d6bfd71619e3f0bf239e1f3b78 # v7
         with:
           python-version: "3.12"
           enable-cache: true
@@ -86,16 +91,28 @@ jobs:
         run: |
           uv run ruff check src tests verification
           uv run mypy src/deepkeel
+          uv run python verification/type_debt_budget.py
           uv run python verification/readme_contract.py
           uv run pytest -q --cov=deepkeel --cov-report=json:coverage.json --cov-fail-under=80
           uv run python verification/quality_budget.py --coverage coverage.json
           uv build --clear
+          uv run twine check dist/*
           uv run python verification/verify_distributions.py dist
+      - name: Generate SPDX JSON SBOM
+        uses: anchore/sbom-action@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/deepkeel-${{ inputs.tag || github.ref_name }}.spdx.json
+          upload-artifact: false
+          upload-release-assets: false
+      - name: Generate artifact checksums
+        run: uv run python -m verification.release_manifest dist
       - name: Attest release artifacts
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
         with:
           subject-path: dist/*
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: deepkeel-distributions
           path: dist/*
@@ -107,7 +124,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: deepkeel-distributions
           path: dist
@@ -140,11 +157,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: deepkeel-distributions
           path: dist
       - name: Publish through PyPI Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1
         with:
           skip-existing: true

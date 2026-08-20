@@ -1,7 +1,7 @@
 [project]
 name = "deepkeel"
-version = "4.0.0"
-description = "Durable, observable, capability-driven harness runtime for production-grade AI agents."
+version = "4.1.0"
+description = "Durable, observable Harness Agent runtime for governed root and specialist agents built from reusable capability packages."
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
@@ -49,6 +49,7 @@ test = [
   "pytest>=8.3.0",
   "pytest-cov>=6.0.0,<8.0.0",
   "ruff>=0.11.0,<1.0.0",
+  "twine>=6.2.0,<7.0.0",
   "types-jsonschema>=4.23.0.20241208",
 ]
 
@@ -85,3 +86,9 @@ ignore_missing_imports = true
 warn_unused_ignores = true
 warn_redundant_casts = true
 exclude = ["build", "dist"]
+
+[[tool.mypy.overrides]]
+module = ["deepkeel.discovery_sdk", "deepkeel.hybrid_discovery"]
+disallow_any_generics = true
+disallow_untyped_defs = true
+warn_return_any = true

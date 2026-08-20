@@ -6,12 +6,16 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from deepkeel.contracts import Observation, ToolCall, ToolResult
+from jsonschema.exceptions import SchemaError, ValidationError
+from jsonschema.validators import validator_for
+
+from deepkeel.contracts import Observation, PendingAction, ToolCall, ToolResult
 from deepkeel.deadlines import deadline_with_timeout
 from deepkeel.governance import DenySecretProvider, GovernanceScope, SecretProvider, SecretRequest
 from deepkeel.mcp.contracts import (
     McpCallResult,
     McpClient,
+    McpRemoteTool,
     McpServerSpec,
 )
 from deepkeel.mcp.protocol import (
@@ -151,7 +155,7 @@ class McpToolProvider:
         self.clients = clients
         self._provider_id = provider_id.strip() or "mcp"
         self._bindings: list[McpToolBinding] = []
-        self._discovered: dict[str, tuple[int, set[str]]] = {}
+        self._discovered: dict[str, tuple[int, dict[str, McpRemoteTool]]] = {}
         self._discovery_lock = threading.Lock()
 
     @property
@@ -199,7 +203,7 @@ class McpToolProvider:
                     _binding_timeout(binding),
                 )
                 client = self.clients.get(binding.server_id)
-                self._ensure_remote_tool(
+                remote_tool = self._ensure_remote_tool(
                     client,
                     binding.remote_name,
                     timeout_seconds=_remaining_timeout(deadline),
@@ -210,6 +214,25 @@ class McpToolProvider:
                     remote_arguments,
                     timeout_seconds=_remaining_timeout(deadline),
                 )
+                _validate_remote_output(raw, remote_tool)
+                if raw.result_type == "input_required" or raw.input_requests:
+                    return _mcp_input_required_result(
+                        call,
+                        context,
+                        binding,
+                        raw,
+                        remote_arguments=remote_arguments,
+                        started_at=started_at,
+                    )
+                if raw.result_type == "task" and raw.task is not None:
+                    return _mcp_waiting_task_result(
+                        call,
+                        context,
+                        binding,
+                        raw,
+                        remote_arguments=remote_arguments,
+                        started_at=started_at,
+                    )
                 normalized = binding.normalize_result(raw, call.arguments)
                 if raw.is_error and not normalized.error:
                     normalized.error = normalized.summary or "MCP tool returned an error"
@@ -286,13 +309,13 @@ class McpToolProvider:
         remote_name: str,
         *,
         timeout_seconds: float | None = None,
-    ) -> None:
+    ) -> McpRemoteTool:
         with self._discovery_lock:
             generation = int(getattr(client, "generation", 0) or 0)
             cached = self._discovered.get(client.server_id)
             if cached is None or cached[0] != generation:
                 discovered = {
-                    tool.name
+                    tool.name: tool
                     for tool in client.list_tools(timeout_seconds=timeout_seconds)
                 }
                 generation = int(getattr(client, "generation", generation) or generation)
@@ -303,10 +326,14 @@ class McpToolProvider:
                 raise McpProtocolError(
                     f"MCP tool {remote_name} is not exposed by {client.server_id}"
                 )
+            return discovered[remote_name]
 
 
 def _default_normalize(result: McpCallResult) -> McpNormalizedResult:
-    data = dict(result.structured_content)
+    structured = result.structured_content
+    data = dict(structured) if isinstance(structured, dict) else {}
+    if structured is not None and not isinstance(structured, dict):
+        data = {"structured_content": structured}
     if not data:
         data = {"content": result.content}
     return McpNormalizedResult(
@@ -386,3 +413,163 @@ def _failed_mcp_result(
         observation=observation,
         metadata=metadata,
     )
+
+
+def _validate_remote_output(result: McpCallResult, tool: McpRemoteTool) -> None:
+    if (
+        not tool.output_schema
+        or result.is_error
+        or result.result_type != "complete"
+    ):
+        return
+    try:
+        validator_type = validator_for(tool.output_schema)
+        validator_type.check_schema(tool.output_schema)
+        validator_type(tool.output_schema).validate(result.structured_content)
+    except SchemaError as exc:
+        raise McpProtocolError(
+            f"MCP tool {tool.name} exposes an invalid outputSchema: {exc.message}"
+        ) from exc
+    except ValidationError as exc:
+        location = ".".join(str(item) for item in exc.absolute_path) or "<root>"
+        raise McpProtocolError(
+            f"MCP tool {tool.name} returned data outside outputSchema at "
+            f"{location}: {exc.message}"
+        ) from exc
+
+
+def _mcp_input_required_result(
+    call: ToolCall,
+    context: ToolExecutionContext,
+    binding: McpToolBinding,
+    raw: McpCallResult,
+    *,
+    remote_arguments: dict[str, Any],
+    started_at: float,
+) -> ToolResult:
+    requests = [item.model_dump(mode="json") for item in raw.input_requests]
+    prompt = _input_request_prompt(raw) or "The MCP tool needs additional information."
+    payload = {
+        "provider": "mcp",
+        "server_id": binding.server_id,
+        "remote_tool": binding.remote_name,
+        "local_tool": binding.local_spec.name,
+        "arguments": dict(remote_arguments),
+        "input_requests": requests,
+        "request_state": raw.request_state,
+    }
+    metadata = _mcp_result_metadata(
+        binding,
+        raw,
+        started_at=started_at,
+        result_type="input_required",
+    )
+    pending_action = PendingAction(
+        id=f"{call.id}:mcp-input",
+        run_id=context.run_id,
+        tool_call_id=call.id,
+        action_type="mcp_input_required",
+        title="Additional information required",
+        prompt=prompt,
+        handoff_view="mcp_elicitation",
+        payload=payload,
+    )
+    observation = Observation(
+        id=f"{call.id}:observation",
+        run_id=context.run_id,
+        tool_call_id=call.id,
+        source=binding.local_spec.name,
+        status="requires_user_action",
+        summary=prompt,
+        data=payload,
+        metadata=metadata,
+    )
+    return ToolResult(
+        call=call,
+        status="requires_user_action",
+        summary=prompt,
+        data=payload,
+        observation=observation,
+        pending_action=pending_action,
+        metadata=metadata,
+    )
+
+
+def _mcp_waiting_task_result(
+    call: ToolCall,
+    context: ToolExecutionContext,
+    binding: McpToolBinding,
+    raw: McpCallResult,
+    *,
+    remote_arguments: dict[str, Any],
+    started_at: float,
+) -> ToolResult:
+    task = raw.task
+    if task is None:  # Defensive guard for callers constructing McpCallResult manually.
+        raise McpProtocolError("MCP task result is missing its task handle")
+    task_payload = task.model_dump(mode="json", by_alias=True)
+    summary = task.status_message or "The MCP task is running in the background."
+    data = {
+        "provider": "mcp",
+        "server_id": binding.server_id,
+        "remote_tool": binding.remote_name,
+        "local_tool": binding.local_spec.name,
+        "arguments": dict(remote_arguments),
+        "task": task_payload,
+        "task_id": task.task_id,
+        "poll_interval_ms": task.poll_interval_ms,
+    }
+    metadata = _mcp_result_metadata(
+        binding,
+        raw,
+        started_at=started_at,
+        result_type="task",
+    )
+    observation = Observation(
+        id=f"{call.id}:observation",
+        run_id=context.run_id,
+        tool_call_id=call.id,
+        source=binding.local_spec.name,
+        status="pending",
+        summary=summary,
+        data=data,
+        metadata=metadata,
+    )
+    return ToolResult(
+        call=call,
+        status="waiting_async",
+        summary=summary,
+        data=data,
+        observation=observation,
+        metadata=metadata,
+    )
+
+
+def _mcp_result_metadata(
+    binding: McpToolBinding,
+    raw: McpCallResult,
+    *,
+    started_at: float,
+    result_type: str,
+) -> dict[str, Any]:
+    return {
+        "mcp": {
+            "server_id": binding.server_id,
+            "transport": str(raw.metadata.get("transport") or "stdio"),
+            "protocol_version": str(raw.metadata.get("protocol_version") or ""),
+            "remote_tool": binding.remote_name,
+            "local_tool": binding.local_spec.name,
+            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+            "result_type": result_type,
+            "untrusted_external_content": not binding.trusted_content,
+        }
+    }
+
+
+def _input_request_prompt(raw: McpCallResult) -> str:
+    for request in raw.input_requests:
+        for key in ("message", "prompt", "title", "description"):
+            value = request.params.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return ""

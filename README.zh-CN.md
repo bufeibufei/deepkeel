@@ -2,35 +2,46 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**面向生产级 AI Agent 的持久化、可观测、能力包驱动 Harness Runtime。**
+**用可复用能力包组装受治理的主 Agent 与专家 Agent 的持久化、可观测
+Harness Agent Runtime。**
 
-DeepKeel 负责模型与工具的单循环执行、类型化运行契约、中断与恢复、
-上下文工程、治理端口、ToolProvider、Capability Pack、MCP 适配和有界
-SubAgent 编排。它不负责产品 API、业务数据库模型、领域提示词、宿主工具
-或前端页面。
+DeepKeel 允许 Host 在同一个不可变运行时世代上，对外提供通用主 Agent 与可直接
+访问的领域专家 Agent。每个会话获得权限收窄、默认拒绝的不可变能力视图，同时复用
+相同的模型/工具循环、持久化生命周期和可观测契约。DeepKeel 还负责类型化运行契约、中断与恢复、
+上下文工程、治理端口、ToolProvider、MCP 适配和有界 SubAgent 编排；它不负责
+产品 API、业务数据库模型、领域提示词、宿主工具或前端页面。
 
-当前稳定版本为 `4.0.0`，安装命令如下：
+当前稳定版本为 `4.1.0`，安装命令如下：
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.0.0"
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
 python examples/quickstart/main.py
 ```
 
 PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后单独启用。
-在此之前，Git 标签与 GitHub Release 制品是发布候选版本的事实来源。
+不可变 Git 标签、GitHub Release 制品、构建来源证明和 SBOM 是发布事实来源。
 
 ## 从这里开始
 
 - [整体架构](docs/architecture.md)
+- [Agent 入口与专家作用域](docs/agent-entrypoints.md)
 - [运行生命周期](docs/runtime-lifecycle.md)
 - [Capability Package](docs/capability-package-v1.md)
 - [上下文管理](docs/context-management.md)
+- [能力目录发现](docs/catalog-discovery.md)
+- [安全与信任边界](docs/security-and-trust.md)
+- [Capability Package 信任模型](docs/capability-trust.md)
+- [MCP 与 A2A 互操作](docs/interoperability.md)
 - [持久化执行](docs/durable-execution.md)
+- [执行计划](docs/execution-planning.md)
 - [模型 Provider](docs/model-provider.md)
 - [可观测性](docs/observability.md)
 - [生产就绪](docs/production-readiness.md)
+- [下游 Host 兼容门禁](docs/host-compatibility.md)
 - [PostgreSQL 参考适配](docs/postgresql-reference.md)
 - [API 稳定性](docs/api-stability.md)
+- [迁移到 4.1](docs/migrating-to-4.1.md)
+- [供应链治理](docs/supply-chain.md)
 - [发布流程](docs/releasing.md)
 
 可运行的 [quickstart](examples/quickstart) 展示最小模型 Provider；
@@ -38,6 +49,8 @@ PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后�
 [durable_approval](examples/durable_approval) 展示中断、人工确认与恢复；
 [production_worker](examples/production_worker) 展示生产 Profile、PostgreSQL
 端口、迁移与可选 OpenTelemetry 导出的完整装配。
+[reference_host](examples/reference_host) 展示 HTTP、SSE、运行查询和取消接口，
+同时保持这些产品职责位于 Core 之外。
 
 ## 架构边界
 
@@ -72,6 +85,17 @@ result = runtime.run(
 )
 
 print(result.status, result.final_answer.markdown)
+```
+
+最小接入可以使用 Golden Path。它内部仍然构建同一个标准 Runtime，不会引入第二套
+执行循环：
+
+```python
+from deepkeel.runtime_sdk import AgentHarness
+
+harness = AgentHarness.create(provider=model_provider)
+result = harness.run("检查这次事故", user_id="operator-42")
+print(result.final_answer.markdown)
 ```
 
 异步 Host 使用同一套执行语义：
@@ -180,6 +204,13 @@ Skill 约束任务上下文、允许工具、预算和输出方式，但工具�
 策略和预算选择 Provider。模型 Provider、路由策略和健康存储均通过公开端口注入，
 Capability Pack 不绑定具体云厂商。
 
+复杂任务可选择启用同一 ReAct 图内的有界 Plan & Execute。Host 通过
+`RuntimePorts(planning_enabled=True)` 安装内部计划控制工具，Skill 再使用
+`planning_policy` 声明 `disabled`、`allowed`、`preferred` 或 `required`。
+简单对话仍直接执行；复杂计划中的工具、Workflow 与 SubAgent 仍经过原有权限、
+预算、幂等、Checkpoint 和事件边界，不会形成第二套运行时。详细契约见
+[执行计划](docs/execution-planning.md)。
+
 ## 上下文与记忆
 
 Core 提供 L1/L2/L3 上下文规划、token 预算、原子消息组保护、确定性压缩和工作
@@ -190,11 +221,16 @@ Memory SDK 定义记忆候选、主题、权威性和读取协议；业务事实
 
 ## MCP、SubAgent 与安全
 
-本地 stdio 和远程 Streamable HTTP MCP 都进入同一受治理工具网关。MCP 工具不能
-绕过 ToolSpec、权限、预算、超时、审计和密钥边界。
+本地 stdio 和远程 Streamable HTTP MCP 都进入同一受治理工具网关。现代协议路径
+支持无状态发现、任务生命周期、安全参数 Header 映射和远端 `outputSchema` 校验。
+MCP 工具不能绕过 ToolSpec、权限、预算、超时、审计和密钥边界。
 
 SubAgent 编排是有界的，受并发、深度、预算和父运行取消控制。Handoff 使用类型化
 待办动作和恢复契约，不依赖前端猜测状态。
+
+可选的实验性 `deepkeel.a2a_sdk` 将远端 A2A 1.0 Agent 映射为普通 SubAgent。
+父运行仍然拥有权限、预算、Checkpoint、取消、Artifact 和最终答案，不会把治理
+责任交给远端 Agent。
 
 密钥通过 `SecretProvider` 获取，不进入 Prompt、公开事件或 Artifact。生产 Host
 还应在 API 边界执行租户授权，并对外部写操作配置确认策略。
@@ -243,11 +279,13 @@ Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生
 - `deepkeel.runtime_sdk`：请求、结果、事件、运行与状态契约。
 - `deepkeel.extension_sdk`：工具、Skill、Artifact 和 Capability Pack。
 - `deepkeel.adapter_sdk`：模型、存储、策略、预算、租约和生产门禁。
+- `deepkeel.discovery_sdk`：与模型供应商无关的 Skill/Tool 混合发现与排序。
 - `deepkeel.memory_sdk`：记忆端口与主题契约。
-- `deepkeel.orchestration_sdk`：有界 SubAgent 编排。
+- `deepkeel.orchestration_sdk`：有界执行计划、SubAgent 与多方论证编排。
 - `deepkeel.mcp_sdk`：MCP Client、传输和工具映射。
+- `deepkeel.a2a_sdk`：实验性的 A2A 远程专家 Agent 适配。
 
-当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.0.0`。
+当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.1.0`。
 公开符号清单位于 `deepkeel.public_api`，测试会冻结 API 指纹；任何变更都需要显式
 兼容性审阅。
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Mapping
+from functools import partial
 from typing import Any
 from uuid import uuid4
 
@@ -17,6 +18,10 @@ from deepkeel.events import AgentEventPersistenceError
 from deepkeel.hooks import HookAction, HookAudit, HookInvocation, HookPoint
 from deepkeel.model import ModelGateway, ModelTurn, model_tools_from_registry
 from deepkeel.model_failures import ModelToolContractError
+from deepkeel.planning.runtime import (
+    advance_plan_after_resume,
+    advance_plan_after_tool_results,
+)
 from deepkeel.skills import SkillPolicy
 from deepkeel.skill_activation import EntryToolActivationRequest
 from deepkeel.tool_registry import ToolRegistry
@@ -113,9 +118,7 @@ class GraphNodes(GraphModelNodeMixin):
         force: bool = False,
     ) -> None:
         metadata = as_dict(state.get("metadata"))
-        operational_run_id = str(
-            metadata.get("operational_run_id") or state.get("run_id") or ""
-        )
+        operational_run_id = str(metadata.get("operational_run_id") or state.get("run_id") or "")
         self.control.raise_if_cancelled(operational_run_id, force=force)
         turn_context = self.turn_context(config, state)
         deadline = (
@@ -212,6 +215,13 @@ class GraphNodes(GraphModelNodeMixin):
             current.setdefault("tool_results", []).append(result.model_dump(mode="json"))
             _record_completed_tool(current, result)
             _apply_tool_result(current, result, config)
+        advance_plan_after_tool_results(
+            current,
+            calls=calls,
+            results=results,
+            registry=tool_registry,
+            emit=partial(_emit, current, config),
+        )
         if isinstance(grants, dict):
             remaining_grants = dict(grants)
             for call in calls:
@@ -221,6 +231,8 @@ class GraphNodes(GraphModelNodeMixin):
             current["status"] = "waiting_user"
         elif current.get("pending_async"):
             current["status"] = "waiting_async"
+        elif current.get("pending_tool_calls"):
+            current["status"] = "executing_tools"
         else:
             current["status"] = "reasoning"
         return current
@@ -229,17 +241,52 @@ class GraphNodes(GraphModelNodeMixin):
         normalized_state = self.normalize_state(state, config)
         self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
+        pending = as_dict(current.get("pending_action"))
         resume_payload = interrupt(current.get("pending_action") or {})
         if _is_policy_confirmation(current.get("pending_action")):
             return _apply_policy_confirmation_resume(current, resume_payload, config)
-        return _apply_resume_payload(current, resume_payload, config, source="user_action")
+        current = _apply_resume_payload(
+            current,
+            resume_payload,
+            config,
+            source="user_action",
+        )
+        advance_plan_after_resume(
+            current,
+            pending=pending,
+            resume_payload=resume_payload,
+            registry=self.tool_registry,
+            emit=partial(_emit, current, config),
+        )
+        return current
 
     def await_async_node(self, state: dict[str, Any], config: RunnableConfig) -> dict[str, Any]:
         normalized_state = self.normalize_state(state, config)
         self.ensure_active(normalized_state, config, force=True)
         current = _copy_state(normalized_state)
+        pending = as_dict(current.get("pending_async"))
         resume_payload = interrupt(current.get("pending_async") or {})
-        return _apply_resume_payload(current, resume_payload, config, source="async_observation")
+        current = _apply_resume_payload(
+            current,
+            resume_payload,
+            config,
+            source="async_observation",
+        )
+        advance_plan_after_resume(
+            current,
+            pending=pending,
+            resume_payload=resume_payload,
+            registry=self.tool_registry,
+            emit=lambda event_type, title, summary, payload: _emit(
+                current,
+                config,
+                event_type,
+                title,
+                summary,
+                payload,
+            ),
+        )
+        return current
 
 
 def _is_unexecuted_suspension_rejection(result: Any) -> bool:

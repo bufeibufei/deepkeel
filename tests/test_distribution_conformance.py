@@ -41,12 +41,14 @@ def test_mcp_and_subagent_conformance() -> None:
 
 
 def test_source_installation_identity_conformance() -> None:
-    assert deepkeel.DEEPKEEL_VERSION == "4.0.0"
+    assert deepkeel.DEEPKEEL_VERSION == "4.1.0"
     assert deepkeel.DEEPKEEL_CONTRACT_VERSION == "harness-core-v3"
     assert tuple(deepkeel.__all__) == (
         "DEEPKEEL_CONTRACT_VERSION",
         "DEEPKEEL_VERSION",
+        "a2a_sdk",
         "adapter_sdk",
+        "discovery_sdk",
         "extension_sdk",
         "mcp_sdk",
         "memory_sdk",
@@ -60,7 +62,7 @@ def test_source_installation_identity_conformance() -> None:
         SDK_API_VERSION,
     )
 
-    assert PACKAGE_VERSION == "4.0.0"
+    assert PACKAGE_VERSION == "4.1.0"
     assert RUNTIME_CONTRACT_VERSION == "harness-core-v3"
     assert EVENT_SCHEMA_VERSION == "harness-runtime-event-v1"
-    assert SDK_API_VERSION == "4.0.0"
+    assert SDK_API_VERSION == "4.1.0"

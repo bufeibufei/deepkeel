@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 from deepkeel.cli import _safe_error, main
 from deepkeel.public_api import PUBLIC_API_VERSION
@@ -50,3 +51,54 @@ def test_cli_error_output_redacts_connection_secrets() -> None:
     assert "secret" not in message
     assert "postgresql://***" in message
     assert "password=***" in message
+
+
+def test_pack_cli_scaffolds_inspects_and_validates_manifest(
+    tmp_path: Path,
+    monkeypatch: object,
+    capsys: object,
+) -> None:
+    target = tmp_path / "weather_pack"
+
+    assert main(["pack", "init", str(target), "--package-id", "demo.weather"]) == 0
+    created = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert created["files"] == ["manifest.json", "package.py", "README.md"]
+
+    manifest = target / "manifest.json"
+    assert main(["pack", "inspect", str(manifest)]) == 0
+    inspected = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert inspected["manifest"]["id"] == "demo.weather"
+
+    assert main(["pack", "validate", str(manifest)]) == 0
+    validated = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert validated["ok"] is True
+
+    monkeypatch.syspath_prepend(str(target))  # type: ignore[attr-defined]
+    assert main(
+        [
+            "pack",
+            "validate",
+            str(manifest),
+            "--factory",
+            "package:DemoWeatherPack",
+        ]
+    ) == 0
+    conformance = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert conformance["report"]["manifest_validated"] is True
+
+    assert main(["pack", "digest", str(manifest), str(target / "package.py")]) == 0
+    digest = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert len(digest["sha256"]) == 64
+
+
+def test_pack_cli_refuses_to_replace_existing_skeleton(
+    tmp_path: Path,
+    capsys: object,
+) -> None:
+    target = tmp_path / "existing"
+    assert main(["pack", "init", str(target), "--package-id", "demo.existing"]) == 0
+    capsys.readouterr()  # type: ignore[attr-defined]
+
+    assert main(["pack", "init", str(target), "--package-id", "demo.existing"]) == 2
+    output = json.loads(capsys.readouterr().out)  # type: ignore[attr-defined]
+    assert output["error"]["code"] == "CAPABILITY_PACK_EXISTS"

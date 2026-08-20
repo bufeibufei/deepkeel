@@ -163,10 +163,11 @@ class DefaultMemoryRecallCoordinator:
             decision = await self._decide(request)
         except Exception as exc:
             decision = MemoryRecallDecision(
-                mode="agent_decide",
+                mode="skip",
                 query=request.question,
                 reason=f"policy_error:{type(exc).__name__}",
                 confidence=0,
+                allow_runtime_search=False,
             )
 
         effective_mode = decision.mode

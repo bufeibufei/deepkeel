@@ -4,6 +4,13 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import uuid4
 
+from deepkeel.checkpoint_authority import CheckpointAuthority
+from deepkeel.entrypoints import (
+    CapabilityView,
+    _entrypoint_identity,
+    merge_model_policy,
+    resolve_capability_view,
+)
 from deepkeel.persistence import CheckpointCompatibilityError
 from deepkeel.runtime_api import RuntimeRequest
 from deepkeel.runtime_execution_support import optional_int
@@ -24,6 +31,7 @@ class PreparedTurnInputs:
     model_context_profile: Any
     configured_input_limit: int
     context_window_diagnostics: dict[str, Any]
+    capability_view: CapabilityView
 
 
 @dataclass(frozen=True, slots=True)
@@ -34,7 +42,7 @@ class PreparedTurnIdentity:
     graph_thread_id: str
     turn_id: str
     durable_state: dict[str, Any]
-    checkpoint_authority: str
+    checkpoint_authority: CheckpointAuthority
     checkpoint_load_errors: list[str]
     event_sequence: int
     run_version: int
@@ -50,6 +58,19 @@ async def prepare_turn_inputs(
     short = request.short_context if isinstance(request.short_context, dict) else {}
     bundle = dict(request.context_bundle) if isinstance(request.context_bundle, dict) else {}
     scope = request.runtime_scope
+    capability_view = resolve_capability_view(
+        entrypoint_id=request.agent_entrypoint_id,
+        entrypoint_version=request.agent_entrypoint_version,
+        runtime_generation=runtime.runtime_generation,
+        contributions=runtime.capability_contributions,
+        catalog=runtime.capability_catalog,
+        installed_tool_names=(spec.name for spec in runtime.tool_registry.list_tools()),
+    )
+    governance_scopes = _effective_governance_scopes(bundle, capability_view)
+    bundle["_capability_view"] = capability_view.as_dict()
+    bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
+    bundle["governance_scopes"] = governance_scopes
+    bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
     for key, value in (
         ("run_id", request.run_id),
         ("thread_id", request.thread_id),
@@ -62,7 +83,7 @@ async def prepare_turn_inputs(
         bundle["skill_activation"] = dict(request.skill_activation)
 
     resolved_model_policy = _resolved_model_policy(
-        request.model_policy,
+        merge_model_policy(capability_view.model_policy, request.model_policy),
         provider=provider,
         providers=providers,
         max_steps=runtime.max_steps,
@@ -83,11 +104,21 @@ async def prepare_turn_inputs(
         bundle = runtime.context_builder(request.question, short, bundle)
         if not isinstance(bundle, dict):
             raise TypeError("context builder must return a mapping")
+    allowed_contributors = set(capability_view.context_contributor_ids)
     for contributor_id, contributor in runtime.capability_catalog.context_contributors.items():
+        if contributor_id not in allowed_contributors:
+            continue
         contributed = contributor(dict(bundle))
         if not isinstance(contributed, dict):
             raise TypeError(f"context contributor {contributor_id} must return a mapping")
         bundle = contributed
+    # Capability packs may enrich or replace context, but they cannot replace the
+    # runtime-authoritative scope that guards tool, memory, and permission access.
+    bundle["_capability_view"] = capability_view.as_dict()
+    bundle["agent_entrypoint"] = _entrypoint_identity(capability_view)
+    bundle["governance_scopes"] = governance_scopes
+    bundle["memory_namespaces"] = list(capability_view.memory_namespaces)
+    bundle["_runtime_scope"] = request.runtime_scope.model_dump(mode="json")
     bundle["_model_context_profile"] = model_context_profile.as_dict()
     bundle["_configured_input_limit"] = configured_input_limit
     prepared_context = runtime.context_window_manager.prepare(
@@ -103,6 +134,30 @@ async def prepare_turn_inputs(
         model_context_profile=model_context_profile,
         configured_input_limit=configured_input_limit,
         context_window_diagnostics=dict(prepared_context.diagnostics),
+        capability_view=capability_view,
+    )
+
+
+def _effective_governance_scopes(
+    bundle: dict[str, Any],
+    capability_view: CapabilityView,
+) -> list[str]:
+    declared = {
+        str(scope).strip()
+        for scope in capability_view.permission_scopes
+        if str(scope).strip()
+    }
+    if declared:
+        return sorted(declared)
+    # Lightweight packs may intentionally omit a manifest. In that case the
+    # trusted Host grant remains authoritative instead of being erased by an
+    # otherwise unrestricted default CapabilityView.
+    return sorted(
+        {
+            str(scope).strip()
+            for scope in bundle.get("governance_scopes", [])
+            if str(scope).strip()
+        }
     )
 
 
@@ -131,7 +186,7 @@ async def prepare_turn_identity(
             scope=scope,
         )
     else:
-        durable_state, authority, load_errors = {}, "none", []
+        durable_state, authority, load_errors = {}, CheckpointAuthority.NONE, []
     try:
         from deepkeel.runtime_execution_support import ensure_resume_generation_compatible
 
