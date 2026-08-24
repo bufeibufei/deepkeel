@@ -41,7 +41,6 @@ README_SECTION_MARKERS = {
         "## 60-second quickstart",
         "## Architecture",
         "## Core capabilities",
-        "## Proven in a real Host",
         "## Verification and release evidence",
         "## Documentation",
     ),
@@ -50,14 +49,12 @@ README_SECTION_MARKERS = {
         "## 60 秒快速开始",
         "## 整体架构",
         "## 核心能力",
-        "## 真实 Host 验证",
         "## 验证与发布证据",
         "## 文档导航",
     ),
 }
 
 SUPPORTING_DOCUMENTS = (
-    "docs/case-study-kuitianjiandi.md",
     "docs/design-decisions.md",
     "docs/verification-matrix.md",
 )

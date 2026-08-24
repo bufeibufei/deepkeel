@@ -21,8 +21,7 @@ prompts. Your Host owns transport, identity, databases, credentials, queues, and
 UX. Capability Packages own domain Skills, tools, artifacts, and handoffs.
 
 [Quickstart](#60-second-quickstart) · [Architecture](#architecture) ·
-[Why DeepKeel](#why-deepkeel) · [Kuitianjiandi case study](docs/case-study-kuitianjiandi.md) ·
-[Documentation](#documentation)
+[Why DeepKeel](#why-deepkeel) · [Documentation](#documentation)
 
 ## Why DeepKeel
 
@@ -214,24 +213,6 @@ Production packages should follow the Manifest-first
 enable, disable, upgrade, and rollback create new generations; existing runs keep
 the generation they started with. The code-level `CapabilityPackSpec` and the
 persisted manifest are validated as one contribution contract.
-
-## Proven in a real Host
-
-DeepKeel was extracted from **Kuitianjiandi**, a conversational application where
-one root agent coordinates deterministic domain tools, retrieval, long-running
-report generation, user handoffs, specialist agents, and mobile artifact views.
-That Host exercises the boundaries that small examples usually skip:
-
-- synchronous chat and SSE streaming use the same run identity;
-- long-running Bazi and Liuyao workflows suspend and resume across workers;
-- domain results are returned as typed artifacts rather than embedded UI markup;
-- a large capability catalog is narrowed by entrypoint, policy, Skill, and
-  progressive disclosure;
-- PostgreSQL, OpenTelemetry, Tempo, Loki, Prometheus, and Grafana provide durable
-  state and operational diagnostics outside Core.
-
-Read the sanitized [Kuitianjiandi case study](docs/case-study-kuitianjiandi.md) for
-the concrete mapping from product failures to runtime contracts.
 
 ## Public SDK map
 

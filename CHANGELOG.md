@@ -3,8 +3,8 @@
 ## Unreleased
 
 - Rebuild the bilingual project entry documentation around a runnable offline
-  quickstart, architecture and lifecycle diagrams, a sanitized downstream Host
-  case study, explicit design decisions, and an executable verification matrix;
+  quickstart, architecture and lifecycle diagrams, explicit design decisions,
+  and an executable verification matrix;
   extend the README release contract to reject missing sections and local links.
 - Add an internal execution-engine seam around LangGraph, a compact
   `RuntimeResultSummary`, and typed event-to-telemetry projections without
@@ -616,7 +616,8 @@ Versions through 3.35.1 were published as the pre-DeepKeel engineering lineage.
 - Replaced MCP-specific Capability declarations with the protocol-neutral `ToolProvider` port; MCP now lives in the optional `mcp_sdk`.
 - Moved bounded SubAgent and deliberation APIs into the optional `orchestration_sdk`.
 - Added typed LangGraph state, state invariants, and explicit migration for durable v2 graph checkpoints.
-- Split Kuitianjiandi into foundation, bazi, liuyao, knowledge, planning, and orchestration Capability Packs.
+- Split the original downstream domain implementation into independent foundation,
+  knowledge, planning, and orchestration Capability Packages.
 
 ## 2.0.0
 

@@ -19,8 +19,7 @@ DeepKeel 不是聊天页面、模型网关或业务提示词集合。Host 负责
 密钥、队列和用户体验；Capability Package 负责领域 Skill、工具、Artifact 与 Handoff。
 
 [快速开始](#60-秒快速开始) · [整体架构](#整体架构) ·
-[为什么需要-deepkeel](#为什么需要-deepkeel) ·
-[窥天鉴地案例](docs/case-study-kuitianjiandi.md) · [文档导航](#文档导航)
+[为什么需要-deepkeel](#为什么需要-deepkeel) · [文档导航](#文档导航)
 
 ## 为什么需要 DeepKeel
 
@@ -201,21 +200,6 @@ deepkeel pack validate ./my_package/manifest.json
 [Capability Package V1 契约](docs/capability-package-v1.md)。安装、启用、禁用、升级、
 回滚都会形成新世代；已开始的 Run 继续使用启动时捕获的世代。代码层的
 `CapabilityPackSpec` 与持久化 Manifest 会作为同一个贡献契约接受校验。
-
-## 真实 Host 验证
-
-DeepKeel 从 **窥天鉴地** 中抽取而来。该对话式应用由一个主 Agent 协调确定性领域
-工具、知识检索、长报告生成、用户 Handoff、专家 Agent 和移动端 Artifact 页面，
-覆盖了小型 Demo 通常不会遇到的边界：
-
-- 普通对话与 SSE 流式输出共享同一个 Run Identity；
-- 八字精批、六爻等长任务可跨 Worker 挂起与恢复；
-- 领域结果以类型化 Artifact 返回，不把前端组件编码进模型文本；
-- 大型能力目录经过 EntryPoint、策略、Skill 和渐进式披露逐层收窄；
-- PostgreSQL、OpenTelemetry、Tempo、Loki、Prometheus 与 Grafana 在 Core 外提供
-  持久化和运维诊断。
-
-完整映射见脱敏后的[窥天鉴地案例](docs/case-study-kuitianjiandi.md)。
 
 ## 公开 SDK
 
