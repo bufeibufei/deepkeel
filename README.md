@@ -2,498 +2,338 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**A durable, observable Harness Agent runtime for governed root and specialist
-agents built from reusable Capability Packages.**
+[![DeepKeel PR Fast Gate](https://github.com/bufeibufei/deepkeel/actions/workflows/ci.yml/badge.svg)](https://github.com/bufeibufei/deepkeel/actions/workflows/ci.yml)
+[![Full Regression](https://github.com/bufeibufei/deepkeel/actions/workflows/full-regression.yml/badge.svg)](https://github.com/bufeibufei/deepkeel/actions/workflows/full-regression.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-1f6b54)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-b8862b)](LICENSE)
 
-DeepKeel lets a Host expose a general assistant and directly addressable domain
-specialists from one immutable runtime generation. Each conversation receives a
-fail-closed capability view while sharing the same model/tool loop, durable
-lifecycle, persistence and observability contracts. DeepKeel also owns typed
-runtime contracts, interruption and recovery, context engineering, governance
-ports, ToolProvider integration, MCP adapters and bounded SubAgent orchestration.
-It deliberately does not own product APIs, database models, business prompts,
-host tools or frontend rendering.
+**A durable, governed Harness Agent runtime for building long-running agent
+systems from reusable Capability Packages.**
+
+DeepKeel provides the execution kernel between a product Host and domain
+capabilities. It runs one canonical model/tool loop, narrows the capabilities
+visible to each conversation, survives interruptions, and projects typed events,
+artifacts, diagnostics, and UI state. The same runtime can power a general root
+agent and directly addressable specialist agents without duplicating the loop.
+
+DeepKeel is not a chatbot UI, a model gateway, or a collection of business
+prompts. Your Host owns transport, identity, databases, credentials, queues, and
+UX. Capability Packages own domain Skills, tools, artifacts, and handoffs.
+
+[Quickstart](#60-second-quickstart) · [Architecture](#architecture) ·
+[Why DeepKeel](#why-deepkeel) · [Kuitianjiandi case study](docs/case-study-kuitianjiandi.md) ·
+[Documentation](#documentation)
+
+## Why DeepKeel
+
+Agent demos are easy to build. Product runtimes become difficult when they must
+recover after a process crash, prevent a stale worker from committing a result,
+keep hundreds of tools out of the prompt, resume a user handoff, and explain why
+a model or tool was selected.
+
+DeepKeel turns those concerns into runtime contracts instead of product-specific
+conditionals:
+
+| Product problem | DeepKeel mechanism | Verifiable evidence |
+| --- | --- | --- |
+| Long work is interrupted or moved to another worker | Canonical run state, portable checkpoints, graph checkpoints, leases, and fencing | [Durable execution](docs/durable-execution.md) |
+| Skill and tool catalogs outgrow the model context | Permission-first discovery, progressive disclosure, bounded retrieval and reranking | [Catalog discovery](docs/catalog-discovery.md) |
+| Different assistants need different capabilities | Versioned agent entrypoints and immutable per-conversation `CapabilityView` | [Agent entrypoints](docs/agent-entrypoints.md) |
+| Tool retries can repeat side effects | Idempotent claims, execution settlement, and execution fences | [Production readiness](docs/production-readiness.md) |
+| Frontends guess run state from prose | Typed events, artifacts, pending actions, and stable `ui_state` projection | [Runtime lifecycle](docs/runtime-lifecycle.md) |
+| Framework code becomes coupled to one product | Stable Runtime, Extension, Adapter, Discovery, Memory, MCP, and Orchestration SDKs | [Architecture](docs/architecture.md) |
+| A release passes locally but fails in a Host | Clean-wheel conformance, Host compatibility, PostgreSQL, concurrency, and fault-injection gates | [Verification matrix](docs/verification-matrix.md) |
+
+## 60-second quickstart
+
+The repository includes a deterministic local provider, so the first run needs
+no API key and makes no network request.
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
+git clone https://github.com/bufeibufei/deepkeel.git
+cd deepkeel
+python -m venv .venv
+```
+
+```bash
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+pip install -e .
 python examples/quickstart/main.py
 ```
 
-PyPI publication uses Trusted Publishing and is enabled independently after
-the publisher is configured for this repository. Immutable Git tags, GitHub
-release artifacts, provenance attestations, and the release SBOM remain the
-source of truth for a release.
-
-DeepKeel is designed for Hosts that need more than a demo loop: durable run
-identity, resumable user handoffs, progressive tool disclosure, model routing,
-L1/L2/L3 context planning, policy and budget enforcement, typed events,
-artifacts, trace diagnostics and replaceable persistence adapters.
-
-## Start here
-
-- [Architecture](docs/architecture.md)
-- [Agent entrypoints](docs/agent-entrypoints.md)
-- [Runtime lifecycle](docs/runtime-lifecycle.md)
-- [Capability Packages](docs/capability-package-v1.md)
-- [Context management](docs/context-management.md)
-- [Catalog discovery](docs/catalog-discovery.md)
-- [Security and trust](docs/security-and-trust.md)
-- [Capability Package trust](docs/capability-trust.md)
-- [MCP and A2A interoperability](docs/interoperability.md)
-- [Durable execution](docs/durable-execution.md)
-- [Execution planning](docs/execution-planning.md)
-- [Model providers](docs/model-provider.md)
-- [Observability](docs/observability.md)
-- [Production readiness](docs/production-readiness.md)
-- [Downstream Host compatibility](docs/host-compatibility.md)
-- [PostgreSQL adapters](docs/postgresql-reference.md)
-- [API stability](docs/api-stability.md)
-- [Migrating to 4.1](docs/migrating-to-4.1.md)
-- [Supply-chain controls](docs/supply-chain.md)
-- [Release process](docs/releasing.md)
-
-The runnable [quickstart](examples/quickstart) demonstrates a minimal provider.
-The [inventory package](examples/inventory_pack) demonstrates product-neutral
-tools and artifacts. The [durable approval example](examples/durable_approval)
-demonstrates suspension and resume. The
-[production worker](examples/production_worker) composes the production profile,
-packaged PostgreSQL ports, migrations and optional OpenTelemetry export.
-The [reference Host](examples/reference_host) adds HTTP, SSE, run inspection and
-cancellation while keeping those product concerns outside Core.
-
-Production deployments should follow
-[`docs/production-readiness.md`](docs/production-readiness.md), replace every
-process-local `InMemory*` adapter, and run the exported adapter conformance
-verifiers against the real backend.
-
-The package does not contain host tools, database models, API routes or product
-prompts. Consumers integrate through `HarnessRuntimeBuilder`,
-`RuntimePorts` and a versioned Capability Pack. New packs should expose a
-`CapabilityPackSpec` and implement `install(CapabilityInstallContext)`.
-
-For production packages, use the Manifest-first V1 contract and release gate
-described in [Capability Package V1](docs/capability-package-v1.md). A runnable,
-non-domain example is available in
-[`examples/inventory_pack`](examples/inventory_pack).
-There is no implicit registration or legacy Pack adapter in the v3 contract.
-
-```python
-from deepkeel.runtime_sdk import HarnessRuntimeBuilder
-from deepkeel.extension_sdk import (
-    ArtifactTypeSpec,
-    CapabilityContribution,
-    CapabilityInstallContext,
-    CapabilityPackSpec,
-)
-
-class InventoryPack:
-    spec = CapabilityPackSpec(
-        package_id="example.inventory",
-        package_version="1.0.0",
-        declared_tools=("inventory.lookup",),
-        declared_skills=("inventory-assistant",),
-        declared_artifact_types=("inventory_record",),
-    )
-
-    def install(self, context: CapabilityInstallContext):
-        context.register_tool(tool_spec, lookup_handler)
-        context.register_skill("inventory-assistant", skill_manifest)
-        context.register_artifact_type(
-            ArtifactTypeSpec(
-                artifact_type="inventory_record",
-                schema={"type": "object"},
-            )
-        )
-        return CapabilityContribution(
-            package_id=self.spec.package_id,
-        )
-
-runtime = HarnessRuntimeBuilder().add_capability_pack(InventoryPack()).build()
+```bash
+# macOS / Linux
+source .venv/bin/activate
+pip install -e .
+python examples/quickstart/main.py
 ```
 
-Capability Package lifecycle is managed separately from process-local runtime
-composition. A Host persists the catalog through `CapabilityPackageStore`,
-applies install/enable/disable/upgrade/rollback operations through
-`CapabilityPackageManager`, and builds workers from the resulting immutable
-`RuntimeGeneration`. Existing runs retain the generation captured when they
-started.
+Expected output:
 
-```python
-from deepkeel.extension_sdk import (
-    CapabilityPackageManager,
-    InMemoryCapabilityPackageStore,
-)
-
-packages = CapabilityPackageManager(InMemoryCapabilityPackageStore())
-packages.install(inventory_manifest)
-generation = packages.generation()
-
-runtime = (
-    HarnessRuntimeBuilder()
-    .add_capability_pack(InventoryPack(), manifest=inventory_manifest)
-    .with_runtime_generation(generation)
-    .build()
-)
+```text
+DeepKeel received: Is the runtime ready?
 ```
 
-The in-memory store is for tests and single-process embedding only. Production
-Hosts must provide a durable, optimistic-concurrency implementation and run
-`verify_capability_package_store_contract` against it. The builder rejects a
-generation whose manifests differ from the installed packs. Resume also fails
-before model or tool execution when the persisted generation is not compatible
-with the selected worker generation.
-
-The execution boundary is exclusively typed. Providers and sessions remain
-injected runtime ports, while request and result data are serializable Core
-contracts. Product hosts project `RuntimeResult` into their own API, event and
-persistence DTOs without passing those mappings back into Core.
-
-For a minimal embedding, use the Golden Path facade. It creates the same
-canonical runtime and does not introduce a second execution loop:
+The Golden Path uses the same runtime as production composition:
 
 ```python
 from deepkeel.runtime_sdk import AgentHarness
 
-harness = AgentHarness.create(provider=model_provider)
-result = harness.run("Inspect this incident", user_id="operator-42")
+
+class LocalProvider:
+    model = "quickstart-model"
+    model_role = "fast"
+
+    def complete_chat(self, messages, **_kwargs):
+        question = str(messages[-1].get("content") or "")
+        return {
+            "message": {
+                "role": "assistant",
+                "content": f"DeepKeel received: {question}",
+            },
+            "finish_reason": "stop",
+            "model": self.model,
+        }
+
+
+harness = AgentHarness.create(provider=LocalProvider())
+result = harness.run("Is the runtime ready?", user_id="quickstart-user")
 print(result.final_answer.markdown)
 ```
 
-```python
-from deepkeel.runtime_sdk import RuntimeRequest
+Install the stable `4.1.0` package directly from its immutable tag when embedding
+DeepKeel in another repository:
 
-result = runtime.run(
-    RuntimeRequest(
-        question="How many units remain?",
-        user_id="user-1",
-        context_bundle={"thread_id": "thread-1"},
-    ),
-    provider=model_provider,
-)
-print(result.status, result.final_answer.markdown)
+```bash
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
 ```
 
-Multi-tenant Hosts pass a `RuntimeScope` rather than encoding ownership into
-run identifiers. The reference state adapter isolates tenant, namespace, and
-user dimensions. Legacy `user_id` adapters remain supported for the default
-scope and fail closed when asked to represent a tenant they cannot isolate.
+For a production Host, compose explicit durable `RuntimePorts` and call
+`HarnessRuntimeBuilder(profile="production").build_production()`. Use `arun()`
+for request/response and `astream()` for live event delivery.
 
-```python
-from deepkeel.runtime_sdk import RuntimeRequest, RuntimeScope
+## Architecture
 
-request = RuntimeRequest(
-    question="Inspect this account",
-    scope=RuntimeScope(
-        tenant_id="tenant-1",
-        namespace="production",
-        user_id="user-1",
-    ),
-)
+```mermaid
+flowchart LR
+    User[User or client] --> Host[Product Host]
+    Host --> Request[RuntimeRequest]
+    Ports[RuntimePorts<br/>DB, policy, budget, telemetry] --> Core
+    Packs[Capability Packages<br/>Skills, tools, artifacts] --> Generation[Immutable RuntimeGeneration]
+    Generation --> Core[DeepKeel Core Runtime]
+    Request --> Core
+    Core --> Model[Model Providers]
+    Core --> Gateway[Governed Tool Gateway]
+    Gateway --> Native[Native tools]
+    Gateway --> MCP[MCP servers]
+    Core --> Agents[Bounded SubAgents]
+    Core --> Output[RuntimeResult<br/>Events, artifacts, UI state]
+    Output --> Host
 ```
 
-Async Hosts use the same canonical runtime rather than a second execution
-implementation. `arun()` moves the synchronous provider boundary off the event
-loop, while `astream()` publishes typed events and cooperatively cancels the run
-when its consumer disconnects.
+The boundary is deliberate:
 
-```python
-result = await runtime.arun(request, provider=provider)
+| Layer | Owns | Does not own |
+| --- | --- | --- |
+| **Host** | HTTP/SSE, auth, tenants, queues, durable infrastructure, model credentials, product policy, UI | Agent-loop semantics or domain package internals |
+| **DeepKeel Core** | ReAct lifecycle, context planning, model/tool execution, interruption, recovery, policy/budget gates, events, artifacts, diagnostics | Product routes, ORM models, business prompts, or pages |
+| **Capability Package** | Domain Skills, tools, artifact schemas, handoffs, context contributors, MCP and specialist definitions | Host credentials, transport, private Core state, or unrestricted infrastructure |
 
-async for event in runtime.astream(request, provider=provider):
-    if event.event_type == "answer.delta":
-        publish(event.payload["delta"])
+LangGraph is the built-in internal execution engine for checkpoint-aware graph
+control flow. DeepKeel keeps it behind `TurnExecutionEngine`; neither the Host nor
+a Capability Package imports LangGraph state or command types. See
+[Design decisions](docs/design-decisions.md) for the rationale and tradeoffs.
+
+## One run, end to end
+
+```mermaid
+sequenceDiagram
+    participant H as Host
+    participant C as DeepKeel Core
+    participant M as Model
+    participant T as Tool or SubAgent
+
+    H->>C: RuntimeRequest + RuntimeScope + entrypoint
+    C->>C: Resolve CapabilityView and plan L1/L2/L3 context
+    C->>M: Prompt plus bounded capability descriptors
+    M-->>C: Answer delta or tool call
+    alt governed tool call
+        C->>C: Policy, budget, schema, idempotency, fence
+        C->>T: Execute with ToolExecutionContext
+        T-->>C: Observation, Artifact, or PendingAction
+        C->>M: Continue with bounded observation
+    else user or async handoff
+        C-->>H: Persisted pending action and resumable state
+        H->>C: Resume with typed observation
+    end
+    C-->>H: FinalAnswer + RuntimeResult + terminal event
 ```
 
-Multi-step planning is an opt-in execution capability inside the same ReAct
-graph, not a second agent runtime. Enable the control tool at composition time,
-then let each Skill choose whether planning is disabled, allowed, preferred, or
-required. Valid plans are bounded DAGs whose executable steps still pass through
-the normal tool registry, Skill scope, policy, budget, idempotency, checkpoint,
-and event boundaries.
+The event envelope is the fact. SSE messages, OpenTelemetry spans, compact trace
+rows, and frontend state are projections of the same ordered runtime events. A
+resume restores persisted state and observations; it does not infer progress from
+assistant prose.
 
-```python
-from deepkeel.adapter_sdk import RuntimePorts
-from deepkeel.runtime_sdk import HarnessRuntimeBuilder
+## Core capabilities
 
-runtime = (
-    HarnessRuntimeBuilder()
-    .with_ports(RuntimePorts(planning_enabled=True))
-    .build()
-)
+- **One canonical loop:** synchronous `run()`, asynchronous `arun()`, and
+  streaming `astream()` share one async state machine.
+- **Durable lifecycle:** interruption, user confirmation, asynchronous work,
+  cancellation, resume, lease takeover, and terminal settlement use typed state.
+- **Governed execution:** policy, budget, health, guardrails, sandbox, workspace,
+  secrets, idempotency, and fencing are explicit Ports or contracts.
+- **Capability scale:** agent entrypoints, hybrid Skill/Tool discovery, progressive
+  disclosure, and immutable runtime generations bound what the model can see.
+- **Context engineering:** L1 current context, L2 working checkpoints, and L3
+  durable recall are token-aware and source-linked.
+- **Structured product output:** `Observation`, `Artifact`, `PendingAction`,
+  references, `FinalAnswer`, and `RuntimeUIState` replace UI parsing of prose.
+- **Interoperability:** native tools and MCP share the governed tool gateway;
+  bounded SubAgents and optional A2A adapters remain parent-controlled.
+- **Operations:** run inspection, cancellation, recovery commands, typed failure
+  diagnosis, OpenTelemetry projection, and deterministic evaluation contracts.
 
-skill_activation = {
-    "skill_id": "evidence-consultation",
-    "planning_policy": {
-        "mode": "preferred",
-        "max_steps": 6,
-        "max_parallel_steps": 3,
-    },
-}
+## Capability Packages
+
+A Capability Package is the unit of domain reuse. Its manifest declares identity,
+version, dependencies, permissions, tools, Skills, artifacts, budgets, and
+entrypoints. `install(CapabilityInstallContext)` contributes implementations to a
+new immutable `RuntimeGeneration`; it cannot reach into Host ORM objects or
+private runtime state.
+
+Start with the runnable [inventory package](examples/inventory_pack), then use:
+
+```bash
+deepkeel pack init ./my_package --package-id com.example.inventory
+deepkeel pack validate ./my_package/manifest.json
 ```
 
-Simple turns remain direct ReAct turns. Planning only changes how ready work is
-scheduled; tools, workflows and delegated SubAgents remain ordinary governed
-capabilities. See [Execution planning](docs/execution-planning.md) for plan,
-resume, revision and event contracts.
+Production packages should follow the Manifest-first
+[Capability Package V1 contract](docs/capability-package-v1.md). Package install,
+enable, disable, upgrade, and rollback create new generations; existing runs keep
+the generation they started with. The code-level `CapabilityPackSpec` and the
+persisted manifest are validated as one contribution contract.
 
-Thread-safe synchronous persistence adapters can be exposed to async Host
-control paths through the opt-in bridges in `deepkeel.adapter_sdk`.
-Production async database drivers should implement the corresponding
-`Async*Store` protocol directly instead of using thread offload.
-The same rule applies to selective Memory recall, tool idempotency, and
-SubAgent delegation through `AsyncMemoryPort`, `AsyncMemoryRecallPolicy`,
-`AsyncToolExecutionStore`, and the async orchestration contracts.
-When a synchronous SubAgent bridge needs database access, provide a
-`session_factory`; DeepKeel will not move an already-bound Session across
-threads.
+## Proven in a real Host
 
-Production composition is executable rather than advisory. Inspect missing or
-process-local Host ports with `production_readiness()`, and use
-`build_production()` to fail closed before a worker starts:
+DeepKeel was extracted from **Kuitianjiandi**, a conversational application where
+one root agent coordinates deterministic domain tools, retrieval, long-running
+report generation, user handoffs, specialist agents, and mobile artifact views.
+That Host exercises the boundaries that small examples usually skip:
 
-```python
-builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
-report = builder.production_readiness()
-runtime = builder.build_production()
-```
+- synchronous chat and SSE streaming use the same run identity;
+- long-running Bazi and Liuyao workflows suspend and resume across workers;
+- domain results are returned as typed artifacts rather than embedded UI markup;
+- a large capability catalog is narrowed by entrypoint, policy, Skill, and
+  progressive disclosure;
+- PostgreSQL, OpenTelemetry, Tempo, Loki, Prometheus, and Grafana provide durable
+  state and operational diagnostics outside Core.
 
-Infrastructure can be assembled through persistence, governance,
-observability, and execution Port bundles while the original flat
-`RuntimePorts` fields remain compatible. This keeps product database and model
-choices out of Capability Packs without forcing one monolithic Host adapter.
+Read the sanitized [Kuitianjiandi case study](docs/case-study-kuitianjiandi.md) for
+the concrete mapping from product failures to runtime contracts.
 
-Reference extraction is also a Port. The default projector discovers generic
-records and web sources without knowing tool names or business vocabulary.
-Products may inject `RuntimePorts(reference_projector=...)` to map those records
-to domain-specific source kinds, labels and evidence policies.
+## Public SDK map
 
-The builder derives installed contributions from the registrations that
-actually occurred; a pack cannot claim an extension it did not install. Pack
-installation is atomic across tools, skills, artifact types, handoffs, MCP
-servers, sub-agents, context contributors and lifecycle-managed resources. Any
-installation failure rolls back the partial contribution, including
-replacement of an existing handler and reverse-order closure of newly opened
-resources. `HarnessRuntime.close()` performs the same resource cleanup once.
-Strict conformance is enabled by default during `build()` and can only be
-disabled explicitly for diagnostic tooling.
+| SDK | Use it for |
+| --- | --- |
+| `deepkeel.runtime_sdk` | Requests, results, run state, events, execution, inspection, cancellation, and recovery |
+| `deepkeel.extension_sdk` | Capability Packages, Skills, tools, artifacts, handoffs, hooks, and trust |
+| `deepkeel.adapter_sdk` | Host Ports, model/provider certification, composition, and conformance suites |
+| `deepkeel.discovery_sdk` | Provider-neutral hybrid Skill and Tool retrieval/reranking |
+| `deepkeel.memory_sdk` | Product-neutral memory records, recall policy, and storage Ports |
+| `deepkeel.mcp_sdk` | Governed MCP client, transports, discovery, and tool projection |
+| `deepkeel.orchestration_sdk` | Bounded plans, SubAgents, and deliberation contracts |
+| `deepkeel.a2a_sdk` | Experimental A2A remote-specialist interoperability |
 
-Artifact type schemas are also executable contracts. A Builder-composed
-runtime validates every tool-produced artifact before exposing it to the
-model, persistence or frontend. Unknown artifact types and schema-invalid
-payloads become failed tool results at the execution boundary.
+The stable public SDK is `4.1.0`; the persisted Capability Package contract is
+`harness-core-v3`. Public symbols are frozen in `deepkeel.public_api` and checked
+by an API fingerprint gate.
 
-Core context is a product-neutral `runtime_context` envelope. Product adapters
-may populate generic subjects, facts, memories, recent messages and provenance
-through `RuntimePorts(context_builder=...)`; Capability Packs can then enrich
-that envelope with registered context contributors. Domain-specific field
-names and filtering policies belong in the product adapter, not the Core.
-Failures in either context stage are projected into the same terminal runtime
-and event contracts as model or tool failures.
+## Examples
 
-Context snapshots address domain subjects through `subject_id`. Domain keys and
-legacy snapshot upgrades belong to the Host context adapter; incompatible
-snapshot versions fail explicitly rather than being guessed by Core.
+| Example | What it proves |
+| --- | --- |
+| [quickstart](examples/quickstart) | Offline Golden Path with a deterministic provider |
+| [inventory_pack](examples/inventory_pack) | Product-neutral Capability Package and governed tool |
+| [durable_approval](examples/durable_approval) | Typed interruption, approval, and resume |
+| [production_worker](examples/production_worker) | Production profile, PostgreSQL Ports, migrations, and optional OTel |
+| [reference_host](examples/reference_host) | HTTP, SSE, run inspection, and cancellation outside Core |
 
-Before model execution, the injected `ContextWindowManager` converts recent
-conversation history into role messages exactly once. It plans against the
-smallest configured candidate before routing, then the routed model step applies
-the concrete provider's context window, output reserve, tool-schema reserve and
-per-call budget. History is token-bounded rather than count-bounded; no fixed
-message or character limit is enabled by default.
+## Verification and release evidence
 
-Context is classified independently along tier, scope, visibility, retention,
-representation and authority axes. `L1` is pinned control and authoritative
-subject context, `L2` is the active run/thread working set, and `L3` is retrieved
-memory or evidence that may be omitted first. `runtime` visibility keeps secrets
-and diagnostic state out of model input. Subject-mismatched `L1`/`L2` items are
-quarantined instead of merely logged. Tool calls and their results are compacted
-as atomic groups.
+DeepKeel does not treat a unit-test pass as production proof. Its release path
+separates fast pull-request checks from full and release-only gates:
 
-When L2 exceeds the selected model budget, the default compactor retains the
-recent raw event suffix and creates a source-linked `ContextCheckpoint`. Raw
-events remain authoritative; the checkpoint is a derived, reproducible cache
-with a covered event range and first retained event ID. The `context_manifest`
-and per-model `context_manifest` diagnostics expose tier token usage, decisions,
-validation failures and compaction metadata without logging prompt payloads.
-Products can replace the estimator, planner, compactor or summary cache without
-changing the React loop.
+- Ruff, mypy, type-debt, API-fingerprint, import-cycle, and structural ratchets;
+- deterministic runtime tests with an 80% package coverage floor;
+- adapter conformance and PostgreSQL coverage, migration, and multi-worker tests;
+- fault injection for checkpoint authority, rollback, recovery, and cancellation;
+- a deterministic 300-request / 32-worker Core concurrency baseline;
+- clean wheel and sdist installation, Host compatibility, SBOM, checksums, and
+  build provenance.
 
-Hosts may additionally provide `ContextSegment` entries for important sections.
-Legacy layer names (`runtime_constitution`, `turn_context`, `working_memory`, and
-`retrieved_context`) remain diagnostic projections; tier and the orthogonal
-attributes are the assembly contract. A segment can still declare provenance,
-a per-section ceiling and a precomputed summary. Under pressure, pinned and
-protected segments receive budget first, L3 is discarded before recent L2, and
-an eligible cached summary is preferred over blind truncation.
-`ContextSummaryCache` makes this lifecycle testable: every record is bound to a
-Host-provided source fingerprint, and a source change becomes a cache miss
-rather than silently reusing stale context. The default in-memory adapter is
-process-local; durable Hosts may implement the same Port.
-
-Capability Packs can publish a versioned `CapabilityManifest`. A build freezes
-validated manifests into an immutable `RuntimeGeneration`, so every Run can
-explain the exact package, tool catalog and Skill versions it used. Tool
-definitions are disclosed progressively: a small baseline is always available,
-Skill entry tools appear after activation, and discoverable tools are selected
-through the replaceable `ToolDiscoveryPort`. Internal and Skill-only tools never
-fail open into the model context.
-
-Cross-cutting behavior is registered through scoped lifecycle Hooks rather
-than embedded in business handlers. Hooks may enrich context, rewrite model or
-tool inputs, deny an operation, or request user confirmation, but Policy and
-Budget remain authoritative. Timeouts, failures, replay and audit records are
-handled by Core. SubAgent delegation returns a compact parent projection with
-conclusions, evidence, risks, recommendations and Artifact references instead
-of copying the child trace into the parent prompt.
-
-Model and tool execution share one `BudgetLedger`. Besides model/tool call
-counts, Core accounts for estimated input and output tokens, retry attempts,
-elapsed runtime and peak parallel tool workers. Sum aggregation is used for
-consumable resources and max aggregation for concurrency. Every reservation is
-idempotent by operation ID and survives checkpoint restore when backed by a
-durable adapter. A zero or omitted limit remains unlimited for compatibility;
-Hosts opt into hard limits through the model policy budget mapping.
-
-Budget configuration is normalized through the public `BudgetPolicy` contract.
-Global limits can be supplemented by model-role overrides such as `fast` or
-`reasoning`. Before each provider request, Core performs a non-mutating
-preflight, rejects oversized inputs, derives the remaining output allowance and
-passes that allowance to compatible providers as `max_tokens`. Streaming also
-enforces the allowance locally, so a provider that ignores it cannot publish
-unbounded deltas.
-
-After a request settles, `UsageReport` prefers provider-reported input and
-output token counts. If the provider does not expose usage, Core falls back to
-its deterministic estimator and marks the source accordingly. The resulting
-usage, output ceiling and current budget metrics are attached to model routing
-diagnostics and emitted as privacy-safe `budget.usage.recorded` events. Prompts
-and response text are never included in this governance payload.
-
-```python
-from deepkeel.adapter_sdk import BudgetPolicy
-
-policy = BudgetPolicy.from_mapping({
-    "max_input_tokens_total": 100_000,
-    "max_output_tokens_total": 20_000,
-    "max_model_retries": 2,
-    "roles": {
-        "fast": {
-            "max_output_tokens_per_call": 512,
-            "max_request_seconds": 20,
-        },
-        "reasoning": {
-            "max_output_tokens_per_call": 4_096,
-            "max_request_seconds": 120,
-        },
-    },
-})
-```
-
-Checkpoint responsibilities are intentionally separate. `GraphCheckpointer`
-stores engine execution state and `LangGraphCheckpointerAdapter` is its built-in
-adapter. `DurableCheckpointStore` stores portable run snapshots used when an
-engine checkpoint is unavailable. Capability Packs and product code do not
-depend on LangGraph saver types directly.
-
-Suspension persistence can additionally be supplied through
-`RuntimeStateStore`. A single idempotent `RuntimeStateMutation` commits the
-canonical run status, durable event and portable checkpoint together, with
-optional version and sequence preconditions. This prevents a visible waiting
-state from diverging from its resume checkpoint after a process crash. Product
-database adapters own transactions and persistence models; Core only consumes
-the Port and records the resulting receipt in recovery diagnostics. The same
-mutation supports public terminal events, final-message correlation, failure
-metadata and atomic removal of obsolete resumable checkpoints.
-
-Core commits the terminal snapshot before deleting compatibility checkpoints.
-The cleanup outcome is then journaled as a replay-only internal diagnostic; it
-is deliberately excluded from the live sink so the public terminal event stays
-the final streamed event.
-
-Distributed Hosts may additionally provide a `RunLeaseStore`. Each turn claims
-exclusive ownership with a fencing token, renews it in the background and
-releases it when the turn settles or suspends. Expired leases can be taken over,
-while stale workers cannot renew or release a newer generation. The active
-execution fence is propagated to every `ToolExecutionContext` and atomic
-`RuntimeStateMutation`; durable adapters reject obsolete generations and write
-tools can forward the same token to downstream storage. Persisted state upgrades
-are explicit through `StateMigrationRegistry`; Core ships its own historical
-v1-to-v2 migration chain and Hosts may register additional domain migrations.
-
-`astream()` uses a bounded queue and a bounded same-loop backlog so a slow Host
-cannot create an unbounded set of pending tasks. Consecutive answer deltas may
-be coalesced without losing text. Closing a stream requests cooperative run
-cancellation and waits for a configurable acknowledgement timeout. Sync and
-async Hosts both use the same canonical async state machine; `run()` is the
-synchronous boundary adapter.
-
-The runtime also projects a stable `ui_state` contract. Completed, failed and
-canceled runs release the composer; explicit user-input interruptions remain
-sendable; tool handoffs and asynchronous work remain blocked until resumed.
-Public errors contain a safe code, category and user message, while technical
-details stay inside diagnostics and checkpoints.
-
-Run the package-owned contract suite with:
+See the [verification matrix](docs/verification-matrix.md) for commands, owning
+workflows, and the guarantee each gate is intended to protect.
 
 ```powershell
 uv sync --extra test
-uv run ruff check src tests verification
+uv run ruff check src tests verification examples
 uv run mypy src/deepkeel
 uv run pytest -q --cov=deepkeel --cov-fail-under=80
 ```
 
-Build and verify both distributions from the repository root with:
+Run the complete local release verifier with:
 
 ```powershell
 .\scripts\verify.ps1
 ```
 
-The verifier installs the wheel and sdist into separate clean environments and
-runs product-neutral scenarios for normal and streaming answers, tools,
-parallelism, failures, interruption and recovery, asynchronous work,
-cancellation, Skills, Artifacts, references, MCP and SubAgents.
+## Documentation
 
-Model integrations can implement `ModelProviderAdapter.invoke()` directly.
-Existing providers exposing `stream_chat` or `complete_chat` remain supported
-through `NativeChatProviderAdapter`. Runtime observability is injected with
-`RuntimePorts(telemetry=...)`; telemetry records deliberately exclude prompts,
-tool arguments and model results by default. Every run emits a terminal
-`runtime.settled` record with status, stop reason, Skill identity and recovery
-source, and diagnostics include only counts for the installed Capability Pack
-inventory.
+**Understand the runtime**
 
-MCP servers use the same governed tool gateway for local stdio and remote
-Streamable HTTP transports. The modern protocol path supports stateless server
-discovery, tasks, safe parameter-header projection, and remote `outputSchema`
-validation. Remote credentials are resolved through the runtime
-`SecretProvider`, diagnostics expose only header names and sanitized endpoints,
-and legacy servers remain available through an explicitly bounded fallback.
+- [Architecture](docs/architecture.md)
+- [Runtime lifecycle](docs/runtime-lifecycle.md)
+- [Durable execution](docs/durable-execution.md)
+- [Context management](docs/context-management.md)
+- [Design decisions](docs/design-decisions.md)
 
-```python
-from deepkeel.mcp_sdk import McpServerSpec
+**Extend the runtime**
 
-remote_search = McpServerSpec(
-    id="remote-search",
-    transport="streamable_http",
-    url="https://mcp.example.com/search",
-    secret_headers={"Authorization": "remote-search-token"},
-    required_scopes=["search.read"],
-)
-```
+- [Capability Package V1](docs/capability-package-v1.md)
+- [Agent entrypoints](docs/agent-entrypoints.md)
+- [Catalog discovery](docs/catalog-discovery.md)
+- [Model providers](docs/model-provider.md)
+- [MCP and A2A interoperability](docs/interoperability.md)
 
-Remote specialist Agents can opt into the experimental A2A 1.0 adapter through
-`deepkeel.a2a_sdk`. A2A Tasks become ordinary bounded SubAgent work: the parent
-run owns permissions, budgets, checkpoints, cancellation, Artifacts, and the
-final answer. Capability Packages and Hosts do not depend on A2A protocol types
-unless they intentionally install that adapter.
+**Operate and release**
 
-The Capability Pack contract remains `harness-core-v3`; the DeepKeel stable
-release and public SDK surface are `4.1.0`. Consumers import only from
-`deepkeel.runtime_sdk`, `deepkeel.extension_sdk`, `deepkeel.adapter_sdk`,
-`deepkeel.discovery_sdk`, `deepkeel.memory_sdk`, `deepkeel.mcp_sdk`,
-`deepkeel.orchestration_sdk`, or the
-experimental `deepkeel.a2a_sdk`. The versioned public
-symbol manifest is available from `deepkeel.public_api`; the package root
-only exposes those SDK modules and version constants. The package-owned test
-suite stores a frozen API fingerprint, so contract changes require an explicit
-compatibility review.
+- [Production readiness](docs/production-readiness.md)
+- [PostgreSQL reference](docs/postgresql-reference.md)
+- [Observability](docs/observability.md)
+- [Security and trust](docs/security-and-trust.md)
+- [Capability trust](docs/capability-trust.md)
+- [Supply-chain controls](docs/supply-chain.md)
+- [Release process](docs/releasing.md)
+- [Host compatibility](docs/host-compatibility.md)
+
+**Compatibility**
+
+- [API stability](docs/api-stability.md)
+- [Migrating to 4.1](docs/migrating-to-4.1.md)
+- [Execution planning](docs/execution-planning.md)
+
+## Project status
+
+DeepKeel `4.1.0` exposes a stable typed SDK and a production profile with
+executable readiness checks. The bundled `InMemory*` adapters remain intentionally
+limited to tests and single-process development. A production deployment must
+provide durable Host infrastructure and pass the relevant conformance suites.
+
+Design questions belong in GitHub Discussions; reproducible defects belong in
+[Issues](https://github.com/bufeibufei/deepkeel/issues). See
+[CONTRIBUTING.md](CONTRIBUTING.md), [SECURITY.md](SECURITY.md),
+[SUPPORT.md](SUPPORT.md), and [CHANGELOG.md](CHANGELOG.md).
+
+DeepKeel is licensed under the [Apache License 2.0](LICENSE).

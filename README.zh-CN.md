@@ -2,309 +2,319 @@
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
-**用可复用能力包组装受治理的主 Agent 与专家 Agent 的持久化、可观测
-Harness Agent Runtime。**
+[![DeepKeel PR Fast Gate](https://github.com/bufeibufei/deepkeel/actions/workflows/ci.yml/badge.svg)](https://github.com/bufeibufei/deepkeel/actions/workflows/ci.yml)
+[![Full Regression](https://github.com/bufeibufei/deepkeel/actions/workflows/full-regression.yml/badge.svg)](https://github.com/bufeibufei/deepkeel/actions/workflows/full-regression.yml)
+[![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-1f6b54)](https://www.python.org/)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-b8862b)](LICENSE)
 
-DeepKeel 允许 Host 在同一个不可变运行时世代上，对外提供通用主 Agent 与可直接
-访问的领域专家 Agent。每个会话获得权限收窄、默认拒绝的不可变能力视图，同时复用
-相同的模型/工具循环、持久化生命周期和可观测契约。DeepKeel 还负责类型化运行契约、中断与恢复、
-上下文工程、治理端口、ToolProvider、MCP 适配和有界 SubAgent 编排；它不负责
-产品 API、业务数据库模型、领域提示词、宿主工具或前端页面。
+**用可复用 Capability Package 构建长期运行 Agent 系统的持久化、受治理 Harness
+Agent Runtime。**
 
-当前稳定版本为 `4.1.0`，安装命令如下：
+DeepKeel 位于产品 Host 与领域能力之间，提供统一的执行内核。它运行一套规范的
+模型/工具循环，为每个会话收窄可见能力，在中断后可靠恢复，并向外投影类型化事件、
+Artifact、诊断和 UI 状态。同一 Runtime 可以同时支撑通用主 Agent 与可直接访问的
+专家 Agent，而不复制第二套循环。
+
+DeepKeel 不是聊天页面、模型网关或业务提示词集合。Host 负责传输、身份、数据库、
+密钥、队列和用户体验；Capability Package 负责领域 Skill、工具、Artifact 与 Handoff。
+
+[快速开始](#60-秒快速开始) · [整体架构](#整体架构) ·
+[为什么需要-deepkeel](#为什么需要-deepkeel) ·
+[窥天鉴地案例](docs/case-study-kuitianjiandi.md) · [文档导航](#文档导航)
+
+## 为什么需要 DeepKeel
+
+做出一个 Agent Demo 并不困难。真正进入产品后，系统需要处理进程崩溃后的恢复、
+旧 Worker 越权提交、能力目录膨胀、用户操作挂起、工具副作用去重，以及“为什么选择
+这个模型或工具”的可解释诊断。
+
+DeepKeel 将这些问题收敛成 Runtime 契约，而不是散落在业务代码里的条件分支：
+
+| 产品问题 | DeepKeel 机制 | 可验证依据 |
+| --- | --- | --- |
+| 长任务中断或迁移到其他 Worker | Canonical State、Portable Checkpoint、Graph Checkpoint、Lease 与 Fencing | [持久化执行](docs/durable-execution.md) |
+| Skill 和工具数量撑大模型上下文 | 权限优先发现、渐进式披露、有界召回与重排 | [能力目录发现](docs/catalog-discovery.md) |
+| 不同 Agent 需要不同能力范围 | 版本化 Agent EntryPoint 与会话级不可变 `CapabilityView` | [Agent 入口](docs/agent-entrypoints.md) |
+| 工具重试可能重复产生副作用 | 幂等 Claim、执行结算与 Execution Fence | [生产就绪](docs/production-readiness.md) |
+| 前端只能从文本猜测任务状态 | 类型化事件、Artifact、PendingAction 与稳定 `ui_state` 投影 | [运行生命周期](docs/runtime-lifecycle.md) |
+| 框架与单一业务深度耦合 | Runtime、Extension、Adapter、Discovery、Memory、MCP、Orchestration SDK | [整体架构](docs/architecture.md) |
+| 本地通过但接入 Host 后失败 | 候选 Wheel、Host 兼容、PostgreSQL、并发与故障注入门禁 | [验证矩阵](docs/verification-matrix.md) |
+
+## 60 秒快速开始
+
+仓库内置确定性的本地 Provider，第一次运行不需要 API Key，也不会发起网络请求。
 
 ```bash
-pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
+git clone https://github.com/bufeibufei/deepkeel.git
+cd deepkeel
+python -m venv .venv
+```
+
+```bash
+# Windows PowerShell
+.venv\Scripts\Activate.ps1
+pip install -e .
 python examples/quickstart/main.py
 ```
 
-PyPI 发布使用 Trusted Publishing，并在仓库侧完成发布者配置后单独启用。
-不可变 Git 标签、GitHub Release 制品、构建来源证明和 SBOM 是发布事实来源。
-
-## 从这里开始
-
-- [整体架构](docs/architecture.md)
-- [Agent 入口与专家作用域](docs/agent-entrypoints.md)
-- [运行生命周期](docs/runtime-lifecycle.md)
-- [Capability Package](docs/capability-package-v1.md)
-- [上下文管理](docs/context-management.md)
-- [能力目录发现](docs/catalog-discovery.md)
-- [安全与信任边界](docs/security-and-trust.md)
-- [Capability Package 信任模型](docs/capability-trust.md)
-- [MCP 与 A2A 互操作](docs/interoperability.md)
-- [持久化执行](docs/durable-execution.md)
-- [执行计划](docs/execution-planning.md)
-- [模型 Provider](docs/model-provider.md)
-- [可观测性](docs/observability.md)
-- [生产就绪](docs/production-readiness.md)
-- [下游 Host 兼容门禁](docs/host-compatibility.md)
-- [PostgreSQL 参考适配](docs/postgresql-reference.md)
-- [API 稳定性](docs/api-stability.md)
-- [迁移到 4.1](docs/migrating-to-4.1.md)
-- [供应链治理](docs/supply-chain.md)
-- [发布流程](docs/releasing.md)
-
-可运行的 [quickstart](examples/quickstart) 展示最小模型 Provider；
-[inventory_pack](examples/inventory_pack) 展示不依赖具体业务的工具和 Artifact；
-[durable_approval](examples/durable_approval) 展示中断、人工确认与恢复；
-[production_worker](examples/production_worker) 展示生产 Profile、PostgreSQL
-端口、迁移与可选 OpenTelemetry 导出的完整装配。
-[reference_host](examples/reference_host) 展示 HTTP、SSE、运行查询和取消接口，
-同时保持这些产品职责位于 Core 之外。
-
-## 架构边界
-
-DeepKeel 将系统分为三个稳定层次：
-
-- **Host** 负责身份认证、API、数据库连接、队列、密钥、部署和前端。
-- **Core Runtime** 负责 ReAct 循环、状态机、事件、恢复、策略、预算和调度。
-- **Capability Pack** 负责领域工具、Skill、Artifact、Handoff、SubAgent 与上下文贡献。
-
-Host 通过 `RuntimePorts` 注入基础设施，通过
-`HarnessRuntimeBuilder` 安装能力包并构建 Runtime。Capability Pack 只依赖公开
-SDK，不应直接访问 Host 的 ORM、路由对象或私有运行状态。
-
-`RuntimePorts` 可按持久化、治理、可观测、执行四组 bundle 进行组合，同时保留
-原有扁平字段接口。这样宿主可以分领域装配基础设施，又不会让 Capability Pack
-或业务代码依赖具体数据库和模型 Provider。
-
-## 快速开始
-
-```python
-from deepkeel.runtime_sdk import HarnessRuntimeBuilder, RuntimeRequest
-
-runtime = HarnessRuntimeBuilder().build()
-result = runtime.run(
-    RuntimeRequest(
-        question="检查当前库存",
-        user_id="user-1",
-        run_id="run-1",
-        thread_id="thread-1",
-    ),
-    provider=model_provider,
-)
-
-print(result.status, result.final_answer.markdown)
+```bash
+# macOS / Linux
+source .venv/bin/activate
+pip install -e .
+python examples/quickstart/main.py
 ```
 
-最小接入可以使用 Golden Path。它内部仍然构建同一个标准 Runtime，不会引入第二套
-执行循环：
+预期输出：
+
+```text
+DeepKeel received: Is the runtime ready?
+```
+
+Golden Path 与生产装配使用的是同一套 Runtime：
 
 ```python
 from deepkeel.runtime_sdk import AgentHarness
 
-harness = AgentHarness.create(provider=model_provider)
-result = harness.run("检查这次事故", user_id="operator-42")
+
+class LocalProvider:
+    model = "quickstart-model"
+    model_role = "fast"
+
+    def complete_chat(self, messages, **_kwargs):
+        question = str(messages[-1].get("content") or "")
+        return {
+            "message": {
+                "role": "assistant",
+                "content": f"DeepKeel received: {question}",
+            },
+            "finish_reason": "stop",
+            "model": self.model,
+        }
+
+
+harness = AgentHarness.create(provider=LocalProvider())
+result = harness.run("Is the runtime ready?", user_id="quickstart-user")
 print(result.final_answer.markdown)
 ```
 
-异步 Host 使用同一套执行语义：
+在其他仓库中接入时，可直接从不可变标签安装稳定版 `4.1.0`：
 
-```python
-result = await runtime.arun(request, provider=model_provider)
-
-async for event in runtime.astream(request, provider=model_provider):
-    if event.event_type == "answer.delta":
-        publish(event.payload["delta"])
+```bash
+pip install "deepkeel @ git+https://github.com/bufeibufei/deepkeel.git@v4.1.0"
 ```
 
-`run()` 是同步边界适配器；`arun()` 是规范的异步执行入口。两者不会维护两套
-Agent 逻辑。
+生产 Host 应注入持久化 `RuntimePorts`，并通过
+`HarnessRuntimeBuilder(profile="production").build_production()` 完成可执行门禁。
+请求响应使用 `arun()`，实时事件使用 `astream()`。
 
-## 运行契约
+## 整体架构
 
-`RuntimeRequest` 提供问题、输入部件、运行身份、`RuntimeScope`、短上下文、
-Skill 激活和模型策略。`RuntimeResult` 返回最终状态、答案、Observation、
-Artifact、引用、诊断、检查点、事件和稳定的 `ui_state`。
-
-运行事件使用带 `run_id`、`turn_id`、序号和游标的类型化 Envelope。持久事件
-可通过 Event Journal 重放；`answer.delta` 等临时事件用于实时呈现，不作为恢复
-事实来源。
-
-`RuntimeScope` 是租户、命名空间和用户的统一所有权边界。若同时传入 Scope 和
-标量身份字段，二者必须一致；Core 会拒绝冲突身份，避免跨租户状态串用。
-
-## 异步与流式
-
-网络型存储应直接实现以下原生异步端口：
-
-- `AsyncRuntimeStateStore`
-- `AsyncDurableCheckpointStore`
-- `AsyncRuntimeEventJournal`
-- `AsyncRunLeaseStore`
-- `AsyncTraceStore`
-- `AsyncMemoryPort` 与 `AsyncMemoryRecallPolicy`
-- `AsyncToolExecutionStore`
-- `AsyncDelegationExecutor` 与 `AsyncDelegationDispatcher`
-
-Adapter SDK 提供的 `Async*Adapter` 使用线程卸载，只适合明确线程安全的同步
-实现。生产数据库驱动应实现原生异步协议，不应把线程绑定的 ORM Session 交给
-线程池。
-
-`astream()` 使用有界队列和有界同循环 backlog。连续文本增量可以合并但不会
-丢字，因此慢消费者不会造成无限任务堆积。消费者断开时，Runtime 会请求协作式
-取消，并在配置的确认超时后终止后台任务。
-
-## 持久化、恢复与长任务
-
-生产 Host 应提供以下能力：
-
-- `RuntimeStateStore` 保存权威运行投影和可移植 checkpoint。
-- LangGraph Checkpointer 保存图内部状态。
-- `RuntimeEventJournal` 保存可重放事件。
-- `RunLeaseStore` 提供单所有者租约和 fencing token。
-- `ModelInvocationStore` 与 `ToolExecutionStore` 提供副作用幂等。
-- `RunControl` 提供取消、恢复和操作控制。
-
-恢复时先读取用户 Scope 下的权威状态，再获取租约，从 checkpoint 继续，并重放
-已经结算的模型或工具调用。Runtime 会先原子提交终态，再清理兼容 checkpoint，
-并把清理结果写入可重放的持久事件；因此终态提交失败时仍保留恢复点，运维人员也
-能够追踪 checkpoint 删除失败等诊断。该清理事件仅用于重放和调试，不进入实时
-消息流，因此面向用户的终态事件仍然是本轮最后一个流式事件。
-
-Capability Pack 的安装、启用、禁用、升级和回滚通过不可变
-`RuntimeGeneration` 与运行实例解耦。旧任务可以继续使用启动时捕获的代际，新任务
-使用新代际。
-
-## Capability Pack
-
-能力包使用 Manifest-first V1 契约，声明版本、Core 约束、工具、Skill、Artifact、
-Handoff、MCP 与 SubAgent。安装过程是原子的：任一注册失败都会反向清理本轮已经
-注册的资源。
-
-```python
-from deepkeel.extension_sdk import CapabilityPackSpec
-
-class InventoryPack:
-    spec = CapabilityPackSpec(
-        package_id="example.inventory",
-        package_version="1.0.0",
-        declared_tools=("inventory.lookup",),
-        declared_skills=("inventory-assistant",),
-        declared_artifact_types=("inventory_record",),
-    )
-
-    def install(self, context):
-        context.register_tool(tool_spec, lookup_handler)
-        context.register_skill("inventory-assistant", skill_manifest)
-        context.register_artifact_type(artifact_type_spec)
-        return contribution
+```mermaid
+flowchart LR
+    User[用户或客户端] --> Host[产品 Host]
+    Host --> Request[RuntimeRequest]
+    Ports[RuntimePorts<br/>数据库、策略、预算、遥测] --> Core
+    Packs[Capability Packages<br/>Skills、工具、Artifacts] --> Generation[不可变 RuntimeGeneration]
+    Generation --> Core[DeepKeel Core Runtime]
+    Request --> Core
+    Core --> Model[模型 Provider]
+    Core --> Gateway[受治理工具网关]
+    Gateway --> Native[原生工具]
+    Gateway --> MCP[MCP 服务]
+    Core --> Agents[有界 SubAgents]
+    Core --> Output[RuntimeResult<br/>事件、Artifacts、UI 状态]
+    Output --> Host
 ```
 
-完整契约与发布门禁见
-[Capability Package V1](docs/capability-package-v1.md)。
+三层边界是有意设计的：
 
-## 工具、Skill 与模型
+| 层级 | 负责 | 不负责 |
+| --- | --- | --- |
+| **Host** | HTTP/SSE、认证、租户、队列、持久化基础设施、模型密钥、产品策略、UI | Agent Loop 语义或领域包内部实现 |
+| **DeepKeel Core** | ReAct 生命周期、上下文规划、模型/工具执行、中断恢复、策略/预算门禁、事件、Artifact、诊断 | 产品路由、ORM 模型、业务提示词或页面 |
+| **Capability Package** | 领域 Skill、工具、Artifact Schema、Handoff、上下文贡献、MCP 与专家定义 | Host 密钥、传输层、Core 私有状态或无限制基础设施访问 |
 
-Skill 约束任务上下文、允许工具、预算和输出方式，但工具能力不依赖硬编码业务
-路由。渐进式工具披露可以先向模型暴露目录，再按需加载完整 Schema，降低上下文
-成本。
+LangGraph 是内置的 Checkpoint-aware 图执行引擎。DeepKeel 将它封装在
+`TurnExecutionEngine` 之后，Host 与 Capability Package 都不依赖 LangGraph 的
+State 或 Command 类型。选择原因和代价见[架构决策](docs/design-decisions.md)。
 
-模型路由按步骤执行，可根据角色、上下文窗口、结构化输出要求、健康状态、失败
-策略和预算选择 Provider。模型 Provider、路由策略和健康存储均通过公开端口注入，
-Capability Pack 不绑定具体云厂商。
+## 一次运行如何完成
 
-复杂任务可选择启用同一 ReAct 图内的有界 Plan & Execute。Host 通过
-`RuntimePorts(planning_enabled=True)` 安装内部计划控制工具，Skill 再使用
-`planning_policy` 声明 `disabled`、`allowed`、`preferred` 或 `required`。
-简单对话仍直接执行；复杂计划中的工具、Workflow 与 SubAgent 仍经过原有权限、
-预算、幂等、Checkpoint 和事件边界，不会形成第二套运行时。详细契约见
-[执行计划](docs/execution-planning.md)。
+```mermaid
+sequenceDiagram
+    participant H as Host
+    participant C as DeepKeel Core
+    participant M as Model
+    participant T as Tool 或 SubAgent
 
-## 上下文与记忆
-
-Core 提供 L1/L2/L3 上下文规划、token 预算、原子消息组保护、确定性压缩和工作
-checkpoint。当前用户输入、工具调用与工具结果不会被拆散或静默截断。
-
-Memory SDK 定义记忆候选、主题、权威性和读取协议；业务事实的提取、审批和持久化
-策略由 Host 或 Capability Pack 决定。Core 不把任意助手文本自动视为长期事实。
-
-## MCP、SubAgent 与安全
-
-本地 stdio 和远程 Streamable HTTP MCP 都进入同一受治理工具网关。现代协议路径
-支持无状态发现、任务生命周期、安全参数 Header 映射和远端 `outputSchema` 校验。
-MCP 工具不能绕过 ToolSpec、权限、预算、超时、审计和密钥边界。
-
-SubAgent 编排是有界的，受并发、深度、预算和父运行取消控制。Handoff 使用类型化
-待办动作和恢复契约，不依赖前端猜测状态。
-
-可选的实验性 `deepkeel.a2a_sdk` 将远端 A2A 1.0 Agent 映射为普通 SubAgent。
-父运行仍然拥有权限、预算、Checkpoint、取消、Artifact 和最终答案，不会把治理
-责任交给远端 Agent。
-
-密钥通过 `SecretProvider` 获取，不进入 Prompt、公开事件或 Artifact。生产 Host
-还应在 API 边界执行租户授权，并对外部写操作配置确认策略。
-
-远程 Streamable HTTP MCP 默认拒绝私网、回环和链路本地地址，每次请求前重新校验
-DNS，禁止重定向和环境代理凭据，并限制请求与响应体大小。生产环境应配置主机名
-白名单；只有受控的内部 MCP 才显式开启私网访问。
-
-## 生产就绪门禁
-
-`build()` 适合本地开发和测试。生产 Worker 应使用可执行门禁：
-
-```python
-builder = HarnessRuntimeBuilder(profile="production").with_ports(production_ports)
-report = builder.production_readiness()
-runtime = builder.build_production()
+    H->>C: RuntimeRequest + RuntimeScope + EntryPoint
+    C->>C: 解析 CapabilityView，规划 L1/L2/L3 上下文
+    C->>M: Prompt 与有界能力摘要
+    M-->>C: Answer Delta 或 Tool Call
+    alt 受治理工具调用
+        C->>C: 策略、预算、Schema、幂等、Fence
+        C->>T: 携带 ToolExecutionContext 执行
+        T-->>C: Observation、Artifact 或 PendingAction
+        C->>M: 携带压缩后的 Observation 继续推理
+    else 用户操作或异步 Handoff
+        C-->>H: 持久化 PendingAction 与可恢复状态
+        H->>C: 携带类型化 Observation 恢复
+    end
+    C-->>H: FinalAnswer + RuntimeResult + 终态事件
 ```
 
-门禁会检查必需 Host 端口、同步/异步端口歧义、已知 `InMemory*`/`Noop*` 实现和
-异步路径中的阻塞适配器。错误会阻止构建，告警会保留在报告中。自定义数据库
-适配器仍需运行 `deepkeel.adapter_sdk` 中对应的 conformance verifier。
+有序 Runtime Event Envelope 是事实源。SSE 消息、OpenTelemetry Span、紧凑 Trace
+和前端状态都是同一事件流的投影。恢复时读取持久化状态与 Observation，不会从
+Assistant 文本猜测执行进度。
 
-适配器可声明 `AdapterCapabilities`，门禁会校验持久化、跨进程共享、
-`RuntimeScope`、事务和取消安全能力。模型接入应运行
-`certify_model_provider()`；可选在线探针会实际验证文本、流式、原生工具调用和
-JSON Schema，而不是只相信模型名称或静态配置。
+## 核心能力
 
-详细部署清单见 [生产就绪文档](docs/production-readiness.md)。
+- **一套规范循环：** `run()`、`arun()` 和 `astream()` 共享同一异步状态机。
+- **持久化生命周期：** 中断、用户确认、异步任务、取消、恢复、Lease 接管和终态
+  结算都使用类型化状态。
+- **受治理执行：** 策略、预算、模型健康、Guardrail、Sandbox、Workspace、Secret、
+  幂等和 Fencing 都是显式 Port 或契约。
+- **大规模能力治理：** Agent EntryPoint、Skill/Tool 混合发现、渐进式披露与不可变
+  Runtime Generation 共同约束模型可见范围。
+- **上下文工程：** L1 当前上下文、L2 工作检查点、L3 长期召回按 Token 预算规划，
+  并保留来源关联。
+- **结构化产品输出：** `Observation`、`Artifact`、`PendingAction`、Reference、
+  `FinalAnswer` 和 `RuntimeUIState` 避免前端解析自然语言。
+- **互操作：** 原生工具与 MCP 共享受治理网关；SubAgent 与可选 A2A 适配仍受父运行
+  的权限、预算和取消控制。
+- **运行运维：** Run 查询、取消、恢复命令、类型化失败诊断、OTel 投影和确定性评测。
 
-随包提供的 PostgreSQL 适配器使用带校验和、事务级 advisory lock 的前向迁移。
-部署前可通过 `database.migration_status()` 和
-`database.migration_registry().plan()` 检查版本；迁移历史或物理列发生漂移、以及
-自动降级请求都会 fail-closed。
+## Capability Package
 
-## 可观测性与评测
+Capability Package 是领域能力复用单元。Manifest 声明身份、版本、依赖、权限、工具、
+Skill、Artifact、预算与 EntryPoint；`install(CapabilityInstallContext)` 将实现贡献到
+新的不可变 `RuntimeGeneration`，不能直接访问 Host ORM 或 Core 私有状态。
 
-Runtime 输出类型化 Trace、事件、失败分类、路由选择、工具生命周期、预算和恢复
-诊断。公开记录不会包含完整 Prompt 或敏感工具参数。
+可以从可运行的 [inventory package](examples/inventory_pack) 开始：
 
-`EvalSuiteRunner` 用于确定性回归，包括状态、工具选择、Artifact 合约、错误码、
-步骤预算和 Trace 顺序。业务答案质量由 Capability Pack 自己的数据集和评测器
-负责；DeepEval 等语义评分器可以消费同一个 `RuntimeResult` 与 Trace。
+```bash
+deepkeel pack init ./my_package --package-id com.example.inventory
+deepkeel pack validate ./my_package/manifest.json
+```
+
+生产能力包应遵循 Manifest-first 的
+[Capability Package V1 契约](docs/capability-package-v1.md)。安装、启用、禁用、升级、
+回滚都会形成新世代；已开始的 Run 继续使用启动时捕获的世代。代码层的
+`CapabilityPackSpec` 与持久化 Manifest 会作为同一个贡献契约接受校验。
+
+## 真实 Host 验证
+
+DeepKeel 从 **窥天鉴地** 中抽取而来。该对话式应用由一个主 Agent 协调确定性领域
+工具、知识检索、长报告生成、用户 Handoff、专家 Agent 和移动端 Artifact 页面，
+覆盖了小型 Demo 通常不会遇到的边界：
+
+- 普通对话与 SSE 流式输出共享同一个 Run Identity；
+- 八字精批、六爻等长任务可跨 Worker 挂起与恢复；
+- 领域结果以类型化 Artifact 返回，不把前端组件编码进模型文本；
+- 大型能力目录经过 EntryPoint、策略、Skill 和渐进式披露逐层收窄；
+- PostgreSQL、OpenTelemetry、Tempo、Loki、Prometheus 与 Grafana 在 Core 外提供
+  持久化和运维诊断。
+
+完整映射见脱敏后的[窥天鉴地案例](docs/case-study-kuitianjiandi.md)。
 
 ## 公开 SDK
 
-- `deepkeel.runtime_sdk`：请求、结果、事件、运行与状态契约。
-- `deepkeel.extension_sdk`：工具、Skill、Artifact 和 Capability Pack。
-- `deepkeel.adapter_sdk`：模型、存储、策略、预算、租约和生产门禁。
-- `deepkeel.discovery_sdk`：与模型供应商无关的 Skill/Tool 混合发现与排序。
-- `deepkeel.memory_sdk`：记忆端口与主题契约。
-- `deepkeel.orchestration_sdk`：有界执行计划、SubAgent 与多方论证编排。
-- `deepkeel.mcp_sdk`：MCP Client、传输和工具映射。
-- `deepkeel.a2a_sdk`：实验性的 A2A 远程专家 Agent 适配。
+| SDK | 使用场景 |
+| --- | --- |
+| `deepkeel.runtime_sdk` | 请求、结果、Run 状态、事件、执行、查询、取消与恢复 |
+| `deepkeel.extension_sdk` | Capability Package、Skill、工具、Artifact、Handoff、Hook 与信任策略 |
+| `deepkeel.adapter_sdk` | Host Port、模型认证、Runtime 装配与适配器契约测试 |
+| `deepkeel.discovery_sdk` | 与 Provider 无关的 Skill/Tool 混合召回与重排 |
+| `deepkeel.memory_sdk` | 产品中立的 Memory 记录、召回策略与存储 Port |
+| `deepkeel.mcp_sdk` | 受治理的 MCP Client、传输、发现与工具投影 |
+| `deepkeel.orchestration_sdk` | 有界 Plan、SubAgent 与多方论证契约 |
+| `deepkeel.a2a_sdk` | 实验性的 A2A 远程专家互操作 |
 
-当前 Capability Pack 持久协议仍为 `harness-core-v3`，公开 SDK 版本为 `4.1.0`。
-公开符号清单位于 `deepkeel.public_api`，测试会冻结 API 指纹；任何变更都需要显式
-兼容性审阅。
+稳定公开 SDK 版本为 `4.1.0`，持久化 Capability Package 契约为
+`harness-core-v3`。公开符号冻结在 `deepkeel.public_api`，由 API 指纹门禁保护。
 
-## 开发与发布
+## 示例
+
+| 示例 | 验证内容 |
+| --- | --- |
+| [quickstart](examples/quickstart) | 使用确定性 Provider 的离线 Golden Path |
+| [inventory_pack](examples/inventory_pack) | 产品中立 Capability Package 与受治理工具 |
+| [durable_approval](examples/durable_approval) | 类型化中断、审批与恢复 |
+| [production_worker](examples/production_worker) | Production Profile、PostgreSQL Port、迁移与可选 OTel |
+| [reference_host](examples/reference_host) | Core 外部的 HTTP、SSE、Run 查询与取消 |
+
+## 验证与发布证据
+
+DeepKeel 不把“单元测试通过”视为完整生产证明。发布链路将 PR 快速门禁、完整回归
+和发布门禁分开执行：
+
+- Ruff、mypy、类型债务、API 指纹、导入环和结构复杂度约束；
+- 确定性 Runtime 测试与 80% 包覆盖率下限；
+- Adapter Conformance、PostgreSQL 覆盖率、迁移与多 Worker 测试；
+- Checkpoint Authority、回滚、恢复与取消的故障注入；
+- 300 请求、32 Worker 的确定性 Core 并发基线；
+- 干净 Wheel/sdist 安装、Host Compatibility、SBOM、Checksum 与构建来源证明。
+
+[验证矩阵](docs/verification-matrix.md)列出了每个门禁的命令、所属 Workflow 和它要
+保护的系统保证。
 
 ```powershell
 uv sync --extra test
-uv run ruff check src tests verification
+uv run ruff check src tests verification examples
 uv run mypy src/deepkeel
 uv run pytest -q --cov=deepkeel --cov-fail-under=80
-uv build --clear
-uv run python verification/verify_distributions.py dist
 ```
 
-PR 与主分支 CI 负责跨平台正确性。固定 p95 阈值由独立 Linux 性能基线工作流
-执行，避免把 Windows 调度抖动误判为功能回归。
+本地执行完整发布验证：
 
-贡献规范、安全策略、支持范围和版本历史分别见
-[CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、
+```powershell
+.\scripts\verify.ps1
+```
+
+## 文档导航
+
+**理解 Runtime**
+
+- [整体架构](docs/architecture.md)
+- [运行生命周期](docs/runtime-lifecycle.md)
+- [持久化执行](docs/durable-execution.md)
+- [上下文管理](docs/context-management.md)
+- [架构决策](docs/design-decisions.md)
+
+**扩展 Runtime**
+
+- [Capability Package V1](docs/capability-package-v1.md)
+- [Agent 入口与专家作用域](docs/agent-entrypoints.md)
+- [能力目录发现](docs/catalog-discovery.md)
+- [模型 Provider](docs/model-provider.md)
+- [MCP 与 A2A 互操作](docs/interoperability.md)
+
+**运维与发布**
+
+- [生产就绪](docs/production-readiness.md)
+- [PostgreSQL 参考适配](docs/postgresql-reference.md)
+- [可观测性](docs/observability.md)
+- [安全与信任](docs/security-and-trust.md)
+- [Capability Package 信任](docs/capability-trust.md)
+- [供应链治理](docs/supply-chain.md)
+- [发布流程](docs/releasing.md)
+- [下游 Host 兼容门禁](docs/host-compatibility.md)
+
+**兼容性**
+
+- [API 稳定性](docs/api-stability.md)
+- [迁移到 4.1](docs/migrating-to-4.1.md)
+- [执行计划](docs/execution-planning.md)
+
+## 项目状态
+
+DeepKeel `4.1.0` 提供稳定的类型化 SDK，以及带可执行 Readiness Check 的
+Production Profile。内置 `InMemory*` Adapter 明确只用于测试和单进程开发；生产
+部署必须由 Host 提供持久化基础设施，并通过对应的 Conformance Suite。
+
+设计讨论请使用 GitHub Discussions，可复现缺陷请提交到
+[Issues](https://github.com/bufeibufei/deepkeel/issues)。参与开发、安全披露、支持范围
+和版本历史见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、
 [SUPPORT.md](SUPPORT.md) 与 [CHANGELOG.md](CHANGELOG.md)。
 
 DeepKeel 使用 [Apache License 2.0](LICENSE)。
