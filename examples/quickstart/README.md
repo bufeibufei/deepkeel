@@ -1,9 +1,10 @@
 # Quickstart
 
-Install DeepKeel and run an offline deterministic provider:
+From a cloned DeepKeel repository, install the package and run the offline
+deterministic provider:
 
 ```bash
-pip install --pre deepkeel
+pip install -e .
 python examples/quickstart/main.py
 ```
 

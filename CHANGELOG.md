@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Rebuild the bilingual project entry documentation around a runnable offline
+  quickstart, architecture and lifecycle diagrams, a sanitized downstream Host
+  case study, explicit design decisions, and an executable verification matrix;
+  extend the README release contract to reject missing sections and local links.
 - Add an internal execution-engine seam around LangGraph, a compact
   `RuntimeResultSummary`, and typed event-to-telemetry projections without
   removing the v4 RuntimeResult or event contracts.
