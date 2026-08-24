@@ -1,5 +1,7 @@
 # Capability Package trust model
 
+[English](capability-trust.md) | [简体中文](capability-trust.zh-CN.md)
+
 A Capability Manifest declares runtime permissions; it is not a Python sandbox.
 Importing a Python Capability Pack executes code in the Host process. DeepKeel
 therefore distinguishes two deployment modes:

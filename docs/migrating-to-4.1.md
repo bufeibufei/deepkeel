@@ -1,5 +1,7 @@
 # Migrating to DeepKeel 4.1
 
+[English](migrating-to-4.1.md) | [简体中文](migrating-to-4.1.zh-CN.md)
+
 DeepKeel 4.1 is an additive GA release. The package and public SDK version moves
 to `4.1.0`, while the persisted Capability Pack and runtime contract remains
 `harness-core-v3`. Existing durable run state does not require a schema rewrite.

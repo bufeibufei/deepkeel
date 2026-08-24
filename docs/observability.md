@@ -1,5 +1,7 @@
 # Observability
 
+[English](observability.md) | [简体中文](observability.zh-CN.md)
+
 DeepKeel emits typed runtime events and structured diagnostics for model routes,
 tool policies, budgets, context manifests, capability generations, recovery,
 SubAgent lineage and terminal settlement.

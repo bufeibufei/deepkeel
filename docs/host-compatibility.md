@@ -1,5 +1,7 @@
 # Downstream Host compatibility
 
+[English](host-compatibility.md) | [简体中文](host-compatibility.zh-CN.md)
+
 DeepKeel releases are not complete when Core tests pass in isolation. A Host
 should keep a small public-SDK-only contract suite covering its real provider,
 Capability Packages, persistence adapters, SSE projection, cancellation and

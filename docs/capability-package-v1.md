@@ -1,5 +1,7 @@
 # Capability Package V1
 
+[English](capability-package-v1.md) | [简体中文](capability-package-v1.zh-CN.md)
+
 ## Developer workflow
 
 Use `deepkeel pack init` to create a manifest-first skeleton, `pack inspect` to

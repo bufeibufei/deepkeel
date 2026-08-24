@@ -1,5 +1,7 @@
 # Production Readiness
 
+[English](production-readiness.md) | [简体中文](production-readiness.zh-CN.md)
+
 DeepKeel owns execution semantics. A production Host owns durable
 infrastructure, identity, deployment, and operator-facing APIs.
 

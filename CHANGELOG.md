@@ -1,7 +1,12 @@
 # Changelog
 
+[English](CHANGELOG.md) | [简体中文](CHANGELOG.zh-CN.md)
+
 ## Unreleased
 
+- Add Simplified Chinese counterparts and reciprocal language navigation for
+  every document and example linked from the project READMEs; make missing or
+  unlinked translations a release-contract failure.
 - Rebuild the bilingual project entry documentation around a runnable offline
   quickstart, architecture and lifecycle diagrams, explicit design decisions,
   and an executable verification matrix;

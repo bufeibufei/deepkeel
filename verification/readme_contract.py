@@ -20,20 +20,35 @@ SHARED_CONTRACT_MARKERS = (
     "build_production()",
     "arun()",
     "astream()",
-    "docs/architecture.md",
-    "docs/postgresql-reference.md",
-    "docs/production-readiness.md",
-    "docs/catalog-discovery.md",
-    "docs/releasing.md",
     "deepkeel.runtime_sdk",
     "deepkeel.extension_sdk",
     "deepkeel.discovery_sdk",
     "deepkeel.adapter_sdk",
     "deepkeel.a2a_sdk",
-    "docs/security-and-trust.md",
-    "docs/interoperability.md",
-    "docs/supply-chain.md",
 )
+
+README_DOCUMENT_MARKERS = {
+    "README.md": (
+        "docs/architecture.md",
+        "docs/postgresql-reference.md",
+        "docs/production-readiness.md",
+        "docs/catalog-discovery.md",
+        "docs/releasing.md",
+        "docs/security-and-trust.md",
+        "docs/interoperability.md",
+        "docs/supply-chain.md",
+    ),
+    "README.zh-CN.md": (
+        "docs/architecture.zh-CN.md",
+        "docs/postgresql-reference.zh-CN.md",
+        "docs/production-readiness.zh-CN.md",
+        "docs/catalog-discovery.zh-CN.md",
+        "docs/releasing.zh-CN.md",
+        "docs/security-and-trust.zh-CN.md",
+        "docs/interoperability.zh-CN.md",
+        "docs/supply-chain.zh-CN.md",
+    ),
+}
 
 README_SECTION_MARKERS = {
     "README.md": (
@@ -80,6 +95,9 @@ def verify_readme_contract(repo_root: Path) -> None:
         for marker in (install_command, *SHARED_CONTRACT_MARKERS):
             if marker not in content:
                 errors.append(f"{name} is missing {marker!r}")
+        for marker in README_DOCUMENT_MARKERS[name]:
+            if marker not in content:
+                errors.append(f"{name} is missing {marker!r}")
         for heading in README_SECTION_MARKERS[name]:
             if heading not in content:
                 errors.append(f"{name} is missing section {heading!r}")
@@ -92,6 +110,13 @@ def verify_readme_contract(repo_root: Path) -> None:
         errors.append(f"README.md is missing package version {version}")
     if version not in documents["README.zh-CN.md"]:
         errors.append(f"README.zh-CN.md is missing package version {version}")
+    errors.extend(
+        _bilingual_document_errors(
+            root,
+            documents["README.md"],
+            documents["README.zh-CN.md"],
+        )
+    )
     for relative_path in SUPPORTING_DOCUMENTS:
         document = root / relative_path
         if not document.is_file():
@@ -106,6 +131,78 @@ def verify_readme_contract(repo_root: Path) -> None:
         )
     if errors:
         raise ValueError("README contract failed:\n- " + "\n- ".join(errors))
+
+
+def _bilingual_document_errors(
+    root: Path,
+    english_readme: str,
+    chinese_readme: str,
+) -> list[str]:
+    errors: list[str] = []
+    english_documents = _local_markdown_documents(root, root / "README.md", english_readme)
+    chinese_documents = _local_markdown_documents(
+        root,
+        root / "README.zh-CN.md",
+        chinese_readme,
+    )
+    root_readmes = {(root / "README.md").resolve(), (root / "README.zh-CN.md").resolve()}
+
+    for english_document in sorted(english_documents - root_readmes):
+        chinese_document = _chinese_counterpart(english_document)
+        relative_english = english_document.relative_to(root).as_posix()
+        relative_chinese = chinese_document.relative_to(root).as_posix()
+        if not chinese_document.is_file():
+            errors.append(
+                f"README.md document {relative_english!r} is missing Chinese counterpart "
+                f"{relative_chinese!r}"
+            )
+            continue
+        if chinese_document not in chinese_documents:
+            errors.append(f"README.zh-CN.md does not link {relative_chinese!r}")
+
+        english_content = english_document.read_text(encoding="utf-8")
+        chinese_content = chinese_document.read_text(encoding="utf-8")
+        chinese_switch = f"[简体中文]({chinese_document.name})"
+        english_switch = f"[English]({english_document.name})"
+        if chinese_switch not in english_content:
+            errors.append(f"{relative_english} is missing language link {chinese_switch!r}")
+        if english_switch not in chinese_content:
+            errors.append(f"{relative_chinese} is missing language link {english_switch!r}")
+        errors.extend(_invalid_local_links(root, english_document, english_content))
+        errors.extend(_invalid_local_links(root, chinese_document, chinese_content))
+    return errors
+
+
+def _local_markdown_documents(root: Path, document: Path, content: str) -> set[Path]:
+    documents: set[Path] = set()
+    for raw_target in MARKDOWN_LINK_PATTERN.findall(content):
+        target = raw_target.strip().strip("<>")
+        if (
+            not target
+            or target.startswith("#")
+            or "://" in target
+            or target.startswith("mailto:")
+        ):
+            continue
+        path_part = unquote(target.split("#", 1)[0])
+        if not path_part:
+            continue
+        resolved = (document.parent / path_part).resolve()
+        try:
+            resolved.relative_to(root)
+        except ValueError:
+            continue
+        if resolved.is_dir():
+            resolved = resolved / "README.md"
+        if resolved.suffix.lower() == ".md" and resolved.is_file():
+            documents.add(resolved)
+    return documents
+
+
+def _chinese_counterpart(document: Path) -> Path:
+    if document.name == "README.md":
+        return document.with_name("README.zh-CN.md")
+    return document.with_name(f"{document.stem}.zh-CN{document.suffix}")
 
 
 def _invalid_local_links(root: Path, document: Path, content: str) -> list[str]:

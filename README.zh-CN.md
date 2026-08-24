@@ -31,13 +31,13 @@ DeepKeel 将这些问题收敛成 Runtime 契约，而不是散落在业务代�
 
 | 产品问题 | DeepKeel 机制 | 可验证依据 |
 | --- | --- | --- |
-| 长任务中断或迁移到其他 Worker | Canonical State、Portable Checkpoint、Graph Checkpoint、Lease 与 Fencing | [持久化执行](docs/durable-execution.md) |
-| Skill 和工具数量撑大模型上下文 | 权限优先发现、渐进式披露、有界召回与重排 | [能力目录发现](docs/catalog-discovery.md) |
-| 不同 Agent 需要不同能力范围 | 版本化 Agent EntryPoint 与会话级不可变 `CapabilityView` | [Agent 入口](docs/agent-entrypoints.md) |
-| 工具重试可能重复产生副作用 | 幂等 Claim、执行结算与 Execution Fence | [生产就绪](docs/production-readiness.md) |
-| 前端只能从文本猜测任务状态 | 类型化事件、Artifact、PendingAction 与稳定 `ui_state` 投影 | [运行生命周期](docs/runtime-lifecycle.md) |
-| 框架与单一业务深度耦合 | Runtime、Extension、Adapter、Discovery、Memory、MCP、Orchestration SDK | [整体架构](docs/architecture.md) |
-| 本地通过但接入 Host 后失败 | 候选 Wheel、Host 兼容、PostgreSQL、并发与故障注入门禁 | [验证矩阵](docs/verification-matrix.md) |
+| 长任务中断或迁移到其他 Worker | Canonical State、Portable Checkpoint、Graph Checkpoint、Lease 与 Fencing | [持久化执行](docs/durable-execution.zh-CN.md) |
+| Skill 和工具数量撑大模型上下文 | 权限优先发现、渐进式披露、有界召回与重排 | [能力目录发现](docs/catalog-discovery.zh-CN.md) |
+| 不同 Agent 需要不同能力范围 | 版本化 Agent EntryPoint 与会话级不可变 `CapabilityView` | [Agent 入口](docs/agent-entrypoints.zh-CN.md) |
+| 工具重试可能重复产生副作用 | 幂等 Claim、执行结算与 Execution Fence | [生产就绪](docs/production-readiness.zh-CN.md) |
+| 前端只能从文本猜测任务状态 | 类型化事件、Artifact、PendingAction 与稳定 `ui_state` 投影 | [运行生命周期](docs/runtime-lifecycle.zh-CN.md) |
+| 框架与单一业务深度耦合 | Runtime、Extension、Adapter、Discovery、Memory、MCP、Orchestration SDK | [整体架构](docs/architecture.zh-CN.md) |
+| 本地通过但接入 Host 后失败 | 候选 Wheel、Host 兼容、PostgreSQL、并发与故障注入门禁 | [验证矩阵](docs/verification-matrix.zh-CN.md) |
 
 ## 60 秒快速开始
 
@@ -135,7 +135,7 @@ flowchart LR
 
 LangGraph 是内置的 Checkpoint-aware 图执行引擎。DeepKeel 将它封装在
 `TurnExecutionEngine` 之后，Host 与 Capability Package 都不依赖 LangGraph 的
-State 或 Command 类型。选择原因和代价见[架构决策](docs/design-decisions.md)。
+State 或 Command 类型。选择原因和代价见[架构决策](docs/design-decisions.zh-CN.md)。
 
 ## 一次运行如何完成
 
@@ -189,7 +189,7 @@ Capability Package 是领域能力复用单元。Manifest 声明身份、版本�
 Skill、Artifact、预算与 EntryPoint；`install(CapabilityInstallContext)` 将实现贡献到
 新的不可变 `RuntimeGeneration`，不能直接访问 Host ORM 或 Core 私有状态。
 
-可以从可运行的 [inventory package](examples/inventory_pack) 开始：
+可以从可运行的 [inventory package](examples/inventory_pack/README.zh-CN.md) 开始：
 
 ```bash
 deepkeel pack init ./my_package --package-id com.example.inventory
@@ -197,7 +197,7 @@ deepkeel pack validate ./my_package/manifest.json
 ```
 
 生产能力包应遵循 Manifest-first 的
-[Capability Package V1 契约](docs/capability-package-v1.md)。安装、启用、禁用、升级、
+[Capability Package V1 契约](docs/capability-package-v1.zh-CN.md)。安装、启用、禁用、升级、
 回滚都会形成新世代；已开始的 Run 继续使用启动时捕获的世代。代码层的
 `CapabilityPackSpec` 与持久化 Manifest 会作为同一个贡献契约接受校验。
 
@@ -221,11 +221,11 @@ deepkeel pack validate ./my_package/manifest.json
 
 | 示例 | 验证内容 |
 | --- | --- |
-| [quickstart](examples/quickstart) | 使用确定性 Provider 的离线 Golden Path |
-| [inventory_pack](examples/inventory_pack) | 产品中立 Capability Package 与受治理工具 |
-| [durable_approval](examples/durable_approval) | 类型化中断、审批与恢复 |
-| [production_worker](examples/production_worker) | Production Profile、PostgreSQL Port、迁移与可选 OTel |
-| [reference_host](examples/reference_host) | Core 外部的 HTTP、SSE、Run 查询与取消 |
+| [quickstart](examples/quickstart/README.zh-CN.md) | 使用确定性 Provider 的离线 Golden Path |
+| [inventory_pack](examples/inventory_pack/README.zh-CN.md) | 产品中立 Capability Package 与受治理工具 |
+| [durable_approval](examples/durable_approval/README.zh-CN.md) | 类型化中断、审批与恢复 |
+| [production_worker](examples/production_worker/README.zh-CN.md) | Production Profile、PostgreSQL Port、迁移与可选 OTel |
+| [reference_host](examples/reference_host/README.zh-CN.md) | Core 外部的 HTTP、SSE、Run 查询与取消 |
 
 ## 验证与发布证据
 
@@ -239,7 +239,7 @@ DeepKeel 不把“单元测试通过”视为完整生产证明。发布链路�
 - 300 请求、32 Worker 的确定性 Core 并发基线；
 - 干净 Wheel/sdist 安装、Host Compatibility、SBOM、Checksum 与构建来源证明。
 
-[验证矩阵](docs/verification-matrix.md)列出了每个门禁的命令、所属 Workflow 和它要
+[验证矩阵](docs/verification-matrix.zh-CN.md)列出了每个门禁的命令、所属 Workflow 和它要
 保护的系统保证。
 
 ```powershell
@@ -257,38 +257,41 @@ uv run pytest -q --cov=deepkeel --cov-fail-under=80
 
 ## 文档导航
 
+下列文档和可运行示例均提供独立简体中文版本；进入任一文档后，可通过顶部语言入口
+在英文与中文之间切换。
+
 **理解 Runtime**
 
-- [整体架构](docs/architecture.md)
-- [运行生命周期](docs/runtime-lifecycle.md)
-- [持久化执行](docs/durable-execution.md)
-- [上下文管理](docs/context-management.md)
-- [架构决策](docs/design-decisions.md)
+- [整体架构](docs/architecture.zh-CN.md)
+- [运行生命周期](docs/runtime-lifecycle.zh-CN.md)
+- [持久化执行](docs/durable-execution.zh-CN.md)
+- [上下文管理](docs/context-management.zh-CN.md)
+- [架构决策](docs/design-decisions.zh-CN.md)
 
 **扩展 Runtime**
 
-- [Capability Package V1](docs/capability-package-v1.md)
-- [Agent 入口与专家作用域](docs/agent-entrypoints.md)
-- [能力目录发现](docs/catalog-discovery.md)
-- [模型 Provider](docs/model-provider.md)
-- [MCP 与 A2A 互操作](docs/interoperability.md)
+- [Capability Package V1](docs/capability-package-v1.zh-CN.md)
+- [Agent 入口与专家作用域](docs/agent-entrypoints.zh-CN.md)
+- [能力目录发现](docs/catalog-discovery.zh-CN.md)
+- [模型 Provider](docs/model-provider.zh-CN.md)
+- [MCP 与 A2A 互操作](docs/interoperability.zh-CN.md)
 
 **运维与发布**
 
-- [生产就绪](docs/production-readiness.md)
-- [PostgreSQL 参考适配](docs/postgresql-reference.md)
-- [可观测性](docs/observability.md)
-- [安全与信任](docs/security-and-trust.md)
-- [Capability Package 信任](docs/capability-trust.md)
-- [供应链治理](docs/supply-chain.md)
-- [发布流程](docs/releasing.md)
-- [下游 Host 兼容门禁](docs/host-compatibility.md)
+- [生产就绪](docs/production-readiness.zh-CN.md)
+- [PostgreSQL 参考适配](docs/postgresql-reference.zh-CN.md)
+- [可观测性](docs/observability.zh-CN.md)
+- [安全与信任](docs/security-and-trust.zh-CN.md)
+- [Capability Package 信任](docs/capability-trust.zh-CN.md)
+- [供应链治理](docs/supply-chain.zh-CN.md)
+- [发布流程](docs/releasing.zh-CN.md)
+- [下游 Host 兼容门禁](docs/host-compatibility.zh-CN.md)
 
 **兼容性**
 
-- [API 稳定性](docs/api-stability.md)
-- [迁移到 4.1](docs/migrating-to-4.1.md)
-- [执行计划](docs/execution-planning.md)
+- [API 稳定性](docs/api-stability.zh-CN.md)
+- [迁移到 4.1](docs/migrating-to-4.1.zh-CN.md)
+- [执行计划](docs/execution-planning.zh-CN.md)
 
 ## 项目状态
 
@@ -298,7 +301,7 @@ Production Profile。内置 `InMemory*` Adapter 明确只用于测试和单进�
 
 设计讨论请使用 GitHub Discussions，可复现缺陷请提交到
 [Issues](https://github.com/bufeibufei/deepkeel/issues)。参与开发、安全披露、支持范围
-和版本历史见 [CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)、
-[SUPPORT.md](SUPPORT.md) 与 [CHANGELOG.md](CHANGELOG.md)。
+和版本历史见 [参与贡献](CONTRIBUTING.zh-CN.md)、[安全策略](SECURITY.zh-CN.md)、
+[支持范围](SUPPORT.zh-CN.md)与[版本历史](CHANGELOG.zh-CN.md)。
 
 DeepKeel 使用 [Apache License 2.0](LICENSE)。

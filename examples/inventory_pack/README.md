@@ -1,5 +1,7 @@
 # Inventory Capability Package
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This package is intentionally unrelated to the reference Host. It proves that
 a business package can be installed through the public Extension SDK without
 modifying Core.

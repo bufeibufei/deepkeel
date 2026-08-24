@@ -1,5 +1,7 @@
 # Production worker composition
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This example assembles DeepKeel's production profile using only public SDKs.
 The packaged PostgreSQL bundle owns canonical state, durable checkpoints,
 events, leases, model/tool idempotency, governance and traces. The Host still

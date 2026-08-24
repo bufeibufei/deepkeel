@@ -272,6 +272,9 @@ Run the complete local release verifier with:
 
 ## Documentation
 
+Every document and runnable example listed below has a Simplified Chinese
+counterpart. Use the language switch at the top of either document.
+
 **Understand the runtime**
 
 - [Architecture](docs/architecture.md)

@@ -1,5 +1,7 @@
 # PostgreSQL adapters
 
+[English](postgresql-reference.md) | [简体中文](postgresql-reference.zh-CN.md)
+
 DeepKeel does not require PostgreSQL, an ORM, or a particular queue. Production
 Hosts provide infrastructure through Ports. Install `deepkeel[postgres]` and
 import the supported adapters from `deepkeel.contrib.postgres`. The adapters

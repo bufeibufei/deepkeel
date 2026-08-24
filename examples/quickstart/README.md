@@ -1,5 +1,7 @@
 # Quickstart
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 From a cloned DeepKeel repository, install the package and run the offline
 deterministic provider:
 

@@ -1,5 +1,7 @@
 # Security and trust
 
+[English](security-and-trust.md) | [简体中文](security-and-trust.zh-CN.md)
+
 DeepKeel treats user input, model output, tool arguments, tool results, MCP
 responses, A2A payloads, checkpoints, and Capability Package metadata as
 untrusted data. Security policy is enforced by typed runtime boundaries rather

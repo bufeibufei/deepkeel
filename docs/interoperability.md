@@ -1,5 +1,7 @@
 # MCP and A2A interoperability
 
+[English](interoperability.md) | [简体中文](interoperability.zh-CN.md)
+
 DeepKeel keeps interoperability protocols outside the runtime kernel. MCP tools
 become governed `ToolSpec` entries, while A2A remote Agents become bounded
 `SubAgentSpec` entries. Neither protocol can bypass the parent run's policy,

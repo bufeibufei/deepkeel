@@ -1,5 +1,7 @@
 # Supply-chain controls
 
+[English](supply-chain.md) | [简体中文](supply-chain.zh-CN.md)
+
 DeepKeel releases are built from immutable semantic-version tags. The release
 workflow verifies the tag against `pyproject.toml` and `deepkeel.version`, runs
 the production regression matrix, builds wheel and sdist once, verifies both in
@@ -14,7 +16,7 @@ Every GA release should provide:
 - a deterministic `SHA256SUMS` manifest covering every uploaded artifact;
 - GitHub build-provenance attestations for all release artifacts;
 - frozen public API and semantic-contract fingerprints;
-- synchronized English and Simplified Chinese READMEs;
+- synchronized English and Simplified Chinese READMEs and linked documentation;
 - changelog and migration notes for the tagged version;
 - successful deterministic, fault-injection, concurrency, PostgreSQL, and
   clean-install conformance gates.

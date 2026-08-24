@@ -1,5 +1,7 @@
 # Catalog discovery
 
+[English](catalog-discovery.md) | [简体中文](catalog-discovery.zh-CN.md)
+
 DeepKeel filters Skills and tools by runtime scope and policy before discovery.
 The model sees only a bounded result set; discovery adapters cannot add entries
 that were not in the permission-filtered candidate set.

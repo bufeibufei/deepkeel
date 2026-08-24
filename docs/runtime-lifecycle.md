@@ -1,5 +1,7 @@
 # Runtime lifecycle
 
+[English](runtime-lifecycle.md) | [简体中文](runtime-lifecycle.zh-CN.md)
+
 Every request has a stable run identity and moves through one canonical runtime
 loop. A run may complete, fail, be cancelled, wait for user input, wait for a
 user action, or suspend for asynchronous work.

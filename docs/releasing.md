@@ -1,5 +1,7 @@
 # Release process
 
+[English](releasing.md) | [简体中文](releasing.zh-CN.md)
+
 DeepKeel releases use an immutable Git tag, a verified wheel and
 source distribution, and synchronized English and Simplified Chinese
 documentation. `pyproject.toml`, `deepkeel.version`, README install commands,
@@ -17,7 +19,7 @@ the changelog, and the tag must identify the same version.
 
 ## Release gate
 
-1. Confirm the seven public SDKs have no duplicate symbol owners and intentionally
+1. Confirm the public SDK layers have no duplicate symbol owners and intentionally
    review any public API fingerprint change.
 2. Run Ruff, mypy, the full test suite with at least 80% statement coverage, and
    the deterministic 300-request/32-worker Core benchmark.

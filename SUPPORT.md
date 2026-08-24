@@ -1,5 +1,7 @@
 # Support
 
+[English](SUPPORT.md) | [简体中文](SUPPORT.zh-CN.md)
+
 Use GitHub Discussions for design questions and integration help. Use GitHub
 Issues for reproducible defects and accepted feature proposals. Include the
 DeepKeel version, Python version, operating system, minimal reproduction, and

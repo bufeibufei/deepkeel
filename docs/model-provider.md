@@ -1,5 +1,7 @@
 # Model providers
 
+[English](model-provider.md) | [简体中文](model-provider.zh-CN.md)
+
 Model access is a Port. Providers describe model identity, role, context limits,
 structured-output support and usage. Routing can select fast, reasoning,
 structured, embedding or rerank roles without exposing vendor-specific clients

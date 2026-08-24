@@ -1,5 +1,7 @@
 # Design decisions
 
+[English](design-decisions.md) | [简体中文](design-decisions.zh-CN.md)
+
 This document records the boundaries DeepKeel intentionally preserves. It is a
 guide for maintainers and integrators, not a claim that every agent application
 needs the same degree of runtime governance.

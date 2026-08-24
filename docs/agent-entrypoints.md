@@ -1,5 +1,7 @@
 # Agent Entrypoints
 
+[English](agent-entrypoints.md) | [简体中文](agent-entrypoints.zh-CN.md)
+
 DeepKeel can expose several directly addressable root Agents from one installed
 runtime generation. A general assistant and a domain specialist therefore share
 the same lifecycle, graph, persistence and observability contracts without

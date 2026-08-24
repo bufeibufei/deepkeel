@@ -1,5 +1,7 @@
 # Contributing
 
+[English](CONTRIBUTING.md) | [简体中文](CONTRIBUTING.zh-CN.md)
+
 DeepKeel is an independent product-neutral runtime. Changes must not
 import host application modules, database models, web handlers or business
 capability implementations.

@@ -1,5 +1,7 @@
 # Execution planning
 
+[English](execution-planning.md) | [简体中文](execution-planning.zh-CN.md)
+
 DeepKeel supports an optional Plan & Execute layer inside its canonical ReAct
 graph. It is intended for requests that require multiple capabilities,
 dependency ordering, bounded parallel evidence collection, durable user

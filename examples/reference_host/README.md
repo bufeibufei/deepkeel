@@ -1,5 +1,7 @@
 # Reference Host
 
+[English](README.md) | [简体中文](README.zh-CN.md)
+
 This example shows the Host boundary that DeepKeel intentionally does not own:
 HTTP request validation, SSE delivery, run inspection and cancellation. It uses
 process-local adapters so it can be started without infrastructure.

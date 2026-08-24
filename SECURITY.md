@@ -1,5 +1,7 @@
 # Security Policy
 
+[English](SECURITY.md) | [简体中文](SECURITY.zh-CN.md)
+
 ## Reporting
 
 Do not publish credentials, prompts, model payloads, tenant data or exploitable

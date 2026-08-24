@@ -1,5 +1,7 @@
 # API stability
 
+[English](api-stability.md) | [简体中文](api-stability.zh-CN.md)
+
 `RuntimeResultSummary` and `RuntimeResult.to_summary()` are additive v4.1
 projections. The full `RuntimeResult` remains canonical for recovery and
 diagnostics, so existing Hosts do not need to migrate. New product read paths

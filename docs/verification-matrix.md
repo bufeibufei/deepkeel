@@ -1,5 +1,7 @@
 # Verification matrix
 
+[English](verification-matrix.md) | [简体中文](verification-matrix.zh-CN.md)
+
 DeepKeel separates pull-request feedback, full regression, and release evidence.
 The purpose of this matrix is to connect each engineering claim to an executable
 gate. It does not replace a downstream Host's business-quality evaluation.

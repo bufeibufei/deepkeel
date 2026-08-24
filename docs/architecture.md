@@ -1,5 +1,7 @@
 # Architecture
 
+[English](architecture.md) | [简体中文](architecture.zh-CN.md)
+
 DeepKeel is a product-neutral runtime kernel. A Host owns transport, identity,
 durable databases, model credentials, product policy and user experience.
 Capability Packages contribute versioned Skills, tools, artifacts, handoffs,

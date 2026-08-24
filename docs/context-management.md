@@ -1,5 +1,7 @@
 # Context management
 
+[English](context-management.md) | [简体中文](context-management.zh-CN.md)
+
 DeepKeel classifies context by tier and by independent scope, visibility,
 retention, representation, authority and subject dimensions.
 
